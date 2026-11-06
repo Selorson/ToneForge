@@ -22,6 +22,7 @@ pub mod automation_spline;
 pub mod mixer_dag;
 pub mod native_fx;
 pub mod patcher_modular;
+pub mod sequencer_pianoroll;
 pub mod slicer_ppq;
 pub mod telemetry_shm;
 
@@ -92,6 +93,9 @@ pub trait UnifiedDspNode: Send {
     /// Invoked at PPQ Tick boundaries (`TFruityPlug::NewTick` `vfn[14]`).
     fn on_ppq_tick(&mut self, _ctx: &ProcessContext) {}
 
+    /// Invoked on sample-accurate MIDI / Piano Roll / Slide note events (`sub_c61970`).
+    fn on_voice_event(&mut self, _event: &SequencerVoiceEvent, _ctx: &ProcessContext) {}
+
     /// Current instantaneous gain reduction in dB (`<= 0.0` when attenuating) for 120 FPS metering.
     fn current_gain_reduction_db(&self) -> f32 {
         0.0
@@ -137,7 +141,17 @@ pub use patcher_modular::{
     ModularAudioConnection, ModularParamConnection, NodeLayoutPosition, PATCHER_HOST_INPUT_NODE,
     PATCHER_HOST_OUTPUT_NODE, PatcherGraphNode, SugiyamaLayout,
 };
-pub use slicer_ppq::{DEFAULT_PPQ, HybridPpqSlicer, HybridTickSlicer, TempoMap, TempoPoint};
+pub use sequencer_pianoroll::{
+    AudioStemClipPlayerNode, MAX_AUTOMATION_ARTICULATORS, MAX_GENERATOR_VOICE_EVENTS,
+    MAX_NOTES_PER_PATTERN, MAX_PLAYLIST_CLIPS, MAX_SEQUENCER_PATTERNS, MAX_STEM_CLIP_REGIONS,
+    MAX_SYNTH_VOICES, PianoRollNote, PianoRollPattern, PlaylistClip, PlaylistClipKind,
+    PlaylistSequencer, PolyphonicSynthGeneratorNode, SequencerVoiceEvent, StemClipRegion,
+    SynthOscWaveform,
+};
+pub use slicer_ppq::{
+    DEFAULT_PPQ, HybridPpqSlicer, HybridTickSlicer, MAX_PPQ, MIN_PPQ, SUPPORTED_PPQ_RESOLUTIONS,
+    TempoMap, TempoPoint,
+};
 pub use telemetry_shm::{
     AutomationAndSplineTelemetry, EngineCommand, Ozone12MasterTelemetry, ProQ4SpectrumFrame,
     Soothe3ReductionFrame, TrackMeterEntry, TransportAndMasterHeader,

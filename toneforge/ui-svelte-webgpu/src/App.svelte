@@ -6,11 +6,13 @@
   import Soothe3ResonanceView from './lib/components/Soothe3ResonanceView.svelte';
   import Ozone12MasterChain from './lib/components/Ozone12MasterChain.svelte';
   import Uvr5EnsembleStudio from './lib/components/Uvr5EnsembleStudio.svelte';
+  import PlaylistPianoRollEditor from './lib/components/PlaylistPianoRollEditor.svelte';
+  import OfflineRenderStudio from './lib/components/OfflineRenderStudio.svelte';
 
   const sharedBuffer = new ArrayBuffer(VISUAL_TELEMETRY_FRAME_BYTES);
   const telemetry = new DawTelemetryView(sharedBuffer);
 
-  let activeTab = $state<'all' | 'mixer' | 'proq4' | 'soothe3' | 'ozone12' | 'uvr5'>('all');
+  let activeTab = $state<'all' | 'playlist' | 'mixer' | 'proq4' | 'soothe3' | 'ozone12' | 'uvr5' | 'render'>('all');
 
   $effect(() => {
     let rafId = 0;
@@ -65,7 +67,7 @@
     <div class="transport-metrics">
       <span>Seq: <strong>#{telemetry.frameSeq}</strong></span>
       <span>Sample: <strong>{telemetry.samplePos}</strong></span>
-      <span>PPQ: <strong>{telemetry.playheadPpq}</strong></span>
+      <span>PPQ ({telemetry.ppqResolution}): <strong>{telemetry.playheadPpq}</strong></span>
       <span>CPU: <strong>{telemetry.cpuLoadPercent.toFixed(1)}%</strong></span>
       <span>LUFS-I: <strong>{telemetry.lufsIntegrated.toFixed(1)}</strong></span>
       <span>TP: <strong>{telemetry.truePeakDbL.toFixed(2)} dBTP</strong></span>
@@ -74,11 +76,13 @@
     <nav class="workspace-tabs">
       {#each [
         ['all', 'Unified Master View'],
+        ['playlist', 'Playlist & Piano Roll'],
         ['mixer', '502-Track Mixer & Patcher'],
         ['proq4', 'Pro-Q 4 (24-Band)'],
         ['soothe3', 'Soothe3 Spectral'],
         ['ozone12', 'Ozone 12 Console'],
         ['uvr5', 'UVR5 Stem Studio'],
+        ['render', 'Offline Render & Bounce'],
       ] as [tabKey, label]}
         <button
           class={activeTab === tabKey ? 'active' : ''}
@@ -91,6 +95,10 @@
   </header>
 
   <div class="workspace-grid">
+    {#if activeTab === 'all' || activeTab === 'playlist'}
+      <PlaylistPianoRollEditor {telemetry} />
+    {/if}
+
     {#if activeTab === 'all' || activeTab === 'proq4'}
       <ProQ4InteractiveAnalyzer {telemetry} />
     {/if}
@@ -110,6 +118,10 @@
 
     {#if activeTab === 'all' || activeTab === 'uvr5'}
       <Uvr5EnsembleStudio {telemetry} />
+    {/if}
+
+    {#if activeTab === 'all' || activeTab === 'render'}
+      <OfflineRenderStudio {telemetry} />
     {/if}
   </div>
 </main>

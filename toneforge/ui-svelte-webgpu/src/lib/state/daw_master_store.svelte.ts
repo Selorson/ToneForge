@@ -87,6 +87,57 @@ export interface MixerTrackUiState {
   slots: { slotIndex: number; name: string; enabled: boolean; wetMix: number }[];
 }
 
+export interface PianoRollNoteUiState {
+  id: number;
+  startTick: number;
+  durationTicks: number;
+  key: number;
+  velocity: number;
+  pan: number;
+  finePitchCents: number;
+  isSlide: boolean;
+  colorGroup: number;
+}
+
+export interface PianoRollPatternUiState {
+  patternId: number;
+  name: string;
+  targetChannelId: number;
+  lengthTicks: number;
+  notes: PianoRollNoteUiState[];
+}
+
+export interface PlaylistClipUiState {
+  clipId: number;
+  trackRow: number;
+  kind: 'Pattern' | 'AudioStem' | 'Automation';
+  sourceId: number;
+  startTick: number;
+  durationTicks: number;
+  clipOffsetTicks: number;
+  gain: number;
+  muted: boolean;
+}
+
+export interface PostRenderReportUiState {
+  integratedLufs: number;
+  shortTermMaxLufs: number;
+  momentaryMaxLufs: number;
+  truePeakDbtpL: number;
+  truePeakDbtpR: number;
+  maxTruePeakDbtp: number;
+  crestFactorDb: number;
+  phaseCorrelation: number;
+  spotifyCompliant: boolean;
+  appleMusicCompliant: boolean;
+  youtubeCompliant: boolean;
+  spotifyPenaltyDb: number;
+  appleMusicPenaltyDb: number;
+  youtubePenaltyDb: number;
+  apdcLatencyTrimmedSamples: number;
+  renderedFiles: string[];
+}
+
 function isTauriEnvironment(): boolean {
   return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 }
@@ -263,6 +314,81 @@ export class DawTelemetryView {
     'ToneForge_Master_Session_mdx23c_htdemucs4_other.wav',
   ]);
 
+  // =========================================================================
+  // 7. SVELTE 5 RUNES — PLAYLIST ARRANGEMENT, PIANO ROLL & HYBRID PPQ (96..960)
+  // =========================================================================
+  ppqResolution = $state<96 | 144 | 192 | 384 | 480 | 960>(96);
+  songMode = $state(true);
+  selectedPatternId = $state(1);
+  pianoRollSlideTool = $state(false);
+  pianoRollColorGroup = $state(0);
+  selectedNoteId = $state<number | null>(1);
+
+  pianoRollPatterns = $state<PianoRollPatternUiState[]>([
+    {
+      patternId: 1,
+      name: 'ToneForge Lead Hook (FL26 Slide)',
+      targetChannelId: 1,
+      lengthTicks: 384,
+      notes: [
+        { id: 1, startTick: 0, durationTicks: 96, key: 60, velocity: 0.88, pan: -0.15, finePitchCents: 0.0, isSlide: false, colorGroup: 0 },
+        { id: 2, startTick: 48, durationTicks: 48, key: 72, velocity: 0.95, pan: 0.25, finePitchCents: 0.0, isSlide: true, colorGroup: 0 },
+        { id: 3, startTick: 96, durationTicks: 96, key: 67, velocity: 0.82, pan: 0.10, finePitchCents: 12.0, isSlide: false, colorGroup: 1 },
+        { id: 4, startTick: 192, durationTicks: 144, key: 63, velocity: 0.90, pan: -0.20, finePitchCents: 0.0, isSlide: false, colorGroup: 0 },
+        { id: 5, startTick: 240, durationTicks: 96, key: 75, velocity: 1.00, pan: 0.35, finePitchCents: 0.0, isSlide: true, colorGroup: 0 },
+      ],
+    },
+    {
+      patternId: 2,
+      name: 'Sub Bass Pulse Pattern',
+      targetChannelId: 2,
+      lengthTicks: 384,
+      notes: [
+        { id: 10, startTick: 0, durationTicks: 192, key: 36, velocity: 0.95, pan: 0.0, finePitchCents: 0.0, isSlide: false, colorGroup: 2 },
+        { id: 11, startTick: 192, durationTicks: 192, key: 39, velocity: 0.92, pan: 0.0, finePitchCents: 0.0, isSlide: false, colorGroup: 2 },
+      ],
+    },
+  ]);
+
+  playlistClips = $state<PlaylistClipUiState[]>([
+    { clipId: 1, trackRow: 0, kind: 'Pattern', sourceId: 1, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 1.0, muted: false },
+    { clipId: 2, trackRow: 1, kind: 'Pattern', sourceId: 2, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 1.0, muted: false },
+    { clipId: 3, trackRow: 2, kind: 'AudioStem', sourceId: 1, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 0.95, muted: false },
+    { clipId: 4, trackRow: 3, kind: 'Automation', sourceId: 0, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 1.0, muted: false },
+  ]);
+
+  // =========================================================================
+  // 8. SVELTE 5 RUNES — OFFLINE BOUNCE & MASTERING RENDER ENGINE
+  // =========================================================================
+  renderMode = $state<'Master' | 'SplitMixerTracks' | 'StemMastering'>('Master');
+  renderBitDepth = $state<'Pcm16MbitPlus' | 'Pcm24MbitPlus' | 'Float32Ieee'>('Pcm24MbitPlus');
+  renderSampleRateHz = $state<44100 | 48000 | 96000 | 192000>(48000);
+  renderDurationTicks = $state(384);
+  renderTrimApdcLatency = $state(true);
+  renderEnableNoiseShaping = $state(true);
+  renderOutputDir = $state('F:/Exports/ToneForge_Renders');
+  renderFilePrefix = $state('ToneForge_Master');
+  renderIsRunning = $state(false);
+
+  lastRenderReport = $state<PostRenderReportUiState>({
+    integratedLufs: -13.8,
+    shortTermMaxLufs: -11.4,
+    momentaryMaxLufs: -9.9,
+    truePeakDbtpL: -1.02,
+    truePeakDbtpR: -1.04,
+    maxTruePeakDbtp: -1.02,
+    crestFactorDb: 9.6,
+    phaseCorrelation: 0.87,
+    spotifyCompliant: true,
+    appleMusicCompliant: false,
+    youtubeCompliant: true,
+    spotifyPenaltyDb: 0.0,
+    appleMusicPenaltyDb: -2.2,
+    youtubePenaltyDb: 0.0,
+    apdcLatencyTrimmedSamples: 8832,
+    renderedFiles: ['F:/Exports/ToneForge_Renders/ToneForge_Master_Master.wav'],
+  });
+
   constructor(sharedBuffer?: ArrayBuffer) {
     const buf = sharedBuffer ?? new ArrayBuffer(VISUAL_TELEMETRY_FRAME_BYTES);
     if (buf.byteLength !== VISUAL_TELEMETRY_FRAME_BYTES) {
@@ -433,7 +559,7 @@ export class DawTelemetryView {
       if (tick >= p0.x && tick <= p1.x) {
         const dx = Math.max(1e-9, p1.x - p0.x);
         const t = (tick - p0.x) / dx;
-        const k = p0.tension * 10.0;
+        const k = p1.tension * 10.0;
         const shaped = Math.abs(k) < 1e-5 ? t : (Math.exp(k * t) - 1.0) / (Math.exp(k) - 1.0);
         return p0.y + (p1.y - p0.y) * shaped;
       }
@@ -908,6 +1034,235 @@ export class DawTelemetryView {
       }
     } finally {
       this.uvr5IsProcessing = false;
+    }
+  }
+
+  async setPpqResolution(ppq: 96 | 144 | 192 | 384 | 480 | 960): Promise<void> {
+    this.ppqResolution = ppq;
+    if (isTauriEnvironment()) {
+      await invoke('cmd_set_ppq_resolution', { ppq });
+    }
+  }
+
+  async syncPianoRollPattern(patternId: number): Promise<void> {
+    const pat = this.pianoRollPatterns.find((p) => p.patternId === patternId);
+    if (!pat) return;
+    if (isTauriEnvironment()) {
+      await invoke('cmd_upsert_piano_roll_pattern', {
+        pattern: {
+          pattern_id: pat.patternId,
+          name: pat.name,
+          target_channel_id: pat.targetChannelId,
+          length_ticks: pat.lengthTicks,
+          notes: pat.notes.map((n) => ({
+            id: n.id,
+            start_tick: n.startTick,
+            duration_ticks: n.durationTicks,
+            key: n.key,
+            velocity: n.velocity,
+            pan: n.pan,
+            fine_pitch_cents: n.finePitchCents,
+            is_slide: n.isSlide,
+            color_group: n.colorGroup,
+          })),
+        },
+      });
+    }
+  }
+
+  async addPianoRollNote(patternId: number, note: Omit<PianoRollNoteUiState, 'id'>): Promise<number> {
+    const pat = this.pianoRollPatterns.find((p) => p.patternId === patternId);
+    if (!pat) return -1;
+    const nextId = pat.notes.reduce((maxId, n) => Math.max(maxId, n.id), 0) + 1;
+    const created: PianoRollNoteUiState = {
+      id: nextId,
+      startTick: Math.max(0, Math.round(note.startTick)),
+      durationTicks: Math.max(1, Math.round(note.durationTicks)),
+      key: Math.max(0, Math.min(127, Math.round(note.key))),
+      velocity: Math.max(0, Math.min(1, note.velocity)),
+      pan: Math.max(-1, Math.min(1, note.pan)),
+      finePitchCents: Math.max(-1200, Math.min(1200, note.finePitchCents)),
+      isSlide: note.isSlide,
+      colorGroup: note.colorGroup & 0x0f,
+    };
+    pat.notes = [...pat.notes, created].sort((a, b) => a.startTick - b.startTick || a.id - b.id);
+    this.selectedNoteId = nextId;
+    await this.syncPianoRollPattern(patternId);
+    return nextId;
+  }
+
+  async removePianoRollNote(patternId: number, noteId: number): Promise<void> {
+    const pat = this.pianoRollPatterns.find((p) => p.patternId === patternId);
+    if (!pat) return;
+    pat.notes = pat.notes.filter((n) => n.id !== noteId);
+    if (this.selectedNoteId === noteId) {
+      this.selectedNoteId = pat.notes[0]?.id ?? null;
+    }
+    await this.syncPianoRollPattern(patternId);
+  }
+
+  async updatePianoRollNote(
+    patternId: number,
+    noteId: number,
+    patch: Partial<PianoRollNoteUiState>
+  ): Promise<void> {
+    const pat = this.pianoRollPatterns.find((p) => p.patternId === patternId);
+    if (!pat) return;
+    pat.notes = pat.notes
+      .map((n) => (n.id === noteId ? { ...n, ...patch } : n))
+      .sort((a, b) => a.startTick - b.startTick || a.id - b.id);
+    await this.syncPianoRollPattern(patternId);
+  }
+
+  async upsertPlaylistClip(clip: PlaylistClipUiState): Promise<void> {
+    const idx = this.playlistClips.findIndex((c) => c.clipId === clip.clipId);
+    if (idx >= 0) {
+      this.playlistClips[idx] = { ...clip };
+    } else {
+      this.playlistClips = [...this.playlistClips, { ...clip }];
+    }
+    if (isTauriEnvironment()) {
+      await invoke('cmd_upsert_playlist_clip', {
+        clip: {
+          clip_id: clip.clipId,
+          track_row: clip.trackRow,
+          kind: clip.kind,
+          source_id: clip.sourceId,
+          start_tick: clip.startTick,
+          duration_ticks: clip.durationTicks,
+          clip_offset_ticks: clip.clipOffsetTicks,
+          gain: clip.gain,
+          muted: clip.muted,
+        },
+      });
+    }
+  }
+
+  private async syncTensionSplineToEngine(): Promise<void> {
+    if (isTauriEnvironment()) {
+      await invoke('cmd_update_automation_spline', {
+        clip: {
+          controller_id: this.activeControllerId,
+          name: 'Pro-Q 4 Band 1 Sweep Spline',
+          points: this.tensionSplinePoints.map((pt) => ({
+            x: pt.x,
+            y: pt.y,
+            tension: pt.tension,
+          })),
+          lfo: {
+            enabled: false,
+            waveform: 'Sine',
+            frequency_cycles_per_tick: 0.01,
+            phase_offset: 0.0,
+            amount: 0.0,
+          },
+          min_level: 0.0,
+          max_level: 1.0,
+        },
+        evalTick: this.playheadPpq,
+      });
+    }
+  }
+
+  async updateTensionSplinePoint(index: number, patch: Partial<TensionPointState>): Promise<void> {
+    if (index < 0 || index >= this.tensionSplinePoints.length) return;
+    const updated = this.tensionSplinePoints.map((pt, i) =>
+      i === index
+        ? {
+            x: Math.max(0, patch.x ?? pt.x),
+            y: Math.max(0, Math.min(1, patch.y ?? pt.y)),
+            tension: Math.max(-1, Math.min(1, patch.tension ?? pt.tension)),
+          }
+        : pt
+    );
+    this.tensionSplinePoints = updated.sort((a, b) => a.x - b.x);
+    await this.syncTensionSplineToEngine();
+  }
+
+  async addTensionSplinePoint(x: number, y: number, tension = 0.0): Promise<void> {
+    const pt: TensionPointState = {
+      x: Math.max(0, Math.round(x)),
+      y: Math.max(0, Math.min(1, y)),
+      tension: Math.max(-1, Math.min(1, tension)),
+    };
+    this.tensionSplinePoints = [...this.tensionSplinePoints, pt].sort((a, b) => a.x - b.x);
+    await this.syncTensionSplineToEngine();
+  }
+
+  async removeTensionSplinePoint(index: number): Promise<void> {
+    if (this.tensionSplinePoints.length <= 2) return;
+    this.tensionSplinePoints = this.tensionSplinePoints.filter((_, i) => i !== index);
+    await this.syncTensionSplineToEngine();
+  }
+
+  async executeOfflineRender(): Promise<void> {
+    this.renderIsRunning = true;
+    try {
+      const srTag =
+        this.renderSampleRateHz === 44100
+          ? 'Hz44100'
+          : this.renderSampleRateHz === 96000
+            ? 'Hz96000'
+            : this.renderSampleRateHz === 192000
+              ? 'Hz192000'
+              : 'Hz48000';
+      if (isTauriEnvironment()) {
+        const res = await invoke<any>('cmd_execute_offline_render', {
+          config: {
+            mode: this.renderMode,
+            bit_depth: this.renderBitDepth,
+            sample_rate: srTag,
+            block_size: 256,
+            duration_frames: Math.round((this.renderDurationTicks / 96.0) * (60.0 / this.tempoBpm) * this.renderSampleRateHz),
+            trim_apdc_latency: this.renderTrimApdcLatency,
+            enable_mbit_plus_noise_shaping: this.renderEnableNoiseShaping,
+            output_dir: this.renderOutputDir,
+            file_prefix: this.renderFilePrefix,
+            split_track_indices: [],
+          },
+        });
+        const a = res?.master_wav?.analysis ?? res?.master_analysis;
+        if (a) {
+          this.lastRenderReport = {
+            integratedLufs: a.integrated_lufs,
+            shortTermMaxLufs: a.max_short_term_lufs ?? a.short_term_max_lufs,
+            momentaryMaxLufs: a.max_momentary_lufs ?? a.momentary_max_lufs,
+            truePeakDbtpL: a.true_peak_dbtp[0],
+            truePeakDbtpR: a.true_peak_dbtp[1],
+            maxTruePeakDbtp: a.max_true_peak_dbtp,
+            crestFactorDb: a.crest_factor_db,
+            phaseCorrelation: a.phase_correlation,
+            spotifyCompliant: a.streaming_compliance.spotify_compliant,
+            appleMusicCompliant: a.streaming_compliance.apple_music_compliant,
+            youtubeCompliant: a.streaming_compliance.youtube_compliant,
+            spotifyPenaltyDb: a.streaming_compliance.spotify_penalty_db,
+            appleMusicPenaltyDb: a.streaming_compliance.apple_music_penalty_db,
+            youtubePenaltyDb: a.streaming_compliance.youtube_penalty_db,
+            apdcLatencyTrimmedSamples: a.apdc_compensated_samples,
+            renderedFiles: [
+              res.master_wav?.file_path ?? `${res.master_wav?.label ?? this.renderFilePrefix}.wav`,
+              ...(res.additional_wavs ?? []).map((w: any) => w.file_path ?? `${w.label}.wav`),
+            ],
+          };
+        }
+      } else {
+        const base = `${this.renderOutputDir}/${this.renderFilePrefix}`;
+        const files =
+          this.renderMode === 'SplitMixerTracks'
+            ? [`${base}_Master.wav`, `${base}_Track_001.wav`, `${base}_Track_002.wav`, `${base}_Track_003.wav`, `${base}_Track_004.wav`]
+            : this.renderMode === 'StemMastering'
+              ? [`${base}_Master.wav`, `${base}_Stem_Vocals.wav`, `${base}_Stem_Drums.wav`, `${base}_Stem_Bass.wav`, `${base}_Stem_Other.wav`]
+              : [`${base}_Master.wav`];
+        this.lastRenderReport = {
+          ...this.lastRenderReport,
+          truePeakDbtpL: this.ozone12CeilingDbtp - 0.03,
+          truePeakDbtpR: this.ozone12CeilingDbtp - 0.05,
+          maxTruePeakDbtp: this.ozone12CeilingDbtp - 0.03,
+          renderedFiles: files,
+        };
+      }
+    } finally {
+      this.renderIsRunning = false;
     }
   }
 }

@@ -11,6 +11,7 @@ use crate::apdc_engine::{
     ApdcDelayLine, DEFAULT_APDC_CAPACITY, PluginRackSlot, SampleAccurateAutomationQueue,
 };
 use crate::automation_spline::InternalControllerBus;
+use crate::sequencer_pianoroll::{PlaylistSequencer, SequencerVoiceEvent};
 use crate::slicer_ppq::{DEFAULT_PPQ, HybridPpqSlicer};
 use crate::telemetry_shm::{
     DEFAULT_COMMAND_RING_CAPACITY, EngineCommand, TrackMeterEntry, VisualTelemetryFrame,
@@ -1094,6 +1095,7 @@ impl TopologicalMixerScheduler {
 /// Phase 3 + Points 3/4/5 APDC), `rtrb` command ingestion, and 128 KB `TripleBuffer` telemetry.
 pub struct MixerEngine {
     pub slicer: HybridPpqSlicer,
+    pub sequencer: PlaylistSequencer,
     pub automation_queue: SampleAccurateAutomationQueue,
     pub controller_bus: InternalControllerBus,
     pub channels: Vec<ChannelGenerator>,
@@ -1137,6 +1139,7 @@ impl MixerEngine {
 
         let engine = Self {
             slicer: HybridPpqSlicer::new(sample_rate, bpm, DEFAULT_PPQ),
+            sequencer: PlaylistSequencer::new(),
             automation_queue: SampleAccurateAutomationQueue::default(),
             controller_bus: InternalControllerBus::new(),
             channels,
@@ -1293,6 +1296,12 @@ impl MixerEngine {
                     self.controller_bus
                         .publish_fixed30(controller_id, value_fixed30);
                 }
+                EngineCommand::SetPpq(ppq) => {
+                    self.slicer.set_ppq(ppq);
+                }
+                EngineCommand::TriggerVoiceEvent(ev) => {
+                    PlaylistSequencer::deliver_event_to_channels(&ev, &mut self.channels);
+                }
                 EngineCommand::RefreshApdc => {
                     self.recompute_apdc_rt();
                 }
@@ -1327,7 +1336,7 @@ impl MixerEngine {
 
     /// Executes a complete hardware audio block (`master_out.len() <= MAX_BLOCK_SIZE`) through:
     /// 1. `rtrb` Command Queue Ingestion
-    /// 2. `HybridPpqSlicer` (`sub_d0ece0`)
+    /// 2. `HybridPpqSlicer` (`sub_d0ece0`) + `PlaylistSequencer` (`PianoRollPattern` & `TensionSpline`)
     /// 3. `SampleAccurateAutomationQueue` (`sub_c61630`) + 30-Bit Fixed-Point Controller Bus (`0x40000000`)
     /// 4. 3-Phase Engine (`sub_d0d4c0`):
     ///    - Phase 1: Parallel/Sequential Generators + Point 1 APDC
@@ -1346,6 +1355,7 @@ impl MixerEngine {
         self.drain_commands();
 
         let sample_rate = self.slicer.sample_rate;
+        let ppq_res = self.slicer.ppq;
         let is_playing = self.is_playing;
         let process_all = self.process_all_502_tracks;
 
@@ -1365,7 +1375,7 @@ impl MixerEngine {
         // 2. Slice hardware block at PPQ Tick boundaries (`sub_d0ece0`)
         let mut slicer = std::mem::replace(
             &mut self.slicer,
-            HybridPpqSlicer::new(sample_rate, 128.0, DEFAULT_PPQ),
+            HybridPpqSlicer::new(sample_rate, 128.0, ppq_res),
         );
         let mut cur_sample_cursor = slicer.current_sample_pos;
 
@@ -1373,6 +1383,17 @@ impl MixerEngine {
             self,
             total_frames,
             |engine, ppq_tick, tick_sample_pos, bpm| {
+                if is_playing {
+                    engine.sequencer.on_ppq_tick(
+                        ppq_tick,
+                        tick_sample_pos,
+                        bpm,
+                        sample_rate,
+                        ppq_res,
+                        &mut engine.channels,
+                        &mut engine.controller_bus,
+                    );
+                }
                 let tick_ctx = ProcessContext {
                     sample_rate,
                     current_sample_pos: tick_sample_pos,
@@ -1410,10 +1431,11 @@ impl MixerEngine {
                 let mut sub_cur_pos = cur_sample_cursor;
 
                 while sub_remaining > 0 {
-                    // Drain all automation events due at or before `sub_cur_pos`
+                    // Drain all automation and voice events due at or before `sub_cur_pos`
                     let mut latency_changed = false;
                     {
                         let tracks_ref = &mut engine.tracks;
+                        let channels_ref = &mut engine.channels;
                         engine.automation_queue.drain_up_to(
                             sub_cur_pos,
                             |param_ev| {
@@ -1434,7 +1456,10 @@ impl MixerEngine {
                                     }
                                 }
                             },
-                            |_voice_ev| {},
+                            |voice_ev| {
+                                let seq_ev = SequencerVoiceEvent::from_delayed_voice_event(voice_ev);
+                                PlaylistSequencer::deliver_event_to_channels(&seq_ev, channels_ref);
+                            },
                         );
                     }
                     if latency_changed {
@@ -1496,6 +1521,7 @@ impl MixerEngine {
                 let mut end_latency_changed = false;
                 {
                     let tracks_ref = &mut engine.tracks;
+                    let channels_ref = &mut engine.channels;
                     engine.automation_queue.drain_up_to(
                         slice_end_pos,
                         |param_ev| {
@@ -1516,7 +1542,10 @@ impl MixerEngine {
                                 }
                             }
                         },
-                        |_voice_ev| {},
+                        |voice_ev| {
+                            let seq_ev = SequencerVoiceEvent::from_delayed_voice_event(voice_ev);
+                            PlaylistSequencer::deliver_event_to_channels(&seq_ev, channels_ref);
+                        },
                     );
                 }
                 if end_latency_changed {

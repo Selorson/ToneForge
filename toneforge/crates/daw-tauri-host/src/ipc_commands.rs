@@ -463,3 +463,111 @@ pub fn cmd_run_uvr5_separation(
             .to_string(),
     ])
 }
+
+/// Sets the Hybrid PPQ resolution (`96..=960`) via the lock-free `rtrb` command queue.
+pub fn cmd_set_ppq_resolution(state: &DawAppState, ppq: u32) -> Result<(), String> {
+    if !(daw_core_graph::MIN_PPQ..=daw_core_graph::MAX_PPQ).contains(&ppq) {
+        return Err(format!(
+            "PPQ resolution {} out of range ({}..={})",
+            ppq,
+            daw_core_graph::MIN_PPQ,
+            daw_core_graph::MAX_PPQ
+        ));
+    }
+    state.push_command(EngineCommand::SetPpq(ppq))
+}
+
+/// Dispatches a sample-accurate Piano Roll Note or FL Studio 26 Slide Note event via the lock-free command queue.
+pub fn cmd_trigger_piano_roll_note(
+    state: &DawAppState,
+    channel_id: u32,
+    note: crate::project_state::PianoRollNoteDto,
+    sample_pos: i64,
+    slide_samples: usize,
+) -> Result<(), String> {
+    let kind = if note.is_slide {
+        daw_core_graph::VoiceEventKind::SlideNote
+    } else {
+        daw_core_graph::VoiceEventKind::NoteOn
+    };
+    let ev = daw_core_graph::SequencerVoiceEvent {
+        sample_pos,
+        ppq_tick: note.start_tick,
+        channel_id,
+        note_id: note.id,
+        kind,
+        key: note.key.min(127),
+        velocity: note.velocity.clamp(0.0, 1.0),
+        pan: note.pan.clamp(-1.0, 1.0),
+        fine_pitch_cents: note.fine_pitch_cents,
+        slide_duration_ticks: note.duration_ticks,
+        slide_duration_samples: slide_samples,
+        color_group: note.color_group & 0x0F,
+    };
+    state.push_command(EngineCommand::TriggerVoiceEvent(ev))
+}
+
+/// Executes an Offline Bounce & Mastering Render job (`Master`, `SplitMixerTracks`, or `StemMastering`)
+/// and returns the `OfflineRenderResult` with `PostRenderAnalysisReport`.
+pub fn cmd_execute_offline_render(
+    engine: &mut daw_core_graph::MixerEngine,
+    config: &crate::offline_render_engine::OfflineRenderConfig,
+) -> Result<crate::offline_render_engine::OfflineRenderResult, String> {
+    crate::offline_render_engine::OfflineRenderEngine::execute_render(engine, config)
+        .map_err(|e| format!("Offline render failed: {e}"))
+}
+
+/// Upserts a `PianoRollPattern` (with FL Studio 26 Slide notes and per-note expression) into `MixerEngine`.
+pub fn cmd_upsert_piano_roll_pattern(
+    engine: &mut daw_core_graph::MixerEngine,
+    pattern: &crate::project_state::PianoRollPatternDto,
+) -> Result<(), String> {
+    if pattern.length_ticks <= 0 {
+        return Err("PianoRollPattern length_ticks must be positive".to_string());
+    }
+    if engine.sequencer.upsert_pattern(pattern.to_pattern()) {
+        Ok(())
+    } else {
+        Err("PlaylistSequencer pattern table capacity reached".to_string())
+    }
+}
+
+/// Upserts a `PlaylistClip` (`Pattern`, `AudioStem`, or `Automation`) into `MixerEngine`.
+pub fn cmd_upsert_playlist_clip(
+    engine: &mut daw_core_graph::MixerEngine,
+    clip: &crate::project_state::PlaylistClipDto,
+) -> Result<(), String> {
+    if clip.duration_ticks <= 0 {
+        return Err("PlaylistClip duration_ticks must be positive".to_string());
+    }
+    if engine.sequencer.upsert_clip(clip.to_playlist_clip()) {
+        Ok(())
+    } else {
+        Err("PlaylistSequencer clip table capacity reached".to_string())
+    }
+}
+
+/// Updates a `TensionSpline` Automation Clip on `MixerEngine` and evaluates its 30-Bit Fixed-Point
+/// (`0x40000000`) controller output at `eval_tick`.
+pub fn cmd_update_automation_spline(
+    engine: &mut daw_core_graph::MixerEngine,
+    clip: &crate::project_state::AutomationClipStateDto,
+    eval_tick: f64,
+) -> Result<i32, String> {
+    if (clip.controller_id as usize) >= 512 {
+        return Err(format!(
+            "Controller ID {} out of range (0..512)",
+            clip.controller_id
+        ));
+    }
+    let articulator = clip.to_articulator();
+    let fixed30 = articulator.evaluate_fixed30(eval_tick.max(0.0));
+    engine
+        .controller_bus
+        .publish_fixed30(articulator.controller_id, fixed30);
+    if !engine.sequencer.upsert_automation_articulator(articulator) {
+        return Err("PlaylistSequencer automation clip table capacity reached".to_string());
+    }
+    Ok(fixed30)
+}
+

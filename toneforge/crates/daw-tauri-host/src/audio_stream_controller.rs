@@ -345,6 +345,12 @@ impl AudioStreamController {
     /// quantizes to FL Studio 26's 30-Bit Fixed-Point representation (`0..=0x40000000`), and pushes
     /// `EngineCommand::SetInternalControllerFixed30` into the real-time SPSC ring buffer.
     pub fn evaluate_and_publish_automation_clips(&mut self, ppq_tick: f64) -> Result<(), String> {
+        let target_tick = ppq_tick.round() as i64;
+        let target_sample_pos = self.mixer_engine.slicer.tick_to_sample_pos(ppq_tick);
+        self.project_state.ppq_tick = target_tick;
+        self.project_state.sample_pos = target_sample_pos;
+        self.mixer_engine.slicer.seek(target_sample_pos, target_tick);
+
         let clips = self.project_state.automation_clips.clone();
         for clip in &clips {
             let art = clip.to_articulator();
@@ -1241,9 +1247,29 @@ impl AudioStreamController {
         self.mixer_engine.process_all_502_tracks = state.process_all_502_tracks;
         self.mixer_engine.slicer.set_sample_rate(sr);
         self.mixer_engine.slicer.set_bpm(state.bpm);
+        self.mixer_engine.slicer.set_ppq(state.ppq_resolution.max(24));
         self.mixer_engine.slicer.seek(state.sample_pos, state.ppq_tick);
         self.mixer_engine.channels.clear();
         self.mixer_engine.controller_bus = daw_core_graph::InternalControllerBus::new();
+        self.mixer_engine.sequencer = daw_core_graph::PlaylistSequencer::new();
+        self.mixer_engine.sequencer.auto_evaluate_without_clips =
+            !state.playlist_clips.is_empty() || !state.piano_roll_patterns.is_empty();
+
+        for pat_dto in &state.piano_roll_patterns {
+            let _ = self.mixer_engine.sequencer.upsert_pattern(pat_dto.to_pattern());
+        }
+        for clip_dto in &state.playlist_clips {
+            let _ = self
+                .mixer_engine
+                .sequencer
+                .upsert_clip(clip_dto.to_playlist_clip());
+        }
+        for auto_dto in &state.automation_clips {
+            let _ = self
+                .mixer_engine
+                .sequencer
+                .upsert_automation_articulator(auto_dto.to_articulator());
+        }
 
         // Configure all 502 Mixer Tracks in-place
         for trk_dto in &state.mixer_tracks {
@@ -1357,5 +1383,81 @@ impl AudioStreamController {
     pub fn load_project_from_file(&mut self, path: &Path) -> Result<(), String> {
         let state = ToneForgeProjectState::load_from_file(path)?;
         self.apply_project_state(state)
+    }
+
+    // ========================================================================
+    // 7. PHASE 5: SEQUENCER, PIANO ROLL, GENERATOR APDC & OFFLINE RENDER
+    // ========================================================================
+
+    /// Updates the Hybrid PPQ resolution (`96..=960`) on both the project state and the real-time slicer.
+    pub fn set_ppq_resolution(&mut self, ppq: u32) -> Result<(), String> {
+        let clamped = ppq.clamp(daw_core_graph::MIN_PPQ, daw_core_graph::MAX_PPQ);
+        self.project_state.ppq_resolution = clamped;
+        self.push_command(EngineCommand::SetPpq(clamped))?;
+        self.mixer_engine.drain_commands();
+        Ok(())
+    }
+
+    /// Adds a `PolyphonicSynthGeneratorNode` channel connected directly to **Point 1 APDC** (`ChannelGenerator`)
+    /// targeting `target_mixer_track`.
+    pub fn add_polyphonic_synth_channel(
+        &mut self,
+        channel_id: u32,
+        target_mixer_track: usize,
+        lookahead_latency_samples: usize,
+    ) -> Result<usize, String> {
+        if target_mixer_track >= MAX_MIXER_TRACKS {
+            return Err(format!("Target mixer track {target_mixer_track} out of range"));
+        }
+        let synth = daw_core_graph::PolyphonicSynthGeneratorNode::new(channel_id, self.sample_rate)
+            .with_lookahead_latency(lookahead_latency_samples);
+        let mut ch = ChannelGenerator::new(channel_id, target_mixer_track, Box::new(synth));
+        ch.prepare(self.sample_rate, self.max_block_size);
+        self.mixer_engine
+            .add_channel_generator(ch)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Upserts a `PianoRollPattern` into both the live `PlaylistSequencer` and `ToneForgeProjectState`.
+    pub fn upsert_piano_roll_pattern(&mut self, pattern: daw_core_graph::PianoRollPattern) -> bool {
+        let dto = crate::project_state::PianoRollPatternDto::from_pattern(&pattern);
+        if let Some(existing) = self
+            .project_state
+            .piano_roll_patterns
+            .iter_mut()
+            .find(|p| p.pattern_id == dto.pattern_id)
+        {
+            *existing = dto;
+        } else {
+            self.project_state.piano_roll_patterns.push(dto);
+        }
+        self.mixer_engine.sequencer.upsert_pattern(pattern)
+    }
+
+    /// Upserts a `PlaylistClip` into both the live `PlaylistSequencer` and `ToneForgeProjectState`.
+    pub fn upsert_playlist_clip(&mut self, clip: daw_core_graph::PlaylistClip) -> bool {
+        let dto = crate::project_state::PlaylistClipDto::from_playlist_clip(&clip);
+        if let Some(existing) = self
+            .project_state
+            .playlist_clips
+            .iter_mut()
+            .find(|c| c.clip_id == dto.clip_id)
+        {
+            *existing = dto;
+        } else {
+            self.project_state.playlist_clips.push(dto);
+        }
+        self.mixer_engine.sequencer.upsert_clip(clip)
+    }
+
+    /// Executes an Offline Bounce & Mastering Render job (`Master`, `SplitMixerTracks`, or `StemMastering`).
+    pub fn execute_offline_render(
+        &mut self,
+        config: &crate::offline_render_engine::OfflineRenderConfig,
+    ) -> std::io::Result<crate::offline_render_engine::OfflineRenderResult> {
+        crate::offline_render_engine::OfflineRenderEngine::execute_render(
+            &mut self.mixer_engine,
+            config,
+        )
     }
 }

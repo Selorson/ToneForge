@@ -265,6 +265,7 @@ pub struct DelayedAutomationEvent {
 pub enum VoiceEventKind {
     NoteOn,
     NoteOff,
+    SlideNote,
     ChannelMute,
     SlotEnable,
 }

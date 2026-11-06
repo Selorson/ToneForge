@@ -594,9 +594,149 @@ impl MixerTrackStateDto {
     }
 }
 
+/// Serializable Piano Roll Note DTO (with FL Studio 26 Slide/Portamento & per-note expression).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PianoRollNoteDto {
+    pub id: u32,
+    pub start_tick: i64,
+    pub duration_ticks: i64,
+    pub key: u8,
+    pub velocity: f32,
+    pub pan: f32,
+    pub fine_pitch_cents: f32,
+    pub is_slide: bool,
+    pub color_group: u8,
+}
+
+impl From<daw_core_graph::PianoRollNote> for PianoRollNoteDto {
+    fn from(n: daw_core_graph::PianoRollNote) -> Self {
+        Self {
+            id: n.id,
+            start_tick: n.start_tick,
+            duration_ticks: n.duration_ticks,
+            key: n.key,
+            velocity: n.velocity,
+            pan: n.pan,
+            fine_pitch_cents: n.fine_pitch_cents,
+            is_slide: n.is_slide,
+            color_group: n.color_group,
+        }
+    }
+}
+
+impl From<PianoRollNoteDto> for daw_core_graph::PianoRollNote {
+    fn from(dto: PianoRollNoteDto) -> Self {
+        Self {
+            id: dto.id,
+            start_tick: dto.start_tick,
+            duration_ticks: dto.duration_ticks,
+            key: dto.key,
+            velocity: dto.velocity,
+            pan: dto.pan,
+            fine_pitch_cents: dto.fine_pitch_cents,
+            is_slide: dto.is_slide,
+            color_group: dto.color_group,
+        }
+    }
+}
+
+/// Serializable Piano Roll Pattern DTO.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PianoRollPatternDto {
+    pub pattern_id: u32,
+    pub name: String,
+    pub target_channel_id: u32,
+    pub length_ticks: i64,
+    pub notes: Vec<PianoRollNoteDto>,
+}
+
+impl PianoRollPatternDto {
+    pub fn to_pattern(&self) -> daw_core_graph::PianoRollPattern {
+        let mut pat = daw_core_graph::PianoRollPattern::new(
+            self.pattern_id,
+            self.name.clone(),
+            self.target_channel_id,
+            self.length_ticks,
+        );
+        for &n in &self.notes {
+            let _ = pat.add_note(n.into());
+        }
+        pat
+    }
+
+    pub fn from_pattern(pat: &daw_core_graph::PianoRollPattern) -> Self {
+        Self {
+            pattern_id: pat.pattern_id,
+            name: pat.name.clone(),
+            target_channel_id: pat.target_channel_id,
+            length_ticks: pat.length_ticks,
+            notes: pat.active_notes().iter().copied().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Serializable Playlist Arrangement Clip DTO.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistClipDto {
+    pub clip_id: u32,
+    pub track_row: u16,
+    pub kind: String, // "Pattern", "AudioStem", "Automation"
+    pub source_id: u32,
+    pub start_tick: i64,
+    pub duration_ticks: i64,
+    pub clip_offset_ticks: i64,
+    pub gain: f32,
+    pub muted: bool,
+}
+
+impl PlaylistClipDto {
+    pub fn to_playlist_clip(&self) -> daw_core_graph::PlaylistClip {
+        let kind = match self.kind.to_ascii_lowercase().as_str() {
+            "audiostem" | "audio" | "stem" => daw_core_graph::PlaylistClipKind::AudioStem,
+            "automation" => daw_core_graph::PlaylistClipKind::Automation,
+            _ => daw_core_graph::PlaylistClipKind::Pattern,
+        };
+        daw_core_graph::PlaylistClip {
+            clip_id: self.clip_id,
+            track_row: self.track_row,
+            kind,
+            source_id: self.source_id,
+            start_tick: self.start_tick,
+            duration_ticks: self.duration_ticks,
+            clip_offset_ticks: self.clip_offset_ticks,
+            gain: self.gain,
+            muted: self.muted,
+        }
+    }
+
+    pub fn from_playlist_clip(clip: &daw_core_graph::PlaylistClip) -> Self {
+        let kind = match clip.kind {
+            daw_core_graph::PlaylistClipKind::Pattern => "Pattern",
+            daw_core_graph::PlaylistClipKind::AudioStem => "AudioStem",
+            daw_core_graph::PlaylistClipKind::Automation => "Automation",
+        };
+        Self {
+            clip_id: clip.clip_id,
+            track_row: clip.track_row,
+            kind: kind.to_string(),
+            source_id: clip.source_id,
+            start_tick: clip.start_tick,
+            duration_ticks: clip.duration_ticks,
+            clip_offset_ticks: clip.clip_offset_ticks,
+            gain: clip.gain,
+            muted: clip.muted,
+        }
+    }
+}
+
+fn default_ppq_resolution() -> u32 {
+    daw_core_graph::DEFAULT_PPQ
+}
+
 /// Complete ToneForge Project State (`ToneForgeProjectState`) managing 502 Mixer Tracks,
-/// Patcher DAGs, Automation Clips with `TensionSpline`, 30-Bit Controller Bus links, and
-/// all DSP/AI plugin chains (`Pro-Q 4`, `Soothe3`, `Ozone 12`, `RealTimeBsrnnStemNode`).
+/// Patcher DAGs, Automation Clips with `TensionSpline`, 30-Bit Controller Bus links,
+/// Piano Roll Patterns, Playlist Clips, and all DSP/AI plugin chains (`Pro-Q 4`, `Soothe3`,
+/// `Ozone 12`, `RealTimeBsrnnStemNode`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToneForgeProjectState {
     pub project_name: String,
@@ -604,6 +744,8 @@ pub struct ToneForgeProjectState {
     pub sample_rate: f64,
     pub max_block_size: usize,
     pub bpm: f64,
+    #[serde(default = "default_ppq_resolution")]
+    pub ppq_resolution: u32,
     pub is_playing: bool,
     pub sample_pos: i64,
     pub ppq_tick: i64,
@@ -612,6 +754,10 @@ pub struct ToneForgeProjectState {
     pub patcher_graphs: Vec<PatcherGraphStateDto>,
     pub automation_clips: Vec<AutomationClipStateDto>,
     pub controller_links: Vec<ControllerLinkStateDto>,
+    #[serde(default)]
+    pub piano_roll_patterns: Vec<PianoRollPatternDto>,
+    #[serde(default)]
+    pub playlist_clips: Vec<PlaylistClipDto>,
 }
 
 impl Default for ToneForgeProjectState {
@@ -634,6 +780,7 @@ impl ToneForgeProjectState {
             sample_rate: sample_rate.max(8000.0),
             max_block_size: 512,
             bpm: bpm.clamp(10.0, 999.0),
+            ppq_resolution: daw_core_graph::DEFAULT_PPQ,
             is_playing: true,
             sample_pos: 0,
             ppq_tick: 0,
@@ -665,6 +812,60 @@ impl ToneForgeProjectState {
                 max_level: 1.0,
             }],
             controller_links: Vec::new(),
+            piano_roll_patterns: vec![PianoRollPatternDto {
+                pattern_id: 1,
+                name: "ToneForge Lead Hook (FL26 Slide)".to_string(),
+                target_channel_id: 1,
+                length_ticks: 384,
+                notes: vec![
+                    PianoRollNoteDto {
+                        id: 1,
+                        start_tick: 0,
+                        duration_ticks: 96,
+                        key: 60,
+                        velocity: 0.88,
+                        pan: -0.15,
+                        fine_pitch_cents: 0.0,
+                        is_slide: false,
+                        color_group: 0,
+                    },
+                    PianoRollNoteDto {
+                        id: 2,
+                        start_tick: 48,
+                        duration_ticks: 48,
+                        key: 72,
+                        velocity: 0.95,
+                        pan: 0.25,
+                        fine_pitch_cents: 0.0,
+                        is_slide: true,
+                        color_group: 0,
+                    },
+                ],
+            }],
+            playlist_clips: vec![
+                PlaylistClipDto {
+                    clip_id: 1,
+                    track_row: 0,
+                    kind: "Pattern".to_string(),
+                    source_id: 1,
+                    start_tick: 0,
+                    duration_ticks: 384,
+                    clip_offset_ticks: 0,
+                    gain: 1.0,
+                    muted: false,
+                },
+                PlaylistClipDto {
+                    clip_id: 2,
+                    track_row: 1,
+                    kind: "Automation".to_string(),
+                    source_id: 0,
+                    start_tick: 0,
+                    duration_ticks: 384,
+                    clip_offset_ticks: 0,
+                    gain: 1.0,
+                    muted: false,
+                },
+            ],
         }
     }
 

@@ -12,9 +12,12 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use daw_core_graph::{
-    ChannelGenerator, ControllerLink, DeterministicGeneratorNode, EngineCommand,
-    FixedLatencyTransformNode, MixerEngine, PATCHER_HOST_INPUT_NODE, PATCHER_HOST_OUTPUT_NODE,
-    PatcherGraphNode, SparseCompressorNode, TempoMap, normalized_to_fixed30,
+    AudioStemClipPlayerNode, AutomationClipArticulator, ChannelGenerator, ControllerLink,
+    DeterministicGeneratorNode, EngineCommand, FixedLatencyTransformNode, MixerEngine,
+    PATCHER_HOST_INPUT_NODE, PATCHER_HOST_OUTPUT_NODE, PatcherGraphNode, PianoRollNote,
+    PianoRollPattern, PlaylistClip, PlaylistClipKind, PolyphonicSynthGeneratorNode,
+    SparseCompressorNode, TempoMap, TensionControlPoint, TensionSpline, UnifiedDspNode,
+    normalized_to_fixed30,
 };
 
 struct RtTrackingAllocator;
@@ -93,7 +96,8 @@ fn test_strict_zero_heap_allocation_in_realtime_render_cycle() {
     let sample_rate = 48_000.0;
     let (mut engine, mut cmd_prod, mut telem_out) = MixerEngine::new(sample_rate, 128.0, 0);
 
-    // 1. Configure Channel Generators with distinct latencies (Point 1 APDC)
+    // 1. Configure Channel Generators with distinct latencies (Point 1 APDC), including Phase 5
+    //    PolyphonicSynthGeneratorNode (with 32-sample lookahead) and AudioStemClipPlayerNode
     engine
         .add_channel_generator(ChannelGenerator::new(
             0,
@@ -108,6 +112,44 @@ fn test_strict_zero_heap_allocation_in_realtime_render_cycle() {
             Box::new(DeterministicGeneratorNode::new(48, 0.6, false)),
         ))
         .unwrap();
+
+    let mut poly_synth = PolyphonicSynthGeneratorNode::new(2, sample_rate).with_lookahead_latency(32);
+    poly_synth.prepare(sample_rate, 256);
+    engine
+        .add_channel_generator(ChannelGenerator::new(2, 1, Box::new(poly_synth)))
+        .unwrap();
+
+    let stem_samples = vec![[0.25f32, -0.25f32]; 4096];
+    let mut stem_player =
+        AudioStemClipPlayerNode::new(10, "ZeroAllocStem", stem_samples).with_lookahead_latency(24);
+    stem_player.prepare(sample_rate, 256);
+    engine
+        .add_channel_generator(ChannelGenerator::new(3, 2, Box::new(stem_player)))
+        .unwrap();
+
+    // Configure Phase 5 Piano Roll Pattern (with FL Studio 26 Slide note), Playlist Clips, and TensionSpline Articulator
+    let mut pattern = PianoRollPattern::new(1, "RT Zero Alloc Pattern", 2, 96);
+    pattern.add_note(PianoRollNote::new(1, 0, 24, 60, 0.9));
+    pattern.add_note(PianoRollNote::new_slide(2, 4, 16, 72, 1.0));
+    engine.sequencer.upsert_pattern(pattern);
+    engine.sequencer.upsert_clip(PlaylistClip {
+        clip_id: 1,
+        track_row: 0,
+        kind: PlaylistClipKind::Pattern,
+        source_id: 1,
+        start_tick: 0,
+        duration_ticks: 384,
+        clip_offset_ticks: 0,
+        gain: 1.0,
+        muted: false,
+    });
+    let spline = TensionSpline::new(vec![
+        TensionControlPoint::new(0.0, 0.2, 0.35),
+        TensionControlPoint::new(64.0, 0.85, -0.35),
+    ]);
+    engine
+        .sequencer
+        .upsert_automation_articulator(AutomationClipArticulator::new(0, spline));
 
     // 2. Attach SparseCompressorNode (with lookahead) and PatcherGraphNode onto Mixer Tracks (Point 3 APDC)
     let comp = SparseCompressorNode::new(-18.0, 4.0, 2.0, 32);

@@ -8,6 +8,15 @@
 /// Default PPQ resolution in FL Studio 26 (`96` ticks per quarter note).
 pub const DEFAULT_PPQ: u32 = 96;
 
+/// Minimum supported PPQ resolution (`24` ticks per quarter note).
+pub const MIN_PPQ: u32 = 24;
+
+/// Maximum supported PPQ resolution in FL Studio 26 (`960` ticks per quarter note).
+pub const MAX_PPQ: u32 = 960;
+
+/// Standard FL Studio 26 PPQ resolutions (`96..=960`).
+pub const SUPPORTED_PPQ_RESOLUTIONS: [u32; 6] = [96, 144, 192, 384, 480, 960];
+
 /// Maximum pre-allocated tempo change points in `TempoMap`.
 pub const MAX_TEMPO_POINTS: usize = 256;
 
@@ -74,6 +83,12 @@ impl TempoMap {
         self.count = 0;
     }
 
+    /// Returns the slice of active tempo points.
+    #[inline]
+    pub fn active_points(&self) -> &[TempoPoint] {
+        &self.points[..self.count]
+    }
+
     /// Queries the active BPM at `ppq_tick` (Zero Heap Allocation).
     #[inline]
     pub fn bpm_at_tick(&self, ppq_tick: i64) -> f64 {
@@ -105,11 +120,11 @@ pub struct HybridPpqSlicer {
 pub type HybridTickSlicer = HybridPpqSlicer;
 
 impl HybridPpqSlicer {
-    /// Initializes a new `HybridPpqSlicer` at `sample_rate`, `bpm`, and `ppq`.
+    /// Initializes a new `HybridPpqSlicer` at `sample_rate`, `bpm`, and `ppq` (`24..=960`).
     pub fn new(sample_rate: f64, bpm: f64, ppq: u32) -> Self {
         let safe_sr = sample_rate.max(8000.0);
         let safe_bpm = bpm.clamp(10.0, 999.0);
-        let safe_ppq = ppq.max(24);
+        let safe_ppq = ppq.clamp(MIN_PPQ, MAX_PPQ);
         let spt = Self::compute_samples_per_tick(safe_sr, safe_bpm, safe_ppq);
         Self {
             sample_rate: safe_sr,
@@ -139,12 +154,85 @@ impl HybridPpqSlicer {
             Self::compute_samples_per_tick(self.sample_rate, self.bpm, self.ppq);
     }
 
+    /// Updates PPQ resolution (`24..=960`) dynamically and recalculates `samples_per_tick_f64` (Zero Heap Allocation).
+    #[inline]
+    pub fn set_ppq(&mut self, ppq: u32) {
+        self.ppq = ppq.clamp(MIN_PPQ, MAX_PPQ);
+        self.samples_per_tick_f64 =
+            Self::compute_samples_per_tick(self.sample_rate, self.bpm, self.ppq);
+    }
+
     /// Updates sample rate and recalculates `samples_per_tick_f64`.
     #[inline]
     pub fn set_sample_rate(&mut self, sample_rate: f64) {
         self.sample_rate = sample_rate.max(8000.0);
         self.samples_per_tick_f64 =
             Self::compute_samples_per_tick(self.sample_rate, self.bpm, self.ppq);
+    }
+
+    /// Converts a PPQ tick position (integer or fractional) to an exact sample position,
+    /// accounting for `tempo_map` segments if present (Zero Heap Allocation).
+    #[inline]
+    pub fn tick_to_sample_pos(&self, tick: f64) -> i64 {
+        let target_tick = tick.max(0.0);
+        if let Some(ref map) = self.tempo_map {
+            let pts = map.active_points();
+            if !pts.is_empty() {
+                let mut cur_tick = 0.0f64;
+                let mut accum_samples = 0.0f64;
+                let mut cur_bpm = map.default_bpm;
+                for pt in pts {
+                    let pt_tick = (pt.ppq_tick.max(0)) as f64;
+                    if target_tick <= pt_tick {
+                        break;
+                    }
+                    if pt_tick > cur_tick {
+                        let dt = pt_tick - cur_tick;
+                        accum_samples +=
+                            dt * Self::compute_samples_per_tick(self.sample_rate, cur_bpm, self.ppq);
+                        cur_tick = pt_tick;
+                    }
+                    cur_bpm = pt.bpm;
+                }
+                if target_tick > cur_tick {
+                    accum_samples += (target_tick - cur_tick)
+                        * Self::compute_samples_per_tick(self.sample_rate, cur_bpm, self.ppq);
+                }
+                return accum_samples.round() as i64;
+            }
+        }
+        (target_tick * self.samples_per_tick_f64).round() as i64
+    }
+
+    /// Converts a sample position to a continuous PPQ tick position (Zero Heap Allocation).
+    #[inline]
+    pub fn sample_pos_to_tick(&self, sample_pos: i64) -> f64 {
+        let target_samples = (sample_pos.max(0)) as f64;
+        if let Some(ref map) = self.tempo_map {
+            let pts = map.active_points();
+            if !pts.is_empty() {
+                let mut cur_tick = 0.0f64;
+                let mut cur_samples = 0.0f64;
+                let mut cur_bpm = map.default_bpm;
+                for pt in pts {
+                    let pt_tick = (pt.ppq_tick.max(0)) as f64;
+                    if pt_tick > cur_tick {
+                        let spt =
+                            Self::compute_samples_per_tick(self.sample_rate, cur_bpm, self.ppq);
+                        let seg_samples = (pt_tick - cur_tick) * spt;
+                        if cur_samples + seg_samples >= target_samples {
+                            return cur_tick + (target_samples - cur_samples) / spt.max(1e-9);
+                        }
+                        cur_samples += seg_samples;
+                        cur_tick = pt_tick;
+                    }
+                    cur_bpm = pt.bpm;
+                }
+                let spt = Self::compute_samples_per_tick(self.sample_rate, cur_bpm, self.ppq);
+                return cur_tick + (target_samples - cur_samples) / spt.max(1e-9);
+            }
+        }
+        target_samples / self.samples_per_tick_f64.max(1e-9)
     }
 
     /// Resets playback position to sample 0 and tick 0.

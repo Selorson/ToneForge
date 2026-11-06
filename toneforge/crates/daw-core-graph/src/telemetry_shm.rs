@@ -226,6 +226,10 @@ pub enum EngineCommand {
         controller_id: u16,
         value_fixed30: i32,
     },
+    /// Change PPQ resolution dynamically (`96..=960`).
+    SetPpq(u32),
+    /// Trigger a sample-accurate MIDI / Piano Roll / Slide note event on a ChannelGenerator.
+    TriggerVoiceEvent(crate::sequencer_pianoroll::SequencerVoiceEvent),
     /// Recomputes 5-Point APDC delays across the existing topological schedule in-place
     /// with Zero Heap Allocation (e.g. after a plugin dynamically changes its reported latency).
     RefreshApdc,

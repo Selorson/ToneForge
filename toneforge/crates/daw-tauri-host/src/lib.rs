@@ -15,6 +15,7 @@
 
 pub mod audio_stream_controller;
 pub mod ipc_commands;
+pub mod offline_render_engine;
 pub mod project_state;
 pub mod shm_telemetry_server;
 pub mod wgpu_compositor;
@@ -23,18 +24,27 @@ pub use audio_stream_controller::{
     AudioStreamController, StemPlaybackGeneratorNode, Uvr5EnsembleStudioOutput,
 };
 pub use ipc_commands::{
-    DawAppState, ProQ4BandUpdateDto, Soothe3UpdateDto, cmd_load_proq4_preset,
-    cmd_load_soothe3_preset_json, cmd_poll_binary_telemetry_frame, cmd_route_mixer_track,
-    cmd_run_uvr5_separation, cmd_seek_transport, cmd_set_internal_controller_norm,
-    cmd_set_track_gain, cmd_set_transport, cmd_update_bsrnn_stem_gains, cmd_update_ozone12_master,
-    cmd_update_proq4_band, cmd_update_soothe3_params,
+    DawAppState, ProQ4BandUpdateDto, Soothe3UpdateDto, cmd_execute_offline_render,
+    cmd_load_proq4_preset, cmd_load_soothe3_preset_json, cmd_poll_binary_telemetry_frame,
+    cmd_route_mixer_track, cmd_run_uvr5_separation, cmd_seek_transport,
+    cmd_set_internal_controller_norm, cmd_set_ppq_resolution, cmd_set_track_gain,
+    cmd_set_transport, cmd_trigger_piano_roll_note, cmd_update_automation_spline,
+    cmd_update_bsrnn_stem_gains, cmd_update_ozone12_master, cmd_update_proq4_band,
+    cmd_update_soothe3_params, cmd_upsert_piano_roll_pattern, cmd_upsert_playlist_clip,
+};
+pub use offline_render_engine::{
+    DecodedWavFile, ExportedTrackWav, OfflineRenderConfig, OfflineRenderEngine,
+    OfflineRenderResult, PostRenderAnalysisReport, RenderMode, RenderSampleRate,
+    StreamingLoudnessCompliance, WavBitDepth, analyze_rendered_audio, decode_wav_bytes,
+    encode_wav_bytes, read_wav_file, write_wav_file,
 };
 pub use project_state::{
     AutomationClipStateDto, BsrnnStemStateDto, ControllerLinkStateDto, LfoModulatorDto,
     MixerSendRouteDto, MixerTrackStateDto, Ozone12MasterConfigDto, PatcherAudioEdgeDto,
     PatcherGraphStateDto, PatcherNodeLayoutDto, PatcherNodeStateDto, PatcherParamEdgeDto,
-    PluginConfigDto, PluginSlotStateDto, ProQ4StateDto, Soothe3StateDto,
-    TONEFORGE_PROJECT_SCHEMA_VERSION, TensionControlPointDto, ToneForgeProjectState,
+    PianoRollNoteDto, PianoRollPatternDto, PlaylistClipDto, PluginConfigDto, PluginSlotStateDto,
+    ProQ4StateDto, Soothe3StateDto, TONEFORGE_PROJECT_SCHEMA_VERSION, TensionControlPointDto,
+    ToneForgeProjectState,
 };
 pub use shm_telemetry_server::{
     OFFSET_AUTOMATION_SPLINE, OFFSET_HEADER, OFFSET_HEADER_ALIGN_PAD, OFFSET_OZONE12_TELEMETRY,
