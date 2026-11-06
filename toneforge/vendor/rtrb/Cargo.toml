@@ -1,0 +1,6 @@
+[package]
+name = "rtrb"
+version = "0.3.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Realtime-safe wait-free single-producer single-consumer ring buffer"

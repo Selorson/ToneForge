@@ -1,0 +1,177 @@
+{
+  "izresembed_total_entries": 2970,
+  "onnx_models_count": 12,
+  "npz_models_count": 2,
+  "param_lists_count": 23,
+  "triode_lut_verified": true,
+  "triode_lut_sample_rate": 48000.0,
+  "triode_lut_dc_offset": -0.04588765735184097,
+  "triode_lut_grid_dims": [
+    360,
+    360
+  ],
+  "extracted_files": [
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_BassControl.txt",
+      "size_bytes": 620,
+      "sha256_prefix": "034bcc25146e3350"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Clarity.txt",
+      "size_bytes": 411,
+      "sha256_prefix": "a9edc761d680135d"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_DynamicEQ.txt",
+      "size_bytes": 9356,
+      "sha256_prefix": "9bad756a15002db1"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Dynamics.txt",
+      "size_bytes": 6734,
+      "sha256_prefix": "1195f82eb31ea6c0"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_EQ.txt",
+      "size_bytes": 4625,
+      "sha256_prefix": "37d835bc38f358f6"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_EQ2.txt",
+      "size_bytes": 5225,
+      "sha256_prefix": "01bce08115e2bef3"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Exciter.txt",
+      "size_bytes": 1585,
+      "sha256_prefix": "6a99a70708c5528c"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Gain.txt",
+      "size_bytes": 327,
+      "sha256_prefix": "0aa881da02242049"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Global.txt",
+      "size_bytes": 34,
+      "sha256_prefix": "eb29ec6e86410368"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Imager.txt",
+      "size_bytes": 1176,
+      "sha256_prefix": "684a3004bc883e0f"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Impact.txt",
+      "size_bytes": 828,
+      "sha256_prefix": "d51ee01506a90a1c"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_LowEndFocus.txt",
+      "size_bytes": 303,
+      "sha256_prefix": "b6d019dcb9f6236f"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_MasterRebalance.txt",
+      "size_bytes": 80,
+      "sha256_prefix": "b9ccd32dd2a90ff5"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Match_EQ.txt",
+      "size_bytes": 414,
+      "sha256_prefix": "30356b9d4b26fa43"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Maximizer.txt",
+      "size_bytes": 649,
+      "sha256_prefix": "5ceeb63c8dba24fd"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_SpectralShaper.txt",
+      "size_bytes": 711,
+      "sha256_prefix": "e2112d8cb2566741"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Stabilizer.txt",
+      "size_bytes": 1011,
+      "sha256_prefix": "e67d7d6e02b2648a"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_StemEQ.txt",
+      "size_bytes": 8351,
+      "sha256_prefix": "a0c8c831848cb825"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_Unlimiter.txt",
+      "size_bytes": 202,
+      "sha256_prefix": "9c6944f9a2ab0fbd"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_VintageCompressor.txt",
+      "size_bytes": 1852,
+      "sha256_prefix": "6042b3e244f7448b"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_VintageEQ.txt",
+      "size_bytes": 1836,
+      "sha256_prefix": "2d398a3f83eec64a"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_VintageLimiter.txt",
+      "size_bytes": 281,
+      "sha256_prefix": "f4cb2d7af5f62e2c"
+    },
+    {
+      "category": "ozone12_param_table",
+      "relative_dest_path": "param_tables/AutomatableParamList_VintageTape.txt",
+      "size_bytes": 296,
+      "sha256_prefix": "010ac8f3eaf33298"
+    },
+    {
+      "category": "bsrnn_realtime",
+      "relative_dest_path": "models/bsrnn_realtime/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
+      "size_bytes": 7230143,
+      "sha256_prefix": "fd58bc17d3d949fb"
+    },
+    {
+      "category": "bsrnn_realtime",
+      "relative_dest_path": "models/bsrnn_realtime/delimit_exp009_ep080_fixed2.onnx",
+      "size_bytes": 5580442,
+      "sha256_prefix": "8d00832ab265f526"
+    },
+    {
+      "category": "assistant_cnn",
+      "relative_dest_path": "models/assistant_cnn/gparamsBN8.0.npz",
+      "size_bytes": 6522880,
+      "sha256_prefix": "650969e7c5ffe544"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-48000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "bcee55de2d057c46"
+    }
+  ]
+}

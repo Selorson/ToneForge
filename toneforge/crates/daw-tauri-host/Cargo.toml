@@ -1,0 +1,29 @@
+[package]
+name = "daw-tauri-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge DAW Tauri 2.0 Host, Lock-Free Command Dispatcher, SharedArrayBuffer Telemetry Bridge & WGPU Compositor"
+
+[lib]
+name = "daw_tauri_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "toneforge-host"
+path = "src/main.rs"
+
+[dependencies]
+daw-core-graph.workspace = true
+dsp-proq4-eq.workspace = true
+dsp-soothe3-spectral.workspace = true
+dsp-ozone12-mastering.workspace = true
+ai-uvr5-stem-engine.workspace = true
+rtrb.workspace = true
+triple_buffer.workspace = true
+bytemuck.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

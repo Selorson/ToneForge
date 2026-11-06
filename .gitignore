@@ -1,0 +1,23 @@
+# Raw installer binaries & unpacked target dumps
+/*.exe
+/extracted_targets/
+
+# External analysis & reference repositories
+/craft-anything/
+/rea/
+/ultimatevocalremovergui/
+
+# Rust / Cargo build artifacts
+**/target/
+
+# Node / Frontend build artifacts
+**/node_modules/
+**/dist/
+**/.svelte-kit/
+
+# OS & temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*.log

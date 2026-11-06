@@ -1,0 +1,26 @@
+[package]
+name = "daw-core-graph"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge Core Audio Graph: 502-Track Topological Mixer DAG, 5-Point APDC, Hybrid PPQ Slicer, Tension Spline, Patcher, Native FX, and 128 KB Wait-Free Telemetry"
+
+[dependencies]
+crossbeam-deque = { workspace = true }
+crossbeam-utils = { workspace = true }
+crossbeam-queue = { workspace = true }
+rtrb = { workspace = true }
+triple_buffer = { workspace = true }
+parking_lot = { workspace = true }
+wide = { workspace = true }
+bytemuck = { workspace = true }
+rustfft = { workspace = true }
+realfft = { workspace = true }
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "dsp-proq4-eq"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge FabFilter Pro-Q 4 Clean-Room DSP Engine: 24-Band Dynamic/Spectral/Linear-Phase Equalizer"
+
+[dependencies]
+daw-core-graph = { workspace = true }
+rustfft = { workspace = true }
+realfft = { workspace = true }
+wide = { workspace = true }
+bytemuck = { workspace = true }
+serde = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "dsp-soothe3-spectral"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge oeksound Soothe3 Clean-Room DSP Engine: Dynamic Resonance Suppressor & Cepstral Min-Phase Reconstructor"
+
+[dependencies]
+daw-core-graph = { workspace = true }
+rustfft = { workspace = true }
+realfft = { workspace = true }
+wide = { workspace = true }
+bytemuck = { workspace = true }
+serde = { workspace = true }

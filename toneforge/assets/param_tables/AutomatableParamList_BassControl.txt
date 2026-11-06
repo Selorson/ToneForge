@@ -1,0 +1,12 @@
+BAS: Bypass	Bass Control	Bypass
+BAS: Balance	Bass Control	Balance
+BAS: Peak Control Threshold	Bass Control	PeakControlThreshold
+BAS: Punch	Bass Control	Punch
+BAS: Sustain Power Threshold	Bass Control	SustainPowerThreshold
+BAS: Sustain Power Amount	Bass Control	SustainPowerAmount
+BAS: Sustain Power Clean Dirty Blend	Bass Control	SustainPowerBlend
+BAS: Peak Control Character	Bass Control	PeakControlCharacter
+BAS: Balance Bypass	Bass Control	BalancePower
+BAS: Punch Bypass	Bass Control	PunchPower
+BAS: Sustain Power Bypass	Bass Control	SustainPowerPower
+BAS: Peak Control Bypass	Bass Control	PeakControlPower

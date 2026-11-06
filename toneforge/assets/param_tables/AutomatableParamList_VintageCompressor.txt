@@ -1,0 +1,27 @@
+VCOMP: Bypass	Vintage Compressor	Bypass
+VCOMP: Stereo/Main Threshold	Vintage Compressor	Threshold
+VCOMP: Stereo/Main Ratio	Vintage Compressor	Ratio
+VCOMP: Stereo/Main Attack	Vintage Compressor	Attack
+VCOMP: Stereo/Main Release	Vintage Compressor	Master Release
+VCOMP: Stereo/Main Mode	Vintage Compressor	Knee Mode
+VCOMP: Stereo/Main Output Gain	Vintage Compressor	Makeup Gain
+VCOMP: Stereo/Main Auto Gain	Vintage Compressor	Auto Gain Compensation
+VCOMP: Stereo/Main Det. Filt. HP Frequency	Vintage Compressor	Sidechain Highpass Frequency
+VCOMP: Stereo/Main Det. Filt. Bell Frequency	Vintage Compressor	Sidechain Bell Frequency
+VCOMP: Stereo/Main Det. Filt. Bell Gain	Vintage Compressor	Sidechain Bell Gain
+VCOMP: Stereo/Main Det. Filt. High Shelf Frequency	Vintage Compressor	Sidechain High Shelf Frequency
+VCOMP: Stereo/Main Det. Filt. High Shelf Gain	Vintage Compressor	Sidechain High Shelf Gain
+VCOMP: Stereo/Main Bypass	Vintage Compressor	Bypass Main
+VCOMP: Aux Threshold	Vintage Compressor	Aux: Threshold
+VCOMP: Aux Ratio	Vintage Compressor	Aux: Ratio
+VCOMP: Aux Attack	Vintage Compressor	Aux: Attack
+VCOMP: Aux Release	Vintage Compressor	Aux: Master Release
+VCOMP: Aux Mode	Vintage Compressor	Aux: Knee Mode
+VCOMP: Aux Output Gain	Vintage Compressor	Aux: Makeup Gain
+VCOMP: Aux Auto Gain	Vintage Compressor	Aux: Auto Gain Compensation
+VCOMP: Aux Det. Filt. HP Frequency	Vintage Compressor	Aux: Sidechain Highpass Frequency
+VCOMP: Aux Det. Filt. Bell Frequency	Vintage Compressor	Aux: Sidechain Bell Frequency
+VCOMP: Aux Det. Filt. Bell Gain	Vintage Compressor	Aux: Sidechain Bell Gain
+VCOMP: Aux Det. Filt. High Shelf Frequency	Vintage Compressor	Aux: Sidechain High Shelf Frequency
+VCOMP: Aux Det. Filt. High Shelf Gain	Vintage Compressor	Aux: Sidechain High Shelf Gain
+VCOMP: Aux Bypass	Vintage Compressor	Bypass Aux

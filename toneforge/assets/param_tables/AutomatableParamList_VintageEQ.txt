@@ -1,0 +1,31 @@
+VEQ: Bypass	Vintage EQ	Bypass
+VEQ: Stereo/Main Low Frequency	Vintage EQ	EQP Low Frequency
+VEQ: Stereo/Main Low Boost Amount	Vintage EQ	EQP Low Boost
+VEQ: Stereo/Main Low Cut Amount	Vintage EQ	EQP Low Atten
+VEQ: Stereo/Main High Boost Frequency	Vintage EQ	EQP High Boost Frequency
+VEQ: Stereo/Main High Boost Amount	Vintage EQ	EQP High Boost
+VEQ: Stereo/Main High Q	Vintage EQ	EQP High Boost Q
+VEQ: Stereo/Main High Cut Frequency	Vintage EQ	EQP High Atten Frequency
+VEQ: Stereo/Main High Cut Amount	Vintage EQ	EQP High Atten
+VEQ: Stereo/Main Low-Mid Frequency	Vintage EQ	MEQ Low Frequency
+VEQ: Stereo/Main Low-Mid Boost Amount	Vintage EQ	MEQ Low Boost
+VEQ: Stereo/Main Mid Frequency	Vintage EQ	MEQ Mid Frequency
+VEQ: Stereo/Main Mid Cut Amount	Vintage EQ	MEQ Mid Cut
+VEQ: Stereo/Main High-Mid Frequency	Vintage EQ	MEQ High Frequency
+VEQ: Stereo/Main High-Mid Boost Amount	Vintage EQ	MEQ High Boost
+VEQ: Stereo/Main Bypass	Vintage EQ	Bypass Main
+VEQ: Aux Low Frequency	Vintage EQ	Aux: EQP Low Frequency
+VEQ: Aux Low Boost Amount	Vintage EQ	Aux: EQP Low Boost
+VEQ: Aux Low Cut Amount	Vintage EQ	Aux: EQP Low Atten
+VEQ: Aux High Boost Frequency	Vintage EQ	Aux: EQP High Boost Frequency
+VEQ: Aux High Boost Amount	Vintage EQ	Aux: EQP High Boost
+VEQ: Aux High Q	Vintage EQ	Aux: EQP High Boost Q
+VEQ: Aux High Cut Frequency	Vintage EQ	Aux: EQP High Atten Frequency
+VEQ: Aux High Cut Amount	Vintage EQ	Aux: EQP High Atten
+VEQ: Aux Low-Mid Frequency	Vintage EQ	Aux: MEQ Low Frequency
+VEQ: Aux Low-Mid Boost Amount	Vintage EQ	Aux: MEQ Low Boost
+VEQ: Aux Mid Frequency	Vintage EQ	Aux: MEQ Mid Frequency
+VEQ: Aux Mid Cut Amount	Vintage EQ	Aux: MEQ Mid Cut
+VEQ: Aux High-Mid Frequency	Vintage EQ	Aux: MEQ High Frequency
+VEQ: Aux High-Mid Boost Amount	Vintage EQ	Aux: MEQ High Boost
+VEQ: Aux Bypass	Vintage EQ	Bypass Aux

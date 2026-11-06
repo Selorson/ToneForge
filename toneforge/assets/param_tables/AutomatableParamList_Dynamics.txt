@@ -1,0 +1,111 @@
+DYN: Bypass	Dynamics	Bypass
+DYN: Stereo/Main Global Gain	Dynamics	Global Gain
+DYN: Stereo/Main Band 1 Gain	Dynamics	Band 1 Gain
+DYN: Stereo/Main Band 1 Mix	Dynamics	Band 1 Mix
+DYN: Stereo/Main Band 1 Comp Threshold	Dynamics	Band 1 Comp Threshold
+DYN: Stereo/Main Band 1 Comp Ratio	Dynamics	Band 1 Comp Ratio
+DYN: Stereo/Main Band 1 Comp Attack	Dynamics	Band 1 Comp Attack
+DYN: Stereo/Main Band 1 Comp Release	Dynamics	Band 1 Comp Release
+DYN: Stereo/Main Band 1 Comp Knee	Dynamics	Band 1 Comp Soft Knee
+DYN: Stereo/Main Band 1 Lim Threshold	Dynamics	Band 1 Lim Threshold
+DYN: Stereo/Main Band 1 Lim Ratio	Dynamics	Band 1 Lim Ratio
+DYN: Stereo/Main Band 1 Lim Attack	Dynamics	Band 1 Lim Attack
+DYN: Stereo/Main Band 1 Lim Release	Dynamics	Band 1 Lim Release
+DYN: Stereo/Main Band 1 Lim Knee	Dynamics	Band 1 Lim Soft Knee
+DYN: Stereo/Main Band 2 Gain	Dynamics	Band 2 Gain
+DYN: Stereo/Main Band 2 Mix	Dynamics	Band 2 Mix
+DYN: Stereo/Main Band 2 Comp Threshold	Dynamics	Band 2 Comp Threshold
+DYN: Stereo/Main Band 2 Comp Ratio	Dynamics	Band 2 Comp Ratio
+DYN: Stereo/Main Band 2 Comp Attack	Dynamics	Band 2 Comp Attack
+DYN: Stereo/Main Band 2 Comp Release	Dynamics	Band 2 Comp Release
+DYN: Stereo/Main Band 2 Comp Knee	Dynamics	Band 2 Comp Soft Knee
+DYN: Stereo/Main Band 2 Lim Threshold	Dynamics	Band 2 Lim Threshold
+DYN: Stereo/Main Band 2 Lim Ratio	Dynamics	Band 2 Lim Ratio
+DYN: Stereo/Main Band 2 Lim Attack	Dynamics	Band 2 Lim Attack
+DYN: Stereo/Main Band 2 Lim Release	Dynamics	Band 2 Lim Release
+DYN: Stereo/Main Band 2 Lim Knee	Dynamics	Band 2 Lim Soft Knee
+DYN: Stereo/Main Band 3 Gain	Dynamics	Band 3 Gain
+DYN: Stereo/Main Band 3 Mix	Dynamics	Band 3 Mix
+DYN: Stereo/Main Band 3 Comp Threshold	Dynamics	Band 3 Comp Threshold
+DYN: Stereo/Main Band 3 Comp Ratio	Dynamics	Band 3 Comp Ratio
+DYN: Stereo/Main Band 3 Comp Attack	Dynamics	Band 3 Comp Attack
+DYN: Stereo/Main Band 3 Comp Release	Dynamics	Band 3 Comp Release
+DYN: Stereo/Main Band 3 Comp Knee	Dynamics	Band 3 Comp Soft Knee
+DYN: Stereo/Main Band 3 Lim Threshold	Dynamics	Band 3 Lim Threshold
+DYN: Stereo/Main Band 3 Lim Ratio	Dynamics	Band 3 Lim Ratio
+DYN: Stereo/Main Band 3 Lim Attack	Dynamics	Band 3 Lim Attack
+DYN: Stereo/Main Band 3 Lim Release	Dynamics	Band 3 Lim Release
+DYN: Stereo/Main Band 3 Lim Knee	Dynamics	Band 3 Lim Soft Knee
+DYN: Stereo/Main Band 4 Gain	Dynamics	Band 4 Gain
+DYN: Stereo/Main Band 4 Mix	Dynamics	Band 4 Mix
+DYN: Stereo/Main Band 4 Comp Threshold	Dynamics	Band 4 Comp Threshold
+DYN: Stereo/Main Band 4 Comp Ratio	Dynamics	Band 4 Comp Ratio
+DYN: Stereo/Main Band 4 Comp Attack	Dynamics	Band 4 Comp Attack
+DYN: Stereo/Main Band 4 Comp Release	Dynamics	Band 4 Comp Release
+DYN: Stereo/Main Band 4 Comp Knee	Dynamics	Band 4 Comp Soft Knee
+DYN: Stereo/Main Band 4 Lim Threshold	Dynamics	Band 4 Lim Threshold
+DYN: Stereo/Main Band 4 Lim Ratio	Dynamics	Band 4 Lim Ratio
+DYN: Stereo/Main Band 4 Lim Attack	Dynamics	Band 4 Lim Attack
+DYN: Stereo/Main Band 4 Lim Release	Dynamics	Band 4 Lim Release
+DYN: Stereo/Main Band 4 Lim Knee	Dynamics	Band 4 Lim Soft Knee
+DYN: Stereo/Main Level Detection Method	Dynamics	Detection Method
+DYN: Stereo/Main Sidechain HPF	Dynamics	Sidechain HPF
+DYN: Stereo/Main Sidechain Tilt Amount	Dynamics	Sidechain Thrust
+DYN: Stereo/Main Sidechain Filter Mode	Dynamics	Sidechain Filter Mode
+DYN: Stereo/Main Sidechain Filter Slope	Dynamics	Sidechain Slope
+DYN: Stereo/Main Bypass	Dynamics	Bypass Main
+DYN: Aux Global Gain	Dynamics	Aux: Global Gain
+DYN: Aux Band 1 Gain	Dynamics	Aux: Band 1 Gain
+DYN: Aux Band 1 Mix	Dynamics	Aux: Band 1 Mix
+DYN: Aux Band 1 Comp Threshold	Dynamics	Aux: Band 1 Comp Threshold
+DYN: Aux Band 1 Comp Ratio	Dynamics	Aux: Band 1 Comp Ratio
+DYN: Aux Band 1 Comp Attack	Dynamics	Aux: Band 1 Comp Attack
+DYN: Aux Band 1 Comp Release	Dynamics	Aux: Band 1 Comp Release
+DYN: Aux Band 1 Comp Knee	Dynamics	Aux: Band 1 Comp Soft Knee
+DYN: Aux Band 1 Lim Threshold	Dynamics	Aux: Band 1 Lim Threshold
+DYN: Aux Band 1 Lim Ratio	Dynamics	Aux: Band 1 Lim Ratio
+DYN: Aux Band 1 Lim Attack	Dynamics	Aux: Band 1 Lim Attack
+DYN: Aux Band 1 Lim Release	Dynamics	Aux: Band 1 Lim Release
+DYN: Aux Band 1 Lim Knee	Dynamics	Aux: Band 1 Lim Soft Knee
+DYN: Aux Band 2 Gain	Dynamics	Aux: Band 2 Gain
+DYN: Aux Band 2 Mix	Dynamics	Aux: Band 2 Mix
+DYN: Aux Band 2 Comp Threshold	Dynamics	Aux: Band 2 Comp Threshold
+DYN: Aux Band 2 Comp Ratio	Dynamics	Aux: Band 2 Comp Ratio
+DYN: Aux Band 2 Comp Attack	Dynamics	Aux: Band 2 Comp Attack
+DYN: Aux Band 2 Comp Release	Dynamics	Aux: Band 2 Comp Release
+DYN: Aux Band 2 Comp Knee	Dynamics	Aux: Band 2 Comp Soft Knee
+DYN: Aux Band 2 Lim Threshold	Dynamics	Aux: Band 2 Lim Threshold
+DYN: Aux Band 2 Lim Ratio	Dynamics	Aux: Band 2 Lim Ratio
+DYN: Aux Band 2 Lim Attack	Dynamics	Aux: Band 2 Lim Attack
+DYN: Aux Band 2 Lim Release	Dynamics	Aux: Band 2 Lim Release
+DYN: Aux Band 2 Lim Knee	Dynamics	Aux: Band 2 Lim Soft Knee
+DYN: Aux Band 3 Gain	Dynamics	Aux: Band 3 Gain
+DYN: Aux Band 3 Mix	Dynamics	Aux: Band 3 Mix
+DYN: Aux Band 3 Comp Threshold	Dynamics	Aux: Band 3 Comp Threshold
+DYN: Aux Band 3 Comp Ratio	Dynamics	Aux: Band 3 Comp Ratio
+DYN: Aux Band 3 Comp Attack	Dynamics	Aux: Band 3 Comp Attack
+DYN: Aux Band 3 Comp Release	Dynamics	Aux: Band 3 Comp Release
+DYN: Aux Band 3 Comp Knee	Dynamics	Aux: Band 3 Comp Soft Knee
+DYN: Aux Band 3 Lim Threshold	Dynamics	Aux: Band 3 Lim Threshold
+DYN: Aux Band 3 Lim Ratio	Dynamics	Aux: Band 3 Lim Ratio
+DYN: Aux Band 3 Lim Attack	Dynamics	Aux: Band 3 Lim Attack
+DYN: Aux Band 3 Lim Release	Dynamics	Aux: Band 3 Lim Release
+DYN: Aux Band 3 Lim Knee	Dynamics	Aux: Band 3 Lim Soft Knee
+DYN: Aux Band 4 Gain	Dynamics	Aux: Band 4 Gain
+DYN: Aux Band 4 Mix	Dynamics	Aux: Band 4 Mix
+DYN: Aux Band 4 Comp Threshold	Dynamics	Aux: Band 4 Comp Threshold
+DYN: Aux Band 4 Comp Ratio	Dynamics	Aux: Band 4 Comp Ratio
+DYN: Aux Band 4 Comp Attack	Dynamics	Aux: Band 4 Comp Attack
+DYN: Aux Band 4 Comp Release	Dynamics	Aux: Band 4 Comp Release
+DYN: Aux Band 4 Comp Knee	Dynamics	Aux: Band 4 Comp Soft Knee
+DYN: Aux Band 4 Lim Threshold	Dynamics	Aux: Band 4 Lim Threshold
+DYN: Aux Band 4 Lim Ratio	Dynamics	Aux: Band 4 Lim Ratio
+DYN: Aux Band 4 Lim Attack	Dynamics	Aux: Band 4 Lim Attack
+DYN: Aux Band 4 Lim Release	Dynamics	Aux: Band 4 Lim Release
+DYN: Aux Band 4 Lim Knee	Dynamics	Aux: Band 4 Lim Soft Knee
+DYN: Aux Level Detection Method	Dynamics	Aux: Detection Method
+DYN: Aux Sidechain HPF	Dynamics	Aux: Sidechain HPF
+DYN: Aux Sidechain Tilt Amount	Dynamics	Aux: Sidechain Thrust
+DYN: Aux Sidechain Filter Mode	Dynamics	Aux: Sidechain Filter Mode
+DYN: Aux Sidechain Filter Slope	Dynamics	Aux: Sidechain Slope
+DYN: Aux Bypass	Dynamics	Bypass Aux

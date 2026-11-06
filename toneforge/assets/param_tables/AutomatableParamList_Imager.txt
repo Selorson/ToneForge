@@ -1,0 +1,18 @@
+IMG: Bypass	Stereo Imager	Bypass
+IMG: Global Amount	Stereo Imager	Module Amount
+IMG: Stereo/Main Enable Stereoizer	Stereo Imager	Enable Stereoizer
+IMG: Stereo/Main Stereoizer Delay	Stereo Imager	Stereoizer Delay
+IMG: Stereo/Main Band 1 Width Percent	Stereo Imager	Band 1 Width Percent
+IMG: Stereo/Main Band 2 Width Percent	Stereo Imager	Band 2 Width Percent
+IMG: Stereo/Main Band 3 Width Percent	Stereo Imager	Band 3 Width Percent
+IMG: Stereo/Main Band 4 Width Percent	Stereo Imager	Band 4 Width Percent
+IMG: Stereo/Main Recover Sides Gain	Stereo Imager	Recover Sides Gain Offset (dB)
+IMG: Stereo/Main Bypass	Stereo Imager	Bypass Main
+IMG: Aux Enable Stereoizer	Stereo Imager	Aux: Enable Stereoizer
+IMG: Aux Stereoizer Delay	Stereo Imager	Aux: Stereoizer Delay
+IMG: Aux Band 1 Width Percent	Stereo Imager	Aux: Band 1 Width Percent
+IMG: Aux Band 2 Width Percent	Stereo Imager	Aux: Band 2 Width Percent
+IMG: Aux Band 3 Width Percent	Stereo Imager	Aux: Band 3 Width Percent
+IMG: Aux Band 4 Width Percent	Stereo Imager	Aux: Band 4 Width Percent
+IMG: Aux Recover Sides Gain	Stereo Imager	Aux: Recover Sides Gain Offset (dB)
+IMG: Aux Bypass	Stereo Imager	Bypass Aux

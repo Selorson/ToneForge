@@ -1,0 +1,17 @@
+IMP: Bypass	Impact	Bypass
+IMP: Global Amount	Impact	GlobalAmount
+IMP: Auto Gain On/Off	Impact	MainAutoGainEnabled
+IMP: Stereo/Main Band 1 Amount	Impact	Band 1 Amount
+IMP: Stereo/Main Band 2 Amount	Impact	Band 2 Amount
+IMP: Stereo/Main Band 3 Amount	Impact	Band 3 Amount
+IMP: Stereo/Main Band 4 Amount	Impact	Band 4 Amount
+IMP: Stereo/Main Envelope (ms)	Impact	Envelope
+IMP: Stereo/Main Envelope (Tempo synced)	Impact	HostSyncEnvelope
+IMP: Stereo/Main Bypass	Impact	BypassMain
+IMP: Aux Band 1 Amount	Impact	Aux: Band 1 Amount
+IMP: Aux Band 2 Amount	Impact	Aux: Band 2 Amount
+IMP: Aux Band 3 Amount	Impact	Aux: Band 3 Amount
+IMP: Aux Band 4 Amount	Impact	Aux: Band 4 Amount
+IMP: Aux Envelope (ms)	Impact	Aux: Envelope
+IMP: Aux Envelope (Tempo synced)	Impact	Aux: HostSyncEnvelope
+IMP: Aux Bypass	Impact	BypassAux

@@ -1,0 +1,23 @@
+[package]
+name = "ai-uvr5-stem-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge AI Stem Separation Engine: Real-Time 120ms BSRNN Streaming, Pure-Rust 2-Layer GRU-512 (.npz), and UVR5 Spectral Ensemble"
+
+[[bin]]
+name = "extract_izresembed"
+path = "src/bin/extract_izresembed.rs"
+
+[dependencies]
+daw-core-graph = { workspace = true }
+extract-cleanroom-assets = { workspace = true }
+rustfft = { workspace = true }
+realfft = { workspace = true }
+num-complex = { workspace = true }
+rtrb = { workspace = true }
+wide = { workspace = true }
+bytemuck = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

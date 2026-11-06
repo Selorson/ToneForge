@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/daw-core-graph",
+    "crates/dsp-proq4-eq",
+    "crates/dsp-soothe3-spectral",
+    "crates/dsp-ozone12-mastering",
+    "crates/ai-uvr5-stem-engine",
+    "crates/daw-tauri-host",
+    "tools/extract_cleanroom_assets",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["ToneForge Clean-Room Audio Engineering Team"]
+license = "Proprietary"
+
+[workspace.dependencies]
+# Internal workspace crates
+daw-core-graph = { path = "crates/daw-core-graph" }
+dsp-proq4-eq = { path = "crates/dsp-proq4-eq" }
+dsp-soothe3-spectral = { path = "crates/dsp-soothe3-spectral" }
+dsp-ozone12-mastering = { path = "crates/dsp-ozone12-mastering" }
+ai-uvr5-stem-engine = { path = "crates/ai-uvr5-stem-engine" }
+extract-cleanroom-assets = { path = "tools/extract_cleanroom_assets" }
+
+# Real-time lock-free concurrency & SIMD
+crossbeam-deque = "0.8"
+crossbeam-utils = "0.8"
+crossbeam-queue = "0.3"
+rtrb = { version = "0.3", path = "vendor/rtrb" }
+triple_buffer = { version = "8.0", path = "vendor/triple_buffer" }
+parking_lot = "0.12"
+wide = { version = "0.7", path = "vendor/wide" }
+bytemuck = { version = "1.25", features = ["derive", "min_const_generics", "extern_crate_alloc"] }
+
+# FFT, Complex Math & Audio System Threading
+rustfft = { version = "6.2", path = "vendor/rustfft" }
+realfft = { version = "3.4", path = "vendor/realfft" }
+num-complex = "0.4"
+num-traits = "0.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Threading",
+    "Win32_System_Com",
+] }
+
+# Serialization, Archive & Diagnostics
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+sha2 = "0.10"
+hex = "0.4"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+flate2 = "1.1"
+rayon = "1.12"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = false

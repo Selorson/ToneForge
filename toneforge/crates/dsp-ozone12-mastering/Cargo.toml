@@ -1,0 +1,15 @@
+[package]
+name = "dsp-ozone12-mastering"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge iZotope Ozone 12 Clean-Room Mastering Engine: 12AX7 DK-Triode LUT Solver, SlidingMaxHeap, and IRC I-V Maximizer"
+
+[dependencies]
+daw-core-graph = { workspace = true }
+rustfft = { workspace = true }
+realfft = { workspace = true }
+wide = { workspace = true }
+bytemuck = { workspace = true }
+serde = { workspace = true }

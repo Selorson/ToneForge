@@ -1,0 +1,6 @@
+[package]
+name = "triple_buffer"
+version = "8.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Wait-free triple buffer for high-frequency real-time telemetry snapshots"

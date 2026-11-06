@@ -1,0 +1,31 @@
+EXC: Bypass	Exciter	Bypass
+EXC: Stereo/Main Band 1 Amount	Exciter	Band 1 Amount
+EXC: Stereo/Main Band 1 Mix	Exciter	Band 1 Mix
+EXC: Stereo/Main Band 1 Mode	Exciter	Band 1 Exciter Mode
+EXC: Stereo/Main Band 2 Amount	Exciter	Band 2 Amount
+EXC: Stereo/Main Band 2 Mix	Exciter	Band 2 Mix
+EXC: Stereo/Main Band 2 Mode	Exciter	Band 2 Exciter Mode
+EXC: Stereo/Main Band 3 Amount	Exciter	Band 3 Amount
+EXC: Stereo/Main Band 3 Mix	Exciter	Band 3 Mix
+EXC: Stereo/Main Band 3 Mode	Exciter	Band 3 Exciter Mode
+EXC: Stereo/Main Band 4 Amount	Exciter	Band 4 Amount
+EXC: Stereo/Main Band 4 Mix	Exciter	Band 4 Mix
+EXC: Stereo/Main Band 4 Mode	Exciter	Band 4 Exciter Mode
+EXC: Stereo/Main Filter Frequency	Exciter	Post-Filter Frequency
+EXC: Stereo/Main Filter Gain	Exciter	Post-Filter Gain
+EXC: Stereo/Main Bypass	Exciter	Bypass Main
+EXC: Aux Band 1 Amount	Exciter	Aux: Band 1 Amount
+EXC: Aux Band 1 Mix	Exciter	Aux: Band 1 Mix
+EXC: Aux Band 1 Mode	Exciter	Aux: Band 1 Exciter Mode
+EXC: Aux Band 2 Amount	Exciter	Aux: Band 2 Amount
+EXC: Aux Band 2 Mix	Exciter	Aux: Band 2 Mix
+EXC: Aux Band 2 Mode	Exciter	Aux: Band 2 Exciter Mode
+EXC: Aux Band 3 Amount	Exciter	Aux: Band 3 Amount
+EXC: Aux Band 3 Mix	Exciter	Aux: Band 3 Mix
+EXC: Aux Band 3 Mode	Exciter	Aux: Band 3 Exciter Mode
+EXC: Aux Band 4 Amount	Exciter	Aux: Band 4 Amount
+EXC: Aux Band 4 Mix	Exciter	Aux: Band 4 Mix
+EXC: Aux Band 4 Mode	Exciter	Aux: Band 4 Exciter Mode
+EXC: Aux Filter Frequency	Exciter	Aux: Post-Filter Frequency
+EXC: Aux Filter Gain	Exciter	Aux: Post-Filter Gain
+EXC: Aux Bypass	Exciter	Bypass Aux

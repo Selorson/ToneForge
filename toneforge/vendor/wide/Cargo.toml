@@ -1,0 +1,6 @@
+[package]
+name = "wide"
+version = "0.7.30"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Portable SIMD f32x4 / f32x8 / f64x2 / f64x4 vector types"

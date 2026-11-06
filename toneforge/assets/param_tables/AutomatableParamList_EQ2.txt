@@ -1,0 +1,100 @@
+EQ2: Bypass	Post Equalizer	Bypass
+EQ2: Global Amount	Post Equalizer	Gain Scaling Amount
+EQ2: Stereo/Main Frequency 1	Post Equalizer	Band 1 Frequency
+EQ2: Stereo/Main Frequency 2	Post Equalizer	Band 2 Frequency
+EQ2: Stereo/Main Frequency 3	Post Equalizer	Band 3 Frequency
+EQ2: Stereo/Main Frequency 4	Post Equalizer	Band 4 Frequency
+EQ2: Stereo/Main Frequency 5	Post Equalizer	Band 5 Frequency
+EQ2: Stereo/Main Frequency 6	Post Equalizer	Band 6 Frequency
+EQ2: Stereo/Main Frequency 7	Post Equalizer	Band 7 Frequency
+EQ2: Stereo/Main Frequency 8	Post Equalizer	Band 8 Frequency
+EQ2: Stereo/Main Gain 1	Post Equalizer	Band 1 Gain
+EQ2: Stereo/Main Gain 2	Post Equalizer	Band 2 Gain
+EQ2: Stereo/Main Gain 3	Post Equalizer	Band 3 Gain
+EQ2: Stereo/Main Gain 4	Post Equalizer	Band 4 Gain
+EQ2: Stereo/Main Gain 5	Post Equalizer	Band 5 Gain
+EQ2: Stereo/Main Gain 6	Post Equalizer	Band 6 Gain
+EQ2: Stereo/Main Gain 7	Post Equalizer	Band 7 Gain
+EQ2: Stereo/Main Gain 8	Post Equalizer	Band 8 Gain
+EQ2: Stereo/Main Q 1	Post Equalizer	Band 1 Q
+EQ2: Stereo/Main Q 2	Post Equalizer	Band 2 Q
+EQ2: Stereo/Main Q 3	Post Equalizer	Band 3 Q
+EQ2: Stereo/Main Q 4	Post Equalizer	Band 4 Q
+EQ2: Stereo/Main Q 5	Post Equalizer	Band 5 Q
+EQ2: Stereo/Main Q 6	Post Equalizer	Band 6 Q
+EQ2: Stereo/Main Q 7	Post Equalizer	Band 7 Q
+EQ2: Stereo/Main Q 8	Post Equalizer	Band 8 Q
+EQ2: Stereo/Main Phase 1	Post Equalizer	Band 1 Phase
+EQ2: Stereo/Main Phase 2	Post Equalizer	Band 2 Phase
+EQ2: Stereo/Main Phase 3	Post Equalizer	Band 3 Phase
+EQ2: Stereo/Main Phase 4	Post Equalizer	Band 4 Phase
+EQ2: Stereo/Main Phase 5	Post Equalizer	Band 5 Phase
+EQ2: Stereo/Main Phase 6	Post Equalizer	Band 6 Phase
+EQ2: Stereo/Main Phase 7	Post Equalizer	Band 7 Phase
+EQ2: Stereo/Main Phase 8	Post Equalizer	Band 8 Phase
+EQ2: Stereo/Main Enable 1	Post Equalizer	Band 1 Enable
+EQ2: Stereo/Main Enable 2	Post Equalizer	Band 2 Enable
+EQ2: Stereo/Main Enable 3	Post Equalizer	Band 3 Enable
+EQ2: Stereo/Main Enable 4	Post Equalizer	Band 4 Enable
+EQ2: Stereo/Main Enable 5	Post Equalizer	Band 5 Enable
+EQ2: Stereo/Main Enable 6	Post Equalizer	Band 6 Enable
+EQ2: Stereo/Main Enable 7	Post Equalizer	Band 7 Enable
+EQ2: Stereo/Main Enable 8	Post Equalizer	Band 8 Enable
+EQ2: Stereo/Main Shape 1	Post Equalizer	Band 1 Shape
+EQ2: Stereo/Main Shape 2	Post Equalizer	Band 2 Shape
+EQ2: Stereo/Main Shape 3	Post Equalizer	Band 3 Shape
+EQ2: Stereo/Main Shape 4	Post Equalizer	Band 4 Shape
+EQ2: Stereo/Main Shape 5	Post Equalizer	Band 5 Shape
+EQ2: Stereo/Main Shape 6	Post Equalizer	Band 6 Shape
+EQ2: Stereo/Main Shape 7	Post Equalizer	Band 7 Shape
+EQ2: Stereo/Main Shape 8	Post Equalizer	Band 8 Shape
+EQ2: Stereo/Main Bypass	Post Equalizer	Bypass Main
+EQ2: Aux Frequency 1	Post Equalizer	Aux: Band 1 Frequency
+EQ2: Aux Frequency 2	Post Equalizer	Aux: Band 2 Frequency
+EQ2: Aux Frequency 3	Post Equalizer	Aux: Band 3 Frequency
+EQ2: Aux Frequency 4	Post Equalizer	Aux: Band 4 Frequency
+EQ2: Aux Frequency 5	Post Equalizer	Aux: Band 5 Frequency
+EQ2: Aux Frequency 6	Post Equalizer	Aux: Band 6 Frequency
+EQ2: Aux Frequency 7	Post Equalizer	Aux: Band 7 Frequency
+EQ2: Aux Frequency 8	Post Equalizer	Aux: Band 8 Frequency
+EQ2: Aux Gain 1	Post Equalizer	Aux: Band 1 Gain
+EQ2: Aux Gain 2	Post Equalizer	Aux: Band 2 Gain
+EQ2: Aux Gain 3	Post Equalizer	Aux: Band 3 Gain
+EQ2: Aux Gain 4	Post Equalizer	Aux: Band 4 Gain
+EQ2: Aux Gain 5	Post Equalizer	Aux: Band 5 Gain
+EQ2: Aux Gain 6	Post Equalizer	Aux: Band 6 Gain
+EQ2: Aux Gain 7	Post Equalizer	Aux: Band 7 Gain
+EQ2: Aux Gain 8	Post Equalizer	Aux: Band 8 Gain
+EQ2: Aux Q 1	Post Equalizer	Aux: Band 1 Q
+EQ2: Aux Q 2	Post Equalizer	Aux: Band 2 Q
+EQ2: Aux Q 3	Post Equalizer	Aux: Band 3 Q
+EQ2: Aux Q 4	Post Equalizer	Aux: Band 4 Q
+EQ2: Aux Q 5	Post Equalizer	Aux: Band 5 Q
+EQ2: Aux Q 6	Post Equalizer	Aux: Band 6 Q
+EQ2: Aux Q 7	Post Equalizer	Aux: Band 7 Q
+EQ2: Aux Q 8	Post Equalizer	Aux: Band 8 Q
+EQ2: Aux Phase 1	Post Equalizer	Aux: Band 1 Phase
+EQ2: Aux Phase 2	Post Equalizer	Aux: Band 2 Phase
+EQ2: Aux Phase 3	Post Equalizer	Aux: Band 3 Phase
+EQ2: Aux Phase 4	Post Equalizer	Aux: Band 4 Phase
+EQ2: Aux Phase 5	Post Equalizer	Aux: Band 5 Phase
+EQ2: Aux Phase 6	Post Equalizer	Aux: Band 6 Phase
+EQ2: Aux Phase 7	Post Equalizer	Aux: Band 7 Phase
+EQ2: Aux Phase 8	Post Equalizer	Aux: Band 8 Phase
+EQ2: Aux Enable 1	Post Equalizer	Aux: Band 1 Enable
+EQ2: Aux Enable 2	Post Equalizer	Aux: Band 2 Enable
+EQ2: Aux Enable 3	Post Equalizer	Aux: Band 3 Enable
+EQ2: Aux Enable 4	Post Equalizer	Aux: Band 4 Enable
+EQ2: Aux Enable 5	Post Equalizer	Aux: Band 5 Enable
+EQ2: Aux Enable 6	Post Equalizer	Aux: Band 6 Enable
+EQ2: Aux Enable 7	Post Equalizer	Aux: Band 7 Enable
+EQ2: Aux Enable 8	Post Equalizer	Aux: Band 8 Enable
+EQ2: Aux Shape 1	Post Equalizer	Aux: Band 1 Shape
+EQ2: Aux Shape 2	Post Equalizer	Aux: Band 2 Shape
+EQ2: Aux Shape 3	Post Equalizer	Aux: Band 3 Shape
+EQ2: Aux Shape 4	Post Equalizer	Aux: Band 4 Shape
+EQ2: Aux Shape 5	Post Equalizer	Aux: Band 5 Shape
+EQ2: Aux Shape 6	Post Equalizer	Aux: Band 6 Shape
+EQ2: Aux Shape 7	Post Equalizer	Aux: Band 7 Shape
+EQ2: Aux Shape 8	Post Equalizer	Aux: Band 8 Shape
+EQ2: Aux Bypass	Post Equalizer	Bypass Aux

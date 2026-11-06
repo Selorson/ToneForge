@@ -1,0 +1,19 @@
+[package]
+name = "extract-cleanroom-assets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ToneForge Clean-Room Asset Extractor & Verifier for IZRESEMBED (.onnx/.npz), 12AX7 DK-Triode LUTs (.dat), and Parameter Tables"
+
+[[bin]]
+name = "extract_cleanroom_assets"
+path = "src/main.rs"
+
+[dependencies]
+dsp-ozone12-mastering = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }

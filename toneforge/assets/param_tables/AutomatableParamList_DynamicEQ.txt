@@ -1,0 +1,159 @@
+DYNEQ: Bypass	Dynamic EQ	Bypass
+DYNEQ: Stereo/Main Frequency 1	Dynamic EQ	Band 1 Frequency
+DYNEQ: Stereo/Main Gain 1	Dynamic EQ	Band 1 Gain
+DYNEQ: Stereo/Main Offset Gain 1	Dynamic EQ	Band 1 Static Gain
+DYNEQ: Stereo/Main Q 1	Dynamic EQ	Band 1 Q
+DYNEQ: Stereo/Main Threshold 1	Dynamic EQ	Band 1 Threshold
+DYNEQ: Stereo/Main Enable 1	Dynamic EQ	Band 1 Enable
+DYNEQ: Stereo/Main Shape 1	Dynamic EQ	Band 1 Shape
+DYNEQ: Stereo/Main Dyn Trigger Mode 1	Dynamic EQ	Band 1 Expansion Mode
+DYNEQ: Stereo/Main Attack 1	Dynamic EQ	Band 1 Attack
+DYNEQ: Stereo/Main Release 1	Dynamic EQ	Band 1 Release
+DYNEQ: Stereo/Main Auto Attack 1	Dynamic EQ	Band 1 Auto Attack Scale
+DYNEQ: Stereo/Main Auto Release 1	Dynamic EQ	Band 1 Auto Release Scale
+DYNEQ: Stereo/Main Auto Attack/Release 1	Dynamic EQ	Band 1 Auto Attack/Release
+DYNEQ: Stereo/Main Frequency 2	Dynamic EQ	Band 2 Frequency
+DYNEQ: Stereo/Main Gain 2	Dynamic EQ	Band 2 Gain
+DYNEQ: Stereo/Main Offset Gain 2	Dynamic EQ	Band 2 Static Gain
+DYNEQ: Stereo/Main Q 2	Dynamic EQ	Band 2 Q
+DYNEQ: Stereo/Main Threshold 2	Dynamic EQ	Band 2 Threshold
+DYNEQ: Stereo/Main Enable 2	Dynamic EQ	Band 2 Enable
+DYNEQ: Stereo/Main Shape 2	Dynamic EQ	Band 2 Shape
+DYNEQ: Stereo/Main Dyn Trigger Mode 2	Dynamic EQ	Band 2 Expansion Mode
+DYNEQ: Stereo/Main Attack 2	Dynamic EQ	Band 2 Attack
+DYNEQ: Stereo/Main Release 2	Dynamic EQ	Band 2 Release
+DYNEQ: Stereo/Main Auto Attack 2	Dynamic EQ	Band 2 Auto Attack Scale
+DYNEQ: Stereo/Main Auto Release 2	Dynamic EQ	Band 2 Auto Release Scale
+DYNEQ: Stereo/Main Auto Attack/Release 2	Dynamic EQ	Band 2 Auto Attack/Release
+DYNEQ: Stereo/Main Frequency 3	Dynamic EQ	Band 3 Frequency
+DYNEQ: Stereo/Main Gain 3	Dynamic EQ	Band 3 Gain
+DYNEQ: Stereo/Main Offset Gain 3	Dynamic EQ	Band 3 Static Gain
+DYNEQ: Stereo/Main Q 3	Dynamic EQ	Band 3 Q
+DYNEQ: Stereo/Main Threshold 3	Dynamic EQ	Band 3 Threshold
+DYNEQ: Stereo/Main Enable 3	Dynamic EQ	Band 3 Enable
+DYNEQ: Stereo/Main Shape 3	Dynamic EQ	Band 3 Shape
+DYNEQ: Stereo/Main Dyn Trigger Mode 3	Dynamic EQ	Band 3 Expansion Mode
+DYNEQ: Stereo/Main Attack 3	Dynamic EQ	Band 3 Attack
+DYNEQ: Stereo/Main Release 3	Dynamic EQ	Band 3 Release
+DYNEQ: Stereo/Main Auto Attack 3	Dynamic EQ	Band 3 Auto Attack Scale
+DYNEQ: Stereo/Main Auto Release 3	Dynamic EQ	Band 3 Auto Release Scale
+DYNEQ: Stereo/Main Auto Attack/Release 3	Dynamic EQ	Band 3 Auto Attack/Release
+DYNEQ: Stereo/Main Frequency 4	Dynamic EQ	Band 4 Frequency
+DYNEQ: Stereo/Main Gain 4	Dynamic EQ	Band 4 Gain
+DYNEQ: Stereo/Main Offset Gain 4	Dynamic EQ	Band 4 Static Gain
+DYNEQ: Stereo/Main Q 4	Dynamic EQ	Band 4 Q
+DYNEQ: Stereo/Main Threshold 4	Dynamic EQ	Band 4 Threshold
+DYNEQ: Stereo/Main Enable 4	Dynamic EQ	Band 4 Enable
+DYNEQ: Stereo/Main Shape 4	Dynamic EQ	Band 4 Shape
+DYNEQ: Stereo/Main Dyn Trigger Mode 4	Dynamic EQ	Band 4 Expansion Mode
+DYNEQ: Stereo/Main Attack 4	Dynamic EQ	Band 4 Attack
+DYNEQ: Stereo/Main Release 4	Dynamic EQ	Band 4 Release
+DYNEQ: Stereo/Main Auto Attack 4	Dynamic EQ	Band 4 Auto Attack Scale
+DYNEQ: Stereo/Main Auto Release 4	Dynamic EQ	Band 4 Auto Release Scale
+DYNEQ: Stereo/Main Auto Attack/Release 4	Dynamic EQ	Band 4 Auto Attack/Release
+DYNEQ: Stereo/Main Frequency 5	Dynamic EQ	Band 5 Frequency
+DYNEQ: Stereo/Main Gain 5	Dynamic EQ	Band 5 Gain
+DYNEQ: Stereo/Main Offset Gain 5	Dynamic EQ	Band 5 Static Gain
+DYNEQ: Stereo/Main Q 5	Dynamic EQ	Band 5 Q
+DYNEQ: Stereo/Main Threshold 5	Dynamic EQ	Band 5 Threshold
+DYNEQ: Stereo/Main Enable 5	Dynamic EQ	Band 5 Enable
+DYNEQ: Stereo/Main Shape 5	Dynamic EQ	Band 5 Shape
+DYNEQ: Stereo/Main Dyn Trigger Mode 5	Dynamic EQ	Band 5 Expansion Mode
+DYNEQ: Stereo/Main Attack 5	Dynamic EQ	Band 5 Attack
+DYNEQ: Stereo/Main Release 5	Dynamic EQ	Band 5 Release
+DYNEQ: Stereo/Main Auto Attack 5	Dynamic EQ	Band 5 Auto Attack Scale
+DYNEQ: Stereo/Main Auto Release 5	Dynamic EQ	Band 5 Auto Release Scale
+DYNEQ: Stereo/Main Auto Attack/Release 5	Dynamic EQ	Band 5 Auto Attack/Release
+DYNEQ: Stereo/Main Frequency 6	Dynamic EQ	Band 6 Frequency
+DYNEQ: Stereo/Main Gain 6	Dynamic EQ	Band 6 Gain
+DYNEQ: Stereo/Main Offset Gain 6	Dynamic EQ	Band 6 Static Gain
+DYNEQ: Stereo/Main Q 6	Dynamic EQ	Band 6 Q
+DYNEQ: Stereo/Main Threshold 6	Dynamic EQ	Band 6 Threshold
+DYNEQ: Stereo/Main Enable 6	Dynamic EQ	Band 6 Enable
+DYNEQ: Stereo/Main Shape 6	Dynamic EQ	Band 6 Shape
+DYNEQ: Stereo/Main Dyn Trigger Mode 6	Dynamic EQ	Band 6 Expansion Mode
+DYNEQ: Stereo/Main Attack 6	Dynamic EQ	Band 6 Attack
+DYNEQ: Stereo/Main Release 6	Dynamic EQ	Band 6 Release
+DYNEQ: Stereo/Main Auto Attack 6	Dynamic EQ	Band 6 Auto Attack Scale
+DYNEQ: Stereo/Main Auto Release 6	Dynamic EQ	Band 6 Auto Release Scale
+DYNEQ: Stereo/Main Auto Attack/Release 6	Dynamic EQ	Band 6 Auto Attack/Release
+DYNEQ: Stereo/Main Bypass	Dynamic EQ	Bypass Main
+DYNEQ: Aux Frequency 1	Dynamic EQ	Aux: Band 1 Frequency
+DYNEQ: Aux Gain 1	Dynamic EQ	Aux: Band 1 Gain
+DYNEQ: Aux Offset Gain 1	Dynamic EQ	Aux: Band 1 Static Gain
+DYNEQ: Aux Q 1	Dynamic EQ	Aux: Band 1 Q
+DYNEQ: Aux Threshold 1	Dynamic EQ	Aux: Band 1 Threshold
+DYNEQ: Aux Enable 1	Dynamic EQ	Aux: Band 1 Enable
+DYNEQ: Aux Shape 1	Dynamic EQ	Aux: Band 1 Shape
+DYNEQ: Aux Dyn Trigger Mode 1	Dynamic EQ	Aux: Band 1 Expansion Mode
+DYNEQ: Aux Attack 1	Dynamic EQ	Aux: Band 1 Attack
+DYNEQ: Aux Release 1	Dynamic EQ	Aux: Band 1 Release
+DYNEQ: Aux Auto Attack 1	Dynamic EQ	Aux: Band 1 Auto Attack Scale
+DYNEQ: Aux Auto Release 1	Dynamic EQ	Aux: Band 1 Auto Release Scale
+DYNEQ: Aux Auto Attack/Release 1	Dynamic EQ	Aux: Band 1 Auto Attack/Release
+DYNEQ: Aux Frequency 2	Dynamic EQ	Aux: Band 2 Frequency
+DYNEQ: Aux Gain 2	Dynamic EQ	Aux: Band 2 Gain
+DYNEQ: Aux Offset Gain 2	Dynamic EQ	Aux: Band 2 Static Gain
+DYNEQ: Aux Q 2	Dynamic EQ	Aux: Band 2 Q
+DYNEQ: Aux Threshold 2	Dynamic EQ	Aux: Band 2 Threshold
+DYNEQ: Aux Enable 2	Dynamic EQ	Aux: Band 2 Enable
+DYNEQ: Aux Shape 2	Dynamic EQ	Aux: Band 2 Shape
+DYNEQ: Aux Dyn Trigger Mode 2	Dynamic EQ	Aux: Band 2 Expansion Mode
+DYNEQ: Aux Attack 2	Dynamic EQ	Aux: Band 2 Attack
+DYNEQ: Aux Release 2	Dynamic EQ	Aux: Band 2 Release
+DYNEQ: Aux Auto Attack 2	Dynamic EQ	Aux: Band 2 Auto Attack Scale
+DYNEQ: Aux Auto Release 2	Dynamic EQ	Aux: Band 2 Auto Release Scale
+DYNEQ: Aux Auto Attack/Release 2	Dynamic EQ	Aux: Band 2 Auto Attack/Release
+DYNEQ: Aux Frequency 3	Dynamic EQ	Aux: Band 3 Frequency
+DYNEQ: Aux Gain 3	Dynamic EQ	Aux: Band 3 Gain
+DYNEQ: Aux Offset Gain 3	Dynamic EQ	Aux: Band 3 Static Gain
+DYNEQ: Aux Q 3	Dynamic EQ	Aux: Band 3 Q
+DYNEQ: Aux Threshold 3	Dynamic EQ	Aux: Band 3 Threshold
+DYNEQ: Aux Enable 3	Dynamic EQ	Aux: Band 3 Enable
+DYNEQ: Aux Shape 3	Dynamic EQ	Aux: Band 3 Shape
+DYNEQ: Aux Dyn Trigger Mode 3	Dynamic EQ	Aux: Band 3 Expansion Mode
+DYNEQ: Aux Attack 3	Dynamic EQ	Aux: Band 3 Attack
+DYNEQ: Aux Release 3	Dynamic EQ	Aux: Band 3 Release
+DYNEQ: Aux Auto Attack 3	Dynamic EQ	Aux: Band 3 Auto Attack Scale
+DYNEQ: Aux Auto Release 3	Dynamic EQ	Aux: Band 3 Auto Release Scale
+DYNEQ: Aux Auto Attack/Release 3	Dynamic EQ	Aux: Band 3 Auto Attack/Release
+DYNEQ: Aux Frequency 4	Dynamic EQ	Aux: Band 4 Frequency
+DYNEQ: Aux Gain 4	Dynamic EQ	Aux: Band 4 Gain
+DYNEQ: Aux Offset Gain 4	Dynamic EQ	Aux: Band 4 Static Gain
+DYNEQ: Aux Q 4	Dynamic EQ	Aux: Band 4 Q
+DYNEQ: Aux Threshold 4	Dynamic EQ	Aux: Band 4 Threshold
+DYNEQ: Aux Band Enable 4	Dynamic EQ	Aux: Band 4 Enable
+DYNEQ: Aux Shape 4	Dynamic EQ	Aux: Band 4 Shape
+DYNEQ: Aux Dyn Trigger Mode 4	Dynamic EQ	Aux: Band 4 Expansion Mode
+DYNEQ: Aux Attack 4	Dynamic EQ	Aux: Band 4 Attack
+DYNEQ: Aux Release 4	Dynamic EQ	Aux: Band 4 Release
+DYNEQ: Aux Auto Attack 4	Dynamic EQ	Aux: Band 4 Auto Attack Scale
+DYNEQ: Aux Auto Release 4	Dynamic EQ	Aux: Band 4 Auto Release Scale
+DYNEQ: Aux Auto Attack/Release 4	Dynamic EQ	Aux: Band 4 Auto Attack/Release
+DYNEQ: Aux Frequency 5	Dynamic EQ	Aux: Band 5 Frequency
+DYNEQ: Aux Gain 5	Dynamic EQ	Aux: Band 5 Gain
+DYNEQ: Aux Offset Gain 5	Dynamic EQ	Aux: Band 5 Static Gain
+DYNEQ: Aux Q 5	Dynamic EQ	Aux: Band 5 Q
+DYNEQ: Aux Threshold 5	Dynamic EQ	Aux: Band 5 Threshold
+DYNEQ: Aux Enable 5	Dynamic EQ	Aux: Band 5 Enable
+DYNEQ: Aux Shape 5	Dynamic EQ	Aux: Band 5 Shape
+DYNEQ: Aux Dyn Trigger Mode 5	Dynamic EQ	Aux: Band 5 Expansion Mode
+DYNEQ: Aux Attack 5	Dynamic EQ	Aux: Band 5 Attack
+DYNEQ: Aux Release 5	Dynamic EQ	Aux: Band 5 Release
+DYNEQ: Aux Auto Attack 5	Dynamic EQ	Aux: Band 5 Auto Attack Scale
+DYNEQ: Aux Auto Release 5	Dynamic EQ	Aux: Band 5 Auto Release Scale
+DYNEQ: Aux Auto Attack/Release 5	Dynamic EQ	Aux: Band 5 Auto Attack/Release
+DYNEQ: Aux Frequency 6	Dynamic EQ	Aux: Band 6 Frequency
+DYNEQ: Aux Gain 6	Dynamic EQ	Aux: Band 6 Gain
+DYNEQ: Aux Offset Gain 6	Dynamic EQ	Aux: Band 6 Static Gain
+DYNEQ: Aux Q 6	Dynamic EQ	Aux: Band 6 Q
+DYNEQ: Aux Threshold 6	Dynamic EQ	Aux: Band 6 Threshold
+DYNEQ: Aux Band Enable 6	Dynamic EQ	Aux: Band 6 Enable
+DYNEQ: Aux Shape 6	Dynamic EQ	Aux: Band 6 Shape
+DYNEQ: Aux Dyn Trigger Mode 6	Dynamic EQ	Aux: Band 6 Expansion Mode
+DYNEQ: Aux Attack 6	Dynamic EQ	Aux: Band 6 Attack
+DYNEQ: Aux Release 6	Dynamic EQ	Aux: Band 6 Release
+DYNEQ: Aux Auto Attack 6	Dynamic EQ	Aux: Band 6 Auto Attack Scale
+DYNEQ: Aux Auto Release 6	Dynamic EQ	Aux: Band 6 Auto Release Scale
+DYNEQ: Aux Auto Attack/Release 6	Dynamic EQ	Aux: Band 6 Auto Attack/Release
+DYNEQ: Aux Bypass	Dynamic EQ	Bypass Aux

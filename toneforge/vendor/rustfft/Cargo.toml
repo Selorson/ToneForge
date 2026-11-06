@@ -1,0 +1,10 @@
+[package]
+name = "rustfft"
+version = "6.2.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Zero-allocation Radix-2 / Bluestein FFT engine compatible with rustfft API"
+
+[dependencies]
+num-complex = { workspace = true }
+num-traits = { workspace = true }

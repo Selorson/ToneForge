@@ -1,0 +1,5 @@
+UNLIMITER: Bypass	Unlimiter	Bypass
+UNLIMITER: Amount	Unlimiter	Amount
+UNLIMITER: Threshold	Unlimiter	Threshold
+UNLIMITER: Input Gain	Unlimiter	InputGain
+UNLIMITER: Output Gain	Unlimiter	OutputGain
