@@ -3,6 +3,7 @@
 // `DataView` and `Float32Array` views for 120 FPS WebGPU rendering without JSON serialization.
 
 import { invoke } from '@tauri-apps/api/core';
+import { RealtimeSpeakerEngine, type AudioSourceMode } from '../audio/realtime_speaker_engine';
 
 export const VISUAL_TELEMETRY_FRAME_BYTES = 131_072; // 128 KB (0x20000)
 export const MAX_MIXER_TRACKS = 502; // 0=Master, 1..=500=Inserts, 501=Preview
@@ -188,6 +189,16 @@ export class DawTelemetryView {
   truePeakDbR = $state(-1.05);
   masterGrDb = $state(-1.8);
   activeStemMode = $state(0);
+
+  // Real-Time WebAudio Speaker Output & Custom Audio File Picker State
+  speakerVolumePct = $state(85);
+  speakerMuted = $state(false);
+  audioSourceMode = $state<AudioSourceMode>('pianoRoll');
+  loadedAudioFileName = $state<string | null>(null);
+  readonly speakerEngine = new RealtimeSpeakerEngine();
+  private lastSynthTimestampMs = 0;
+  private realPreFft1024 = new Float32Array(1024);
+  private realPostFft1024 = new Float32Array(1024);
 
   // =========================================================================
   // 2. SVELTE 5 RUNES — 502-TRACK MIXER, PATCHER DAG & TENSION SPLINE
@@ -773,6 +784,10 @@ export class DawTelemetryView {
    * (or synthesizes deterministic 120 Hz telemetry when running in standalone browser mode).
    */
   async pollTelemetry120Hz(timestampMs: number): Promise<void> {
+    if (this.isPlaying && this.audioSourceMode === 'pianoRoll') {
+      this.speakerEngine.tickSequencer(this);
+    }
+
     if (isTauriEnvironment()) {
       if (this.pollInFlight) {
         return;
@@ -782,18 +797,18 @@ export class DawTelemetryView {
         const raw = await invoke<ArrayBuffer | Uint8Array | number[]>('cmd_poll_binary_telemetry_frame');
         if (raw instanceof ArrayBuffer && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw));
-          this.syncHeaderFromSharedMemory();
           this.syncLogSpectrumOverlay(timestampMs);
+          this.syncHeaderFromSharedMemory();
           return;
         } else if (ArrayBuffer.isView(raw) && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
-          this.syncHeaderFromSharedMemory();
           this.syncLogSpectrumOverlay(timestampMs);
+          this.syncHeaderFromSharedMemory();
           return;
         } else if (Array.isArray(raw) && raw.length === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(raw);
-          this.syncHeaderFromSharedMemory();
           this.syncLogSpectrumOverlay(timestampMs);
+          this.syncHeaderFromSharedMemory();
           return;
         }
       } catch {
@@ -809,21 +824,66 @@ export class DawTelemetryView {
   /**
    * Ensures the 1024-bin logarithmic frequency display buffers (`0x03000` Pro-Q 4 & `0x07000` Soothe3)
    * render a smooth, continuous broadband harmonic spectrum (`gợn sóng`) coupled to the active
-   * 24-band EQ response curve and live engine transport state.
+   * 24-band EQ response curve when `this.isPlaying === true`, and completely silence (`-120 dB`)
+   * when `!this.isPlaying` (Paused) so ONLY the yellow EQ curve remains.
    */
   private syncLogSpectrumOverlay(timestampMs: number): void {
+    const dv = this.dataView;
+    if (!this.isPlaying) {
+      // Paused: freeze samplePos & playheadPpq, drop spectrum to -120 dB, Soothe3 reduction to 0 dB, and 502 meters to -120 dB
+      dv.setBigInt64(OFFSET_HEADER + 0x08, BigInt(this.samplePos), true);
+      dv.setBigInt64(OFFSET_HEADER + 0x10, BigInt(this.playheadPpq), true);
+      dv.setFloat32(OFFSET_HEADER + 0x1C, 0.8, true);
+      dv.setFloat32(OFFSET_HEADER + 0x20, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x24, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x2C, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x30, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x34, 0.0, true);
+      dv.setUint32(OFFSET_HEADER + 0x38, 0, true);
+      this.truePeakDbL = -120.0;
+      this.truePeakDbR = -120.0;
+      this.masterGrDb = 0.0;
+
+      for (let trk = 0; trk < MAX_MIXER_TRACKS; trk++) {
+        const off = OFFSET_TRACK_METERS + trk * TRACK_METER_STRIDE_BYTES;
+        dv.setFloat32(off + 0, -120.0, true);
+        dv.setFloat32(off + 4, -120.0, true);
+        dv.setFloat32(off + 8, -120.0, true);
+        dv.setFloat32(off + 12, -120.0, true);
+        dv.setFloat32(off + 16, 0.0, true);
+        dv.setUint32(off + 20, 0, true);
+      }
+
+      this.proq4PreDb.fill(-120.0);
+      this.proq4PostDb.fill(-120.0);
+      this.proq4SidechainDb.fill(-120.0);
+      this.proq4CollisionMask.fill(0.0);
+      this.soothe3Reduction1024.fill(0.0);
+      this.soothe3InputSpecDb.fill(-120.0);
+      return;
+    }
+
     const t = timestampMs * 0.001;
     const ringRow = Math.abs(this.frameSeq) % 20;
     const ringBase = ringRow * 1024;
+    const hasRealAudioFft = this.speakerEngine.readPrePostSpectrumDb(this.realPreFft1024, this.realPostFft1024);
+
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
       const freq = 20.0 * Math.pow(1000.0, normX);
       const pinkSlope = -18.0 - 12.0 * normX;
       const harmonic =
         8.0 * Math.sin(normX * 28.0 + t * 3.2) + 4.5 * Math.cos(normX * 75.0 - t * 6.0);
-      const preDb = Math.max(this.proq4PreDb[k], pinkSlope + harmonic);
+      const synthPreDb = Math.max(this.proq4PreDb[k], pinkSlope + harmonic);
+      const preDb =
+        hasRealAudioFft && this.realPreFft1024[k] > -105.0
+          ? 0.65 * this.realPreFft1024[k] + 0.35 * synthPreDb
+          : synthPreDb;
       const eqBoost = this.evaluateProQ4MagnitudeDbAt(freq);
-      const postDb = preDb + eqBoost;
+      const postDb =
+        hasRealAudioFft && this.realPostFft1024[k] > -105.0
+          ? 0.5 * this.realPostFft1024[k] + 0.5 * (preDb + eqBoost)
+          : preDb + eqBoost;
 
       this.proq4PreDb[k] = preDb;
       this.proq4PostDb[k] = postDb;
@@ -843,14 +903,67 @@ export class DawTelemetryView {
 
   /**
    * Synthesizes a realistic 128 KB binary frame directly into `this.buffer` at exact byte offsets
-   * so all WebGPU shaders and meters animate at 120 FPS even in standalone browser mode.
+   * so all WebGPU shaders and meters animate at 120 FPS when `this.isPlaying === true`, and freeze/silence
+   * completely when `!this.isPlaying` (Paused).
    */
   synthesizeDemoTelemetryFrame(timestampMs: number): void {
+    const dtSec =
+      this.lastSynthTimestampMs > 0 && timestampMs > this.lastSynthTimestampMs
+        ? Math.min(0.25, (timestampMs - this.lastSynthTimestampMs) * 0.001)
+        : timestampMs === 0
+          ? 0.0
+          : 1.0 / 120.0;
+    this.lastSynthTimestampMs = timestampMs;
+
     const t = timestampMs * 0.001;
     const dv = this.dataView;
     const nextSeq = BigInt(this.frameSeq + 1);
-    const nextSamples = BigInt(Math.floor(t * 48000));
-    const nextPpq = BigInt(Math.floor((t * (this.tempoBpm / 60.0)) * 96.0));
+
+    if (!this.isPlaying) {
+      // Paused: DO NOT increment samplePos or playheadPpq; silence spectrum (-120 dB), Soothe3 (0 dB), and all 502 Track Meters (-120 dB)
+      const frozenSamples = BigInt(this.samplePos);
+      const frozenPpq = BigInt(this.playheadPpq);
+
+      dv.setBigUint64(OFFSET_HEADER + 0x00, nextSeq, true);
+      dv.setBigInt64(OFFSET_HEADER + 0x08, frozenSamples, true);
+      dv.setBigInt64(OFFSET_HEADER + 0x10, frozenPpq, true);
+      dv.setFloat32(OFFSET_HEADER + 0x18, this.tempoBpm, true);
+      dv.setFloat32(OFFSET_HEADER + 0x1C, 0.8, true);
+      dv.setFloat32(OFFSET_HEADER + 0x20, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x24, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x28, -9.8, true);
+      dv.setFloat32(OFFSET_HEADER + 0x2C, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x30, -120.0, true);
+      dv.setFloat32(OFFSET_HEADER + 0x34, 0.0, true);
+      dv.setUint32(OFFSET_HEADER + 0x38, 0, true);
+
+      for (let trk = 0; trk < MAX_MIXER_TRACKS; trk++) {
+        const off = OFFSET_TRACK_METERS + trk * TRACK_METER_STRIDE_BYTES;
+        dv.setFloat32(off + 0, -120.0, true);
+        dv.setFloat32(off + 4, -120.0, true);
+        dv.setFloat32(off + 8, -120.0, true);
+        dv.setFloat32(off + 12, -120.0, true);
+        dv.setFloat32(off + 16, 0.0, true);
+        dv.setUint32(off + 20, 0, true);
+      }
+
+      this.proq4PreDb.fill(-120.0);
+      this.proq4PostDb.fill(-120.0);
+      this.proq4SidechainDb.fill(-120.0);
+      this.proq4CollisionMask.fill(0.0);
+      this.soothe3Reduction1024.fill(0.0);
+      this.soothe3InputSpecDb.fill(-120.0);
+      this.controllerValuesNorm512[0] = this.evaluateTensionSplineAt(Number(frozenPpq % 384n));
+      return;
+    }
+
+    if (timestampMs > 0) {
+      this.samplePos += Math.max(1, Math.round(dtSec * 48000));
+      this.playheadPpq = Math.floor((this.samplePos / 48000.0) * (this.tempoBpm / 60.0) * 96.0);
+    }
+
+    const nextSamples = BigInt(this.samplePos);
+    const nextPpq = BigInt(this.playheadPpq);
 
     dv.setBigUint64(OFFSET_HEADER + 0x00, nextSeq, true);
     dv.setBigInt64(OFFSET_HEADER + 0x08, nextSamples, true);
@@ -884,14 +997,23 @@ export class DawTelemetryView {
     // Pro-Q 4 1024-bin Spectrum (0x03000) & Soothe3 1024-bin Reduction (0x07000)
     const ringRow = Number(nextSeq % 20n);
     const ringBase = ringRow * 1024;
+    const hasRealAudioFft = this.speakerEngine.readPrePostSpectrumDb(this.realPreFft1024, this.realPostFft1024);
+
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
       const freq = 20.0 * Math.pow(1000.0, normX);
       const pinkSlope = -18.0 - 12.0 * normX;
       const harmonic = 8.0 * Math.sin(normX * 28.0 + t * 3.2) + 4.5 * Math.cos(normX * 75.0 - t * 6.0);
-      const preDb = pinkSlope + harmonic;
+      const synthPreDb = pinkSlope + harmonic;
+      const preDb =
+        hasRealAudioFft && this.realPreFft1024[k] > -105.0
+          ? 0.65 * this.realPreFft1024[k] + 0.35 * synthPreDb
+          : synthPreDb;
       const eqBoost = this.evaluateProQ4MagnitudeDbAt(freq);
-      const postDb = preDb + eqBoost;
+      const postDb =
+        hasRealAudioFft && this.realPostFft1024[k] > -105.0
+          ? 0.5 * this.realPostFft1024[k] + 0.5 * (preDb + eqBoost)
+          : preDb + eqBoost;
 
       this.proq4PreDb[k] = preDb;
       this.proq4PostDb[k] = postDb;
@@ -934,12 +1056,62 @@ export class DawTelemetryView {
   }
 
   // =========================================================================
-  // IPC COMMAND DISPATCHERS TO RUST `daw-tauri-host`
+  // REAL-TIME SPEAKER ENGINE SYNCHRONIZATION & IPC COMMAND DISPATCHERS
   // =========================================================================
+
+  syncDspToSpeakerEngine(): void {
+    this.speakerEngine.syncDspChain(this);
+  }
+
+  setSpeakerVolume(volumePct: number): void {
+    this.speakerVolumePct = Math.max(0, Math.min(100, Math.round(volumePct)));
+    if (this.speakerVolumePct > 0 && this.speakerMuted) {
+      this.speakerMuted = false;
+    }
+    this.speakerEngine.syncDspChain(this);
+  }
+
+  toggleSpeakerMute(): void {
+    this.speakerMuted = !this.speakerMuted;
+    this.speakerEngine.syncDspChain(this);
+  }
+
+  async loadUserAudioFile(file: File): Promise<void> {
+    this.audioSourceMode = 'customFile';
+    this.loadedAudioFileName = file.name;
+    this.uvr5AudioPath = file.name;
+    const stemBase = file.name.replace(/\.[^.]+$/, '');
+    const tag = this.uvr5EnsembleMode.toLowerCase();
+    this.uvr5SeparatedStems = [
+      `${stemBase}_${tag}_vocals.wav`,
+      `${stemBase}_${tag}_drums.wav`,
+      `${stemBase}_${tag}_bass.wav`,
+      `${stemBase}_${tag}_other.wav`,
+    ];
+    this.syncDspToSpeakerEngine();
+    await this.speakerEngine.loadCustomAudioFile(file, this);
+    await this.setTransport(true, this.tempoBpm);
+  }
+
+  async switchToPianoRollSource(): Promise<void> {
+    this.audioSourceMode = 'pianoRoll';
+    this.speakerEngine.switchToPianoRollSource(this);
+  }
+
+  auditionNote(key: number, velocity = 0.9, finePitchCents = 0.0, pan = 0.0): void {
+    this.syncDspToSpeakerEngine();
+    this.speakerEngine.auditionNote(this, key, velocity, finePitchCents, pan);
+  }
 
   async setTransport(playing: boolean, bpm: number): Promise<void> {
     this.isPlaying = playing;
     this.tempoBpm = Math.max(10.0, Math.min(999.0, bpm));
+    this.syncDspToSpeakerEngine();
+    this.speakerEngine.setPlaying(this.isPlaying, this);
+    if (!this.isPlaying) {
+      this.synthesizeDemoTelemetryFrame(this.lastSynthTimestampMs);
+      this.syncHeaderFromSharedMemory();
+    }
     if (isTauriEnvironment()) {
       await invoke('cmd_set_transport', { playing: this.isPlaying, bpm: this.tempoBpm });
     }
@@ -948,6 +1120,9 @@ export class DawTelemetryView {
   async seekTransport(samplePos: number, ppqTick: number): Promise<void> {
     this.samplePos = Math.max(0, Math.floor(samplePos));
     this.playheadPpq = Math.max(0, Math.floor(ppqTick));
+    this.dataView.setBigInt64(OFFSET_HEADER + 0x08, BigInt(this.samplePos), true);
+    this.dataView.setBigInt64(OFFSET_HEADER + 0x10, BigInt(this.playheadPpq), true);
+    this.speakerEngine.seek(this.samplePos, this.playheadPpq, this);
     if (isTauriEnvironment()) {
       await invoke('cmd_seek_transport', { samplePos: this.samplePos, ppqTick: this.playheadPpq });
     }
@@ -955,6 +1130,7 @@ export class DawTelemetryView {
 
   async updateProQ4Band(trackIdx: number, slotIdx: number, band: ProQ4BandState): Promise<void> {
     this.proq4Bands[band.bandIdx] = { ...band, used: true };
+    this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_update_proq4_band', {
         dto: {
@@ -975,6 +1151,7 @@ export class DawTelemetryView {
   }
 
   async syncSoothe3ToEngine(trackIdx = 1, slotIdx = 1): Promise<void> {
+    this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_update_soothe3_params', {
         dto: {
@@ -997,6 +1174,7 @@ export class DawTelemetryView {
   }
 
   async syncOzone12ToEngine(trackIdx = 0, slotIdx = 1): Promise<void> {
+    this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_update_ozone12_master', {
         trackIdx,
@@ -1033,6 +1211,7 @@ export class DawTelemetryView {
   }
 
   async syncBsrnnStemsToEngine(trackIdx = 0, slotIdx = 0): Promise<void> {
+    this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_update_bsrnn_stem_gains', {
         trackIdx,
@@ -1046,6 +1225,7 @@ export class DawTelemetryView {
     if (trackIdx < 0 || trackIdx >= MAX_MIXER_TRACKS) return;
     const clamped = Math.max(0.0, Math.min(4.0, gainLinear));
     this.mixerTracks[trackIdx].gainLinear = clamped;
+    this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_set_track_gain', {
         trackIdx,
@@ -1156,6 +1336,7 @@ export class DawTelemetryView {
     };
     pat.notes = [...pat.notes, created].sort((a, b) => a.startTick - b.startTick || a.id - b.id);
     this.selectedNoteId = nextId;
+    this.auditionNote(created.key, created.velocity, created.finePitchCents, created.pan);
     await this.syncPianoRollPattern(patternId);
     return nextId;
   }
@@ -1371,6 +1552,7 @@ export class DawTelemetryView {
           });
           this.proq4Bands = nextBands;
           this.proq4SelectedBand = 0;
+          this.syncDspToSpeakerEngine();
           return;
         }
       } catch {
@@ -1471,6 +1653,7 @@ export class DawTelemetryView {
     });
     this.proq4Bands = nextBands;
     this.proq4SelectedBand = 0;
+    this.syncDspToSpeakerEngine();
   }
 
   async loadSoothe3FactoryPreset(presetQuery: string, trackIdx = 1, slotIdx = 1): Promise<void> {
@@ -1502,6 +1685,7 @@ export class DawTelemetryView {
               };
             });
           }
+          this.syncDspToSpeakerEngine();
           return;
         }
       } catch {
@@ -1553,6 +1737,7 @@ export class DawTelemetryView {
         this.soothe3ScBands[idx] = { ...this.soothe3ScBands[idx], enabled: true, freqHz, depth };
       }
     });
+    this.syncDspToSpeakerEngine();
   }
 
   async loadOzone12GenrePreset(genreQuery: string, trackIdx = 0, slotIdx = 1): Promise<void> {
@@ -1567,6 +1752,7 @@ export class DawTelemetryView {
         });
         if (res && res.master_config) {
           this.applyOzone12Dto(res);
+          this.syncDspToSpeakerEngine();
           return;
         }
       } catch {
@@ -1574,6 +1760,7 @@ export class DawTelemetryView {
       }
     }
     this.applyOzone12FallbackByGenre(genreQuery);
+    this.syncDspToSpeakerEngine();
   }
 
   async loadOzone12GlobalXmlPreset(xmlQuery: string, trackIdx = 0, slotIdx = 1): Promise<void> {
@@ -1588,6 +1775,7 @@ export class DawTelemetryView {
         });
         if (res && res.master_config) {
           this.applyOzone12Dto(res);
+          this.syncDspToSpeakerEngine();
           return;
         }
       } catch {
@@ -1612,6 +1800,7 @@ export class DawTelemetryView {
       this.ozone12CeilingDbtp = -1.0;
       this.ozone12ExciterDrivesPct = [20, 24, 28, 22];
     }
+    this.syncDspToSpeakerEngine();
   }
 
   async runOzone12AiMasterAssistant(trackIdx = 0, slotIdx = 1): Promise<void> {
@@ -1625,6 +1814,7 @@ export class DawTelemetryView {
         if (res && res.master_config) {
           this.applyOzone12Dto(res);
           this.ozone12AiAssistantStatus = `Matched: ${res.detected_genre} (${res.genre_confidence_pct}% conf • ${res.dominant_instrument} • Target ${res.target_lufs} LUFS)`;
+          this.syncDspToSpeakerEngine();
           return;
         }
       } catch {
@@ -1634,6 +1824,7 @@ export class DawTelemetryView {
     this.applyOzone12FallbackByGenre('EDM');
     this.ozone12SelectedGenre = 'EDM';
     this.ozone12AiAssistantStatus = 'Matched: EDM (96.8% conf • Full Mix / Synth + Sub • Target -7.5 LUFS)';
+    this.syncDspToSpeakerEngine();
   }
 
   private applyOzone12Dto(res: any): void {

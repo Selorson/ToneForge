@@ -173,8 +173,11 @@
         onchange={(e) => {
           const idx = parseInt((e.currentTarget as HTMLSelectElement).value, 10);
           telemetry.proq4SelectedBand = idx;
-          telemetry.proq4Bands[idx].used = true;
-          telemetry.proq4Bands[idx].enabled = true;
+          telemetry.updateProQ4Band(1, 0, {
+            ...telemetry.proq4Bands[idx],
+            used: true,
+            enabled: true,
+          });
         }}
       >
         {#each telemetry.proq4Bands as b}

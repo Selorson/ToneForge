@@ -964,4 +964,97 @@ fn test_wasapi_asio_bridge_and_mmcss_pro_audio_guard() {
     drop(guard);
 }
 
+#[test]
+fn test_pause_transport_freezes_slicer_and_silences_spectrum_and_meters() {
+    use daw_core_graph::TRACK_STATE_SILENT;
+
+    let sample_rate = 48_000.0;
+    let (mut engine, mut cmd_prod, mut telem_out) = MixerEngine::new(sample_rate, 128.0, 0);
+
+    engine
+        .add_channel_generator(ChannelGenerator::new(
+            0,
+            1,
+            Box::new(DeterministicGeneratorNode::new(0, 0.8, false)),
+        ))
+        .unwrap();
+    engine.tracks[1].add_send(MASTER_TRACK_INDEX, 1.0, false);
+    engine.rebuild_graph().unwrap();
+
+    // Advance 4 blocks while playing (`is_playing == true`)
+    let mut master_out = [[0.0f32; 2]; 256];
+    for _ in 0..4 {
+        engine.process_audio_block(&mut master_out);
+    }
+    let playing_frame = *telem_out.read();
+    assert_eq!(playing_frame.header.sample_pos, 1024);
+    assert!(playing_frame.header.ppq_tick > 0);
+    assert!(playing_frame.track_meters[1].peak_l_db > -20.0);
+
+    // Send Pause command (`SetTransportPlaying(false)` + `SetBpm(128.0)`)
+    cmd_prod
+        .push(EngineCommand::SetTransportPlaying(false))
+        .unwrap();
+    cmd_prod.push(EngineCommand::SetBpm(128.0)).unwrap();
+
+    // Process 3 blocks while paused
+    for _ in 0..3 {
+        engine.process_audio_block(&mut master_out);
+    }
+
+    let paused_frame = *telem_out.read();
+    assert_eq!(
+        paused_frame.header.sample_pos,
+        playing_frame.header.sample_pos,
+        "sample_pos must stay frozen while paused"
+    );
+    assert_eq!(
+        paused_frame.header.ppq_tick,
+        playing_frame.header.ppq_tick,
+        "ppq_tick must stay frozen while paused"
+    );
+    assert!(
+        master_out.iter().all(|f| f[0] == 0.0 && f[1] == 0.0),
+        "master_out must be completely silent when paused"
+    );
+    assert_eq!(paused_frame.track_meters[0].peak_l_db, -120.0);
+    assert_eq!(paused_frame.track_meters[1].peak_l_db, -120.0);
+    assert_eq!(paused_frame.track_meters[1].gr_db, 0.0);
+    assert_eq!(paused_frame.track_meters[1].activity_flags, TRACK_STATE_SILENT);
+    assert!(
+        paused_frame
+            .proq4_spectrum
+            .pre_db
+            .iter()
+            .all(|&db| (db - (-120.0)).abs() < 1e-5),
+        "proq4_spectrum.pre_db must drop to -120.0 dB when paused"
+    );
+    assert!(
+        paused_frame
+            .proq4_spectrum
+            .post_db
+            .iter()
+            .all(|&db| (db - (-120.0)).abs() < 1e-5),
+        "proq4_spectrum.post_db must drop to -120.0 dB when paused"
+    );
+    assert!(
+        paused_frame
+            .soothe3_reduction
+            .reduction_db_1024()
+            .iter()
+            .all(|&db| db == 0.0),
+        "soothe3_reduction must rest at 0.0 dB when paused"
+    );
+
+    // Resume playback (`SetTransportPlaying(true)`) and verify slicer advances again
+    cmd_prod
+        .push(EngineCommand::SetTransportPlaying(true))
+        .unwrap();
+    engine.process_audio_block(&mut master_out);
+    let resumed_frame = *telem_out.read();
+    assert_eq!(resumed_frame.header.sample_pos, 1024 + 256);
+    assert!(resumed_frame.track_meters[1].peak_l_db > -20.0);
+}
+
+
 

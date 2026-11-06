@@ -19,9 +19,34 @@
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const initialTabParam = initialParams?.get('tab') as WorkspaceTabKey | null;
   const openGuideByDefault = initialParams?.get('guide') === 'open';
+  const startPausedByParam = initialParams?.get('paused') === '1';
+
+  if (startPausedByParam) {
+    telemetry.setTransport(false, telemetry.tempoBpm);
+  }
 
   let activeTab = $state<WorkspaceTabKey>(initialTabParam ?? 'all');
   let handbookSectionId = $state(initialParams?.get('sec') ?? '');
+  let fileInputEl = $state<HTMLInputElement | null>(null);
+
+  async function handleUserFileSelected(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    await telemetry.loadUserAudioFile(file);
+    input.value = '';
+  }
+
+  $effect(() => {
+    const unlockSpeakerAudio = () => {
+      telemetry.syncDspToSpeakerEngine();
+      if (telemetry.isPlaying) {
+        telemetry.speakerEngine.setPlaying(true, telemetry);
+      }
+    };
+    window.addEventListener('pointerdown', unlockSpeakerAudio, { once: true });
+    return () => window.removeEventListener('pointerdown', unlockSpeakerAudio);
+  });
 
   $effect(() => {
     const onNavigate = (e: Event) => {
@@ -65,12 +90,64 @@
 
     <div class="transport-buttons">
       <button
-        class={telemetry.isPlaying ? 'playing' : ''}
+        class={telemetry.isPlaying ? 'playing' : 'paused-btn'}
         onclick={() => telemetry.setTransport(!telemetry.isPlaying, telemetry.tempoBpm)}
+        title={telemetry.isPlaying
+          ? 'Bấm để Tạm dừng nhạc & tắt đường sóng (chỉ hiện đường EQ vàng)'
+          : 'Bấm để Phát nhạc ra Loa máy tính & bật đường sóng thời gian thực'}
       >
         {telemetry.isPlaying ? '⏸ Pause' : '▶ Play'}
       </button>
       <button onclick={() => telemetry.seekTransport(0, 0)}>⏮ Reset</button>
+
+      <input
+        bind:this={fileInputEl}
+        type="file"
+        accept="audio/*,.wav,.mp3,.flac,.ogg"
+        style="display: none;"
+        onchange={handleUserFileSelected}
+      />
+      <button
+        class="open-audio-btn"
+        onclick={() => fileInputEl?.click()}
+        title="Chọn bài hát (.wav, .mp3, .flac, .ogg) từ máy tính để nghe qua Loa & tinh chỉnh EQ/Soothe3/Ozone trực tiếp"
+      >
+        📂 Mở nhạc từ máy (.wav/.mp3)
+      </button>
+
+      {#if telemetry.loadedAudioFileName}
+        <span class="loaded-audio-badge" title={telemetry.loadedAudioFileName}>
+          🎵 Đang nạp: {telemetry.loadedAudioFileName}
+        </span>
+      {/if}
+
+      {#if telemetry.audioSourceMode === 'customFile'}
+        <button
+          class="switch-source-btn"
+          onclick={() => telemetry.switchToPianoRollSource()}
+          title="Chuyển nguồn phát về lại Nhạc mẫu Piano Roll & Trống 808/909"
+        >
+          🎹 Chuyển về Nhạc mẫu Piano Roll
+        </button>
+      {/if}
+
+      <div class="speaker-box" title="Chỉnh âm lượng Loa máy tính (Real-Time WebAudio DSP Output)">
+        <button class="mute-btn" onclick={() => telemetry.toggleSpeakerMute()}>
+          {telemetry.speakerMuted || telemetry.speakerVolumePct === 0
+            ? '🔇 Tắt loa'
+            : `🔊 Loa: ${telemetry.speakerVolumePct}%`}
+        </button>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={telemetry.speakerVolumePct}
+          oninput={(e) =>
+            telemetry.setSpeakerVolume(parseFloat((e.currentTarget as HTMLInputElement).value))}
+        />
+      </div>
+
       <label class="bpm-box">
         BPM
         <input
@@ -209,6 +286,7 @@
   }
   .transport-buttons {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
   }
@@ -231,6 +309,56 @@
     color: #0b2b1e;
     border-color: var(--ok);
     font-weight: 700;
+  }
+  .transport-buttons button.paused-btn {
+    background: rgba(235, 198, 98, 0.18);
+    color: var(--warn);
+    border-color: var(--warn);
+    font-weight: 700;
+  }
+  .transport-buttons button.open-audio-btn {
+    background: rgba(118, 210, 219, 0.16);
+    color: var(--accent);
+    border-color: var(--accent);
+    font-weight: 700;
+  }
+  .transport-buttons button.switch-source-btn {
+    background: rgba(235, 198, 98, 0.14);
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+  .loaded-audio-badge {
+    background: var(--sub-surface);
+    color: var(--ok);
+    border: 1px solid var(--ok);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .speaker-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--sub-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+  }
+  .speaker-box .mute-btn {
+    padding: 3px 8px;
+    font-size: 0.74rem;
+    background: transparent;
+    border: none;
+  }
+  .speaker-box input[type='range'] {
+    width: 72px;
+    accent-color: var(--accent);
+    cursor: pointer;
   }
   .bpm-box {
     display: flex;

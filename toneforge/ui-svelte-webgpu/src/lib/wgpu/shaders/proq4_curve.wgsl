@@ -129,16 +129,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     var color = vec3<f32>(0.035, 0.05, 0.085);
 
-    // Pre/Post Spectrum analyzer fill
-    if (in.uv.y >= spec_y_pre) {
+    // Pre/Post Spectrum analyzer fill (completely hidden when paused at -120 dB)
+    if (pre_db > -115.0 && in.uv.y >= spec_y_pre) {
         color = mix(color, vec3<f32>(0.18, 0.32, 0.52), 0.32);
     }
-    if (in.uv.y >= spec_y_post) {
+    if (post_db > -115.0 && in.uv.y >= spec_y_post) {
         color = mix(color, vec3<f32>(0.16, 0.72, 0.96), 0.45);
     }
 
     // Collision Mask red warning glow (0x06000)
-    if (coll > 0.05 && in.uv.y >= spec_y_post) {
+    if (post_db > -115.0 && coll > 0.05 && in.uv.y >= spec_y_post) {
         color = mix(color, vec3<f32>(0.98, 0.20, 0.32), clamp(coll, 0.0, 0.85));
     }
 

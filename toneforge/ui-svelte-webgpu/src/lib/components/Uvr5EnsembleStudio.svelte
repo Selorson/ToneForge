@@ -14,6 +14,16 @@
     'HTDemucs_ft 4-Stem (Vocals / Drums / Bass / Other)',
     'VR-Arch 4band_v3_sn (Cascaded ASPP ResNet)',
   ];
+
+  let uvr5FileInputEl = $state<HTMLInputElement | null>(null);
+
+  async function handleUvr5FileSelected(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    await telemetry.loadUserAudioFile(file);
+    input.value = '';
+  }
 </script>
 
 <section class="panel uvr5-panel">
@@ -26,6 +36,19 @@
       </span>
     </div>
     <div class="uvr5-header-actions">
+      <input
+        bind:this={uvr5FileInputEl}
+        type="file"
+        accept="audio/*,.wav,.mp3,.flac,.ogg"
+        style="display: none;"
+        onchange={handleUvr5FileSelected}
+      />
+      <button
+        class="pick-file-btn"
+        onclick={() => uvr5FileInputEl?.click()}
+      >
+        📂 Mở nhạc từ máy (.wav/.mp3)
+      </button>
       <label class="profile-select">
         UVR5 Model Profile (143 Real Configs):
         <select
@@ -118,6 +141,9 @@
   .uvr5-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .profile-select { font-size: 0.75rem; color: var(--muted); }
   .profile-select select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-left: 4px; font-size: 0.74rem; }
+  .pick-file-btn {
+    background: rgba(118, 210, 219, 0.16); color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px; font-weight: 700; cursor: pointer; font-size: 0.76rem;
+  }
   .run-btn {
     background: var(--accent); color: #0b2b1e; border: 1px solid var(--accent); border-radius: 6px; padding: 8px 14px; font-weight: 600; cursor: pointer; font-size: 0.78rem;
   }

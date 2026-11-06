@@ -76,6 +76,7 @@
     );
     if (existing) {
       telemetry.selectedNoteId = existing.id;
+      telemetry.auditionNote(existing.key, existing.velocity, existing.finePitchCents, existing.pan);
       return;
     }
     telemetry.addPianoRollNote(activePattern.patternId, {
@@ -97,6 +98,7 @@
   ) {
     e.stopPropagation();
     telemetry.selectedNoteId = note.id;
+    telemetry.auditionNote(note.key, note.velocity, note.finePitchCents, note.pan);
     draggingNoteId = note.id;
     dragMode = mode;
     dragStartX = e.clientX;

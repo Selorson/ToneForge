@@ -35,10 +35,10 @@ export const GUIDES: Record<string, Guide> = {
     what:
       'ToneForge Studio gom 5 phần mềm phòng thu phức tạp nhất thế giới (UVR5 tách nhạc, FL Studio 26 soạn nhạc/trộn âm, FabFilter Pro-Q 4 lọc tần số, Soothe3 khử chói và iZotope Ozone 12 nâng âm lượng AI) vào chung một màn hình duy nhất. Anh không cần tự nối dây hay cài từng plugin rời — mọi thứ đã được nối sẵn và có nút chọn Preset (cấu hình làm sẵn) chỉ việc bấm là nghe hay.',
     steps: [
-      'Bấm nút "▶ Play" ở góc trên bên trái để nghe thử tiếng nhạc đang chạy thực tế trên máy, hoặc đổi tốc độ nhanh/chậm ở ô "BPM".',
-      'Nếu muốn tách lời/nhạc nền từ một bài hát có sẵn: vào "UVR5 Stem Studio" → chọn cấu hình → bấm "Run Ensemble & Bounce to Mixer 1..4".',
-      'Nếu muốn đổi giai điệu hoặc bộ trống/nhạc cụ: ở "Playlist & Piano Roll", chọn "FL26 Sample & Synth Kit" và "FL26 Piano Roll Score (.fsc)".',
-      'Làm sạch và làm mượt tiếng bằng Preset có sẵn ở "Pro-Q 4" (chọn Vocals / Mixbus) và "Soothe3" (chọn That Grammy balance preset).',
+      'Bấm nút "▶ Play" ở góc trên bên trái để phát âm thanh thật ra Loa máy tính (kèm sóng phổ nhấp nhô 120Hz). Bấm "⏸ Pause" để dừng hẳn nhạc và tắt đường sóng nhấp nhô (trên màn hình Pro-Q 4 sẽ chỉ còn lại đúng đường kẻ EQ màu vàng đứng yên).',
+      'Muốn đưa bài hát có sẵn trong máy vào nghe và chỉnh trực tiếp: bấm nút "📂 Mở nhạc từ máy (.wav/.mp3)" ngay trên thanh trên cùng (hoặc trong khung UVR5), chọn file nhạc trên ổ cứng — nhạc sẽ phát ra loa ngay lập tức qua bộ lọc Pro-Q 4, Soothe3 và Ozone 12!',
+      'Nếu muốn đổi giai điệu hoặc bộ trống/nhạc cụ: ở "Playlist & Piano Roll", chọn "FL26 Sample & Synth Kit" và "FL26 Piano Roll Score (.fsc)" (bấm vào từng nốt nhạc cũng sẽ kêu thử ngay cao độ nốt đó).',
+      'Làm sạch và làm mượt tiếng bằng Preset có sẵn ở "Pro-Q 4" (kéo các chấm tròn 1..7 sẽ nghe tiếng nhạc đổi màu ngay tức thì) và "Soothe3" (chọn That Grammy balance preset).',
       'Cuối cùng: bấm "✨ AI Master Assistant (Auto-Match)" ở khung "Ozone 12 Console" để AI tự cân chỉnh âm lượng chuẩn quốc tế, rồi bấm "Export Studio WAV" ở cuối trang để lấy file .wav hoàn chỉnh.',
     ],
     gotcha:

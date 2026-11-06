@@ -92,6 +92,20 @@ impl Default for Soothe3ReductionFrame {
     }
 }
 
+impl Soothe3ReductionFrame {
+    /// Views the 256 `vec4<f32>` reduction bins as a flat 1,024-bin `f32` array.
+    #[inline]
+    pub fn reduction_db_1024(&self) -> &[f32; 1024] {
+        bytemuck::cast_ref(&self.reduction_ys)
+    }
+
+    /// Mutable view of the 256 `vec4<f32>` reduction bins as a flat 1,024-bin `f32` array.
+    #[inline]
+    pub fn reduction_db_1024_mut(&mut self) -> &mut [f32; 1024] {
+        bytemuck::cast_mut(&mut self.reduction_ys)
+    }
+}
+
 /// Offset `0x09000..0x0AFFF` (`8,192 B` = `0x2000`): iZotope Ozone 12 Master Telemetry.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]

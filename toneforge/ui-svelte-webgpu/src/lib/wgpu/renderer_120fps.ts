@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 // 120 FPS WebGPU Multi-Pipeline Renderer (`renderer_120fps.ts`)
 // Uploads Zero-Copy Float32Array views from the 128 KB `VisualTelemetryFrame` directly to GPU
 // buffers via `queue.writeBuffer()` and executes `proq4_curve.wgsl`, `soothe3_heatmap.wgsl`,
@@ -47,15 +48,8 @@ export class WebGpu120FpsRenderer {
       const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
       if (!adapter) return false;
       this.device = await adapter.requestDevice();
-      this.context = this.canvas.getContext('webgpu');
-      if (!this.context) return false;
 
       const format = gpu.getPreferredCanvasFormat();
-      this.context.configure({
-        device: this.device,
-        format,
-        alphaMode: 'opaque',
-      });
 
       const GPUBufferUsage = (globalThis as any).GPUBufferUsage ?? {
         COPY_DST: 0x0008,
@@ -157,6 +151,14 @@ export class WebGpu120FpsRenderer {
           ],
         });
       }
+
+      this.context = this.canvas.getContext('webgpu');
+      if (!this.context) return false;
+      this.context.configure({
+        device: this.device,
+        format,
+        alphaMode: 'opaque',
+      });
 
       this.isWebGpuReady = true;
       return true;
@@ -274,19 +276,21 @@ export class WebGpu120FpsRenderer {
     ctx.fillRect(0, 0, w, h);
 
     if (this.mode === 'proq4') {
-      // Draw 1024-bin Post-EQ Spectrum (0x04000)
-      ctx.beginPath();
-      ctx.moveTo(0, h);
-      for (let i = 0; i < 256; i++) {
-        const bin = i * 4;
-        const db = telemetry.proq4PostDb[bin];
-        const x = (i / 255) * w;
-        const y = h - Math.max(0, Math.min(1, (db + 90) / 90)) * h;
-        ctx.lineTo(x, y);
+      // Draw 1024-bin Post-EQ Spectrum (0x04000) ONLY when playing (hidden when paused at -120 dB)
+      if (telemetry.isPlaying && telemetry.proq4PostDb[0] > -115.0) {
+        ctx.beginPath();
+        ctx.moveTo(0, h);
+        for (let i = 0; i < 256; i++) {
+          const bin = i * 4;
+          const db = telemetry.proq4PostDb[bin];
+          const x = (i / 255) * w;
+          const y = h - Math.max(0, Math.min(1, (db + 90) / 90)) * h;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(w, h);
+        ctx.fillStyle = 'rgba(118, 210, 219, 0.22)';
+        ctx.fill();
       }
-      ctx.lineTo(w, h);
-      ctx.fillStyle = 'rgba(118, 210, 219, 0.22)';
-      ctx.fill();
 
       // Draw 24-Band Composite Response Curve
       ctx.beginPath();

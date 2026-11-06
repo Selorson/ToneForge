@@ -1359,6 +1359,47 @@ impl MixerEngine {
         let is_playing = self.is_playing;
         let process_all = self.process_all_502_tracks;
 
+        // When paused (`!is_playing`), freeze `slicer` (`current_sample_pos` and `global_ppq_tick`),
+        // output silence, set all track meters & Pro-Q 4 spectrums to -120.0 dB, and publish telemetry.
+        if !is_playing {
+            master_out[..total_frames].fill([0.0, 0.0]);
+            let silent_meter = TrackMeterEntry {
+                peak_l_db: -120.0,
+                peak_r_db: -120.0,
+                rms_l_db: -120.0,
+                rms_r_db: -120.0,
+                gr_db: 0.0,
+                activity_flags: TRACK_STATE_SILENT,
+            };
+            for track in &mut self.tracks {
+                track.activity_state.store(TRACK_STATE_SILENT, Ordering::Relaxed);
+                track.meter = silent_meter;
+            }
+            self.frame_seq = self.frame_seq.wrapping_add(1);
+            let frame = self.telemetry_input.input_buffer_mut();
+            frame.header.frame_seq = self.frame_seq;
+            frame.header.sample_pos = self.slicer.current_sample_pos;
+            frame.header.ppq_tick = self.slicer.global_ppq_tick;
+            frame.header.bpm = self.slicer.bpm as f32;
+            frame.header.cpu_load_pct = 0.0;
+            frame.header.lufs_momentary = -120.0;
+            frame.header.lufs_short_term = -120.0;
+            frame.header.master_gr_db = 0.0;
+            frame.header.true_peak_db = [-120.0, -120.0];
+            frame.header.active_stem_mode = 0;
+            frame.track_meters.fill(silent_meter);
+            frame.proq4_spectrum.pre_db.fill(-120.0);
+            frame.proq4_spectrum.post_db.fill(-120.0);
+            frame.proq4_spectrum.sc_db.fill(-120.0);
+            frame.proq4_spectrum.collision_mask.fill(0.0);
+            frame.soothe3_reduction.reduction_db_1024_mut().fill(0.0);
+            frame.soothe3_reduction.input_spec_db.fill(-120.0);
+            self.controller_bus
+                .export_telemetry_norm(&mut frame.automation_spline.controller_values_norm);
+            self.telemetry_input.publish();
+            return;
+        }
+
         // Clear track slice buffers for `[0..total_frames]`
         if process_all {
             for track in &mut self.tracks {

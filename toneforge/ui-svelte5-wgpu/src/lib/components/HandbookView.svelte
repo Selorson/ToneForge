@@ -472,18 +472,18 @@
             <tr data-filter>
               <td class="c-n"><span class="n">1</span></td>
               <td class="c-label"><b>▶ Play / ⏸ Pause</b><br /><span class="ty">nút bấm</span></td>
-              <td><b>Bấm thì:</b> Bắt đầu phát nhạc hoặc tạm dừng. Khi đang phát, nút chuyển sang màu xanh lá cây (<code>⏸ Pause</code>) và đồng hồ thời gian chạy liên tục ở 120 khung hình/giây.</td>
-              <td>Đứng yên khi mở app; xanh lá khi đang phát.</td>
+              <td><b>Bấm ▶ Play:</b> Phát âm thanh thật ra Loa/Tai nghe máy tính và chạy đường sóng phổ nhấp nhô ở 120 FPS.<br /><b>Bấm ⏸ Pause:</b> Ngắt tiếng loa ngay lập tức, đồng hồ Sample/PPQ đứng yên, và <b>đường sóng nhấp nhô tắt hẳn — chỉ còn lại đường EQ màu vàng phẳng lặng</b> để anh dễ quan sát đường cắt tần số.</td>
+              <td>Xanh lá (<code>⏸ Pause</code>) khi đang phát; Vàng (<code>▶ Play</code>) khi đã tạm dừng.</td>
               <td><span class="none">—</span></td>
-              <td>Bấm lại lần nữa để dừng ngay.</td>
+              <td>Bấm qua lại giữa Play và Pause bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">2</span></td>
-              <td class="c-label"><b>⏮ Reset</b><br /><span class="ty">nút bấm</span></td>
-              <td><b>Bấm thì:</b> Đưa kim phát nhạc (Playhead) quay về đúng vạch xuất phát đầu bài (Sample 0, PPQ 0).</td>
+              <td class="c-label"><b>📂 Mở nhạc từ máy (.wav/.mp3) · 🔊 Loa · ⏮ Reset</b><br /><span class="ty">chọn file, âm lượng & tua đầu bài</span></td>
+              <td><b>📂 Mở nhạc từ máy:</b> Chọn bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>) trên PC để nghe qua Loa & chỉnh trực tiếp bằng Pro-Q 4, Soothe3, Ozone 12 (bấm <code>🎹 Chuyển về Nhạc mẫu Piano Roll</code> để quay lại nhịp 808/909).<br /><b>🔊 Loa (0–100%):</b> Chỉnh âm lượng loa hoặc bấm để tắt tiếng (Mute).<br /><b>⏮ Reset:</b> Đưa kim phát nhạc về đầu bài (Sample 0, PPQ 0).</td>
+              <td>Loa mặc định <code>85%</code>.</td>
               <td><span class="none">—</span></td>
-              <td><span class="none">—</span></td>
-              <td>Bấm lúc nào cũng được, không làm mất nốt nhạc.</td>
+              <td>Đổi bài hát khác, chuyển về Piano Roll hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">3</span></td>
