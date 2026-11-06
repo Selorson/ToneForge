@@ -159,6 +159,44 @@
 
     <div class="toolbar">
       <label class="ppq-select">
+        FL26 Sample & Synth Kit
+        <select
+          value={telemetry.fl26SelectedSampleKit}
+          onchange={(e) =>
+            telemetry.loadFl26SampleKit((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each [
+            '808 Studio Kit (Real .wav)',
+            '909 Analog Kit (Real .wav)',
+            'MA Skipper Snare Kit',
+            'Symphonic Strings (SYM_STR_C_2)',
+            'Sytrus / Harmor Lead',
+          ] as kit}
+            <option value={kit}>{kit}</option>
+          {/each}
+        </select>
+      </label>
+
+      <label class="ppq-select">
+        FL26 Piano Roll Score (.fsc)
+        <select
+          value={telemetry.fl26SelectedScorePreset}
+          onchange={(e) =>
+            telemetry.loadFl26ScorePreset((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each [
+            'ToneForge Lead Hook (Slide)',
+            'FL26 Trance Arp (.fsc)',
+            'FL26 Oxygene Progression (.fsc)',
+            'FL26 4-Steps Groove (.fsc)',
+            'FL26 DrumRoll (.fsc)',
+          ] as score}
+            <option value={score}>{score}</option>
+          {/each}
+        </select>
+      </label>
+
+      <label class="ppq-select">
         PPQ Resolution
         <select
           value={telemetry.ppqResolution}
@@ -247,14 +285,14 @@
           onmouseup={() => (draggingSplineIdx = null)}
           onmouseleave={() => (draggingSplineIdx = null)}
         >
-          <path d={splineSvgPath} fill="none" stroke="#38bdf8" stroke-width="1.6" />
+          <path d={splineSvgPath} fill="none" stroke="#76D2DB" stroke-width="1.6" />
           {#each telemetry.tensionSplinePoints as pt, idx}
             <circle
               cx={(pt.x / TIMELINE_TICKS) * 100}
               cy={(1.0 - pt.y) * 100}
               r="2.4"
-              fill={draggingSplineIdx === idx ? '#f59e0b' : '#10b981'}
-              stroke="#090d16"
+              fill={draggingSplineIdx === idx ? '#fbbf24' : '#4ade80'}
+              stroke="#081112"
               stroke-width="0.6"
               onmousedown={(e) => {
                 e.stopPropagation();
@@ -433,47 +471,48 @@
 </section>
 
 <style>
-  .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
   .panel-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-  h2 { margin: 0; font-size: 1rem; color: #38bdf8; }
-  .subtitle { font-size: 0.75rem; color: #94a3b8; }
-  .toolbar { display: flex; align-items: center; gap: 8px; font-size: 0.76rem; }
-  .toolbar select { background: #090d16; color: #f8fafc; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; }
-  .tool-btn { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-weight: 600; font-size: 0.75rem; }
-  .tool-btn.active { background: #f59e0b; color: #090d16; border-color: #f59e0b; }
+  h2 { margin: 0; font-size: 1rem; color: var(--accent); font-weight: 600; }
+  .subtitle { font-size: 0.75rem; color: var(--muted); }
+  .toolbar { display: flex; align-items: center; gap: 8px; font-size: 0.76rem; color: var(--muted); }
+  .toolbar select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-left: 4px; }
+  .tool-btn { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-weight: 600; font-size: 0.75rem; }
+  .tool-btn.active { background: var(--warn); color: #0b2b1e; border-color: var(--warn); }
   .sequencer-layout { display: grid; grid-template-columns: 1fr 1.25fr; gap: 12px; }
-  .playlist-box, .pianoroll-box { background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .playlist-box, .pianoroll-box { background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
   .sub-header { display: flex; justify-content: space-between; align-items: center; }
-  h3 { margin: 0; font-size: 0.84rem; color: #e2e8f0; }
-  .fixed30-readout { font-size: 0.74rem; font-family: monospace; color: #94a3b8; }
-  .fixed30-readout strong { color: #38bdf8; }
+  h3 { margin: 0; font-size: 0.84rem; color: var(--text); font-weight: 600; }
+  .fixed30-readout { font-size: 0.74rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+  .fixed30-readout strong { color: var(--accent); }
   .playlist-tracks { display: flex; flex-direction: column; gap: 5px; }
   .playlist-row { display: grid; grid-template-columns: 150px 1fr; gap: 8px; align-items: center; font-size: 0.74rem; }
-  .row-meta { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 4px 8px; border-radius: 4px; }
-  .mute-btn { background: #10b981; color: #090d16; border: none; border-radius: 3px; padding: 2px 6px; font-size: 0.68rem; font-weight: 700; cursor: pointer; }
-  .mute-btn.muted { background: #475569; color: #cbd5e1; }
-  .row-timeline { position: relative; height: 24px; background: #0f172a; border: 1px solid #1e293b; border-radius: 4px; overflow: hidden; }
-  .clip-block { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; padding: 2px 6px; font-size: 0.7rem; font-weight: 600; color: #090d16; display: flex; align-items: center; }
-  .clip-block.kind-pattern { background: #38bdf8; }
-  .clip-block.kind-audiostem { background: #a78bfa; }
-  .clip-block.kind-automation { background: #10b981; }
+  .row-meta { display: flex; justify-content: space-between; align-items: center; background: var(--surface); border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; }
+  .mute-btn { background: var(--ok); color: #0b2b1e; border: none; border-radius: 4px; padding: 2px 6px; font-size: 0.68rem; font-weight: 700; cursor: pointer; }
+  .mute-btn.muted { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+  .row-timeline { position: relative; height: 24px; background: var(--sub-surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .clip-block { position: absolute; top: 2px; bottom: 2px; border-radius: 4px; padding: 2px 6px; font-size: 0.7rem; font-weight: 600; color: #0b2b1e; display: flex; align-items: center; }
+  .clip-block.kind-pattern { background: var(--accent); }
+  .clip-block.kind-audiostem { background: var(--warn); }
+  .clip-block.kind-automation { background: var(--ok); }
   .spline-canvas-wrap { display: flex; flex-direction: column; gap: 6px; }
-  .spline-svg { width: 100%; height: 92px; background: #0f172a; border: 1px solid #1e293b; border-radius: 4px; cursor: crosshair; }
+  .spline-svg { width: 100%; height: 92px; background: var(--sub-surface); border: 1px solid var(--border); border-radius: 6px; cursor: crosshair; }
   .spline-points-bar { display: flex; flex-wrap: wrap; gap: 6px; }
-  .spline-pt-chip { background: #0f172a; border: 1px solid #1e293b; border-radius: 4px; padding: 4px 6px; font-size: 0.7rem; display: flex; align-items: center; gap: 6px; }
-  .del-pt-btn { background: #ef4444; color: #fff; border: none; border-radius: 3px; cursor: pointer; padding: 0 5px; }
+  .spline-pt-chip { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.7rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px; }
+  .del-pt-btn { background: var(--err); color: #0b2b1e; font-weight: 700; border: none; border-radius: 4px; cursor: pointer; padding: 0 6px; }
   .pattern-tabs { display: flex; gap: 4px; }
-  .pattern-tabs button { background: #1e293b; color: #94a3b8; border: none; border-radius: 4px; padding: 3px 8px; font-size: 0.72rem; cursor: pointer; }
-  .pattern-tabs button.active { background: #38bdf8; color: #090d16; font-weight: 700; }
-  .pianoroll-grid { display: flex; flex-direction: column; border: 1px solid #1e293b; border-radius: 4px; overflow: hidden; }
-  .pr-row { display: grid; grid-template-columns: 46px 1fr; height: 22px; border-bottom: 1px solid #131c31; }
-  .pr-key-label { background: #0f172a; color: #94a3b8; font-size: 0.68rem; font-family: monospace; display: flex; align-items: center; justify-content: center; border-right: 1px solid #1e293b; }
-  .pr-cells { position: relative; display: grid; grid-template-columns: repeat(16, 1fr); background: #090d16; }
-  .pr-cell { border-right: 1px solid #111827; cursor: pointer; }
-  .pr-note { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; color: #090d16; font-size: 0.66rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; cursor: grab; box-sizing: border-box; }
-  .pr-note.selected { outline: 2px solid #f8fafc; }
-  .pr-note.slide-note { border-left: 4px solid #090d16; }
+  .pattern-tabs button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; cursor: pointer; }
+  .pattern-tabs button.active { background: var(--accent); color: #0b2b1e; border-color: var(--accent); font-weight: 600; }
+  .pianoroll-grid { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .pr-row { display: grid; grid-template-columns: 46px 1fr; height: 22px; border-bottom: 1px solid rgba(118, 210, 219, 0.08); }
+  .pr-key-label { background: var(--surface); color: var(--muted); font-size: 0.68rem; font-family: var(--font-mono); display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--border); }
+  .pr-cells { position: relative; display: grid; grid-template-columns: repeat(16, 1fr); background: var(--sub-surface); }
+  .pr-cell { border-right: 1px solid rgba(118, 210, 219, 0.06); cursor: pointer; }
+  .pr-note { position: absolute; top: 2px; bottom: 2px; border-radius: 4px; color: #0b2b1e; font-size: 0.66rem; font-weight: 700; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; cursor: grab; box-sizing: border-box; }
+  .pr-note.selected { outline: 2px solid var(--text); }
+  .pr-note.slide-note { border-left: 4px solid #0b2b1e; }
   .resize-handle { width: 5px; height: 100%; cursor: ew-resize; }
-  .note-inspector { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; background: #0f172a; border: 1px solid #1e293b; border-radius: 4px; padding: 6px 8px; font-size: 0.72rem; }
-  .delete-note-btn { background: #ef4444; color: #ffffff; border: none; border-radius: 4px; padding: 4px 8px; font-size: 0.72rem; cursor: pointer; font-weight: 600; }
+  .note-inspector { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 0.72rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .delete-note-btn { background: var(--err); color: #0b2b1e; border: none; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; cursor: pointer; font-weight: 700; }
 </style>
+

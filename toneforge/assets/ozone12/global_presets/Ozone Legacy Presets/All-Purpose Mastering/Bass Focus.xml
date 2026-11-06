@@ -1,0 +1,201 @@
+<?xml version="1.0" standalone="yes" ?>
+<Ozone9 PresetVer="1" PluginVer="9030" PluginBuild="0" Comments="Judiciously applied processing to keep your low end central to the mix" LastUsed="1574612676" LastModified="1569697266">
+    <DynamicEQ Enabled="1">
+        <Param ElementID="Dynamic EQ" ParamID="Band 5 Visible" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 4 Visible" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 3 Visible" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 3 Visible" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 2 Enable" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 5 Enable" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 4 Visible" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 5 Frequency" Value="2700.00000000" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 4 Enable" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 3 Enable" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 2 Visible" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 2 Frequency" Value="540.00000000" />
+        <Param ElementID="Dynamic EQ" ParamID="Band 2 Frequency" Value="540.00000000" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 5 Visible" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 3 Enable" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 4 Enable" Value="0" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 5 Frequency" Value="2700.00000000" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 5 Enable" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 2 Visible" Value="1" />
+        <Param ElementID="Dynamic EQ" ParamID="Aux: Band 2 Enable" Value="1" />
+        <ExtraBytes ElementID="Dynamic EQ" Data="" />
+    </DynamicEQ>
+    <Dynamics Enabled="1">
+        <Param ElementID="Dynamics" ParamID="Aux: Sidechain Slope" Value="0" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Comp Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Comp Ratio" Value="1.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Detection Method" Value="1" />
+        <Param ElementID="Dynamics" ParamID="Crossover Cutoff 1" Value="339.43710327" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Comp Soft Knee" Value="6.94117641" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Comp Threshold" Value="-10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Lim Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Detection Method" Value="1" />
+        <Param ElementID="Dynamics" ParamID="Crossover Type" Value="1" />
+        <Param ElementID="Dynamics" ParamID="Crossover Cutoff 2" Value="4690.88964844" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Comp Release" Value="100.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Comp Ratio" Value="1.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Comp Attack" Value="10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Lim Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Comp Ratio" Value="1.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 2 Comp Release" Value="64.17559814" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Comp Release" Value="125.70043945" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Comp Ratio" Value="2.41303563" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Comp Attack" Value="12.80000305" />
+        <Param ElementID="Dynamics" ParamID="Mode" Value="1" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Comp Ratio" Value="1.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Comp Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Comp Release" Value="100.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Sidechain HPF" Value="20.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Mode" Value="1" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Comp Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 2 Comp Ratio" Value="4.03390741" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Comp Ratio" Value="1.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Comp Threshold" Value="-10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Lim Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Comp Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Comp Release" Value="100.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Lim Attack" Value="5.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Comp Threshold" Value="-10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Comp Release" Value="100.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 2 Comp Soft Knee" Value="4.82352924" />
+        <Param ElementID="Dynamics" ParamID="Band 2 Comp Attack" Value="32.74675751" />
+        <Param ElementID="Dynamics" ParamID="Sidechain HPF" Value="20.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Lim Attack" Value="5.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Comp Ratio" Value="1.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Comp Threshold" Value="-10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Comp Release" Value="100.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 2 Comp Threshold" Value="-16.83453178" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Comp Release" Value="100.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Comp Attack" Value="10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 3 Comp Attack" Value="10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Lim Attack" Value="5.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Comp Attack" Value="10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Lim Attack" Value="5.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 3 Comp Attack" Value="10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Comp Attack" Value="10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Comp Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Comp Threshold" Value="-10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 4 Lim Attack" Value="5.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Comp Threshold" Value="-10.00000000" />
+        <Param ElementID="Dynamics" ParamID="Sidechain Slope" Value="0" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 2 Lim Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Lim Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Comp Threshold" Value="-12.15827179" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Comp Soft Knee" Value="0.00000000" />
+        <Param ElementID="Dynamics" ParamID="Aux: Band 1 Lim Attack" Value="5.00000000" />
+        <Param ElementID="Dynamics" ParamID="Num Bands" Value="2" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Active" Value="1" />
+        <Param ElementID="Dynamics" ParamID="Band 2 Gain" Value="1.29999924" />
+        <Param ElementID="Dynamics" ParamID="Band 1 Gain" Value="1.89999771" />
+        <Param ElementID="Dynamics" ParamID="Band 4 Lim Soft Knee" Value="0.00000000" />
+        <ExtraBytes ElementID="Dynamics" Data="" />
+    </Dynamics>
+    <EQ Enabled="1">
+        <Param ElementID="Equalizer" ParamID="Band 5 Gain" Value="0.77499580" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 2 Q" Value="0.20000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 1 Q" Value="0.20000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 5 Q" Value="0.30000001" />
+        <Param ElementID="Equalizer" ParamID="Band 2 Q" Value="0.56137502" />
+        <Param ElementID="Equalizer" ParamID="EQ: Smoothing Amount" Value="0.50000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 8 Q" Value="0.20000000" />
+        <Param ElementID="Equalizer" ParamID="Band 7 Q" Value="0.30000001" />
+        <Param ElementID="Equalizer" ParamID="Band 7 Gain" Value="0.71516418" />
+        <Param ElementID="Equalizer" ParamID="Band 5 Q" Value="0.76867467" />
+        <Param ElementID="Equalizer" ParamID="Band 5 Frequency" Value="2625.88989258" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 6 Enable" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Band 2 Gain" Value="0.01512527" />
+        <Param ElementID="Equalizer" ParamID="Band 2 Frequency" Value="23.24776649" />
+        <Param ElementID="Equalizer" ParamID="Band 1 Gain" Value="0.54563713" />
+        <Param ElementID="Equalizer" ParamID="Band 1 Frequency" Value="312.54351807" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 8 Shape" Value="2" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 8 Enable" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 7 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 7 Q" Value="0.30000001" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 7 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 6 Visible" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 5 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 2 Shape" Value="4" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 5 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 4 Frequency" Value="520.00000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 3 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 3 Frequency" Value="180.00000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 3 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 2 Visible" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 2 Enable" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 1 Shape" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 2 Frequency" Value="70.00000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 5 Frequency" Value="1870.00000000" />
+        <Param ElementID="Equalizer" ParamID="Band 6 Frequency" Value="5499.99951172" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 7 Frequency" Value="7400.00000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 6 Frequency" Value="3900.00000000" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 7 Shape" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 7 Frequency" Value="3776.07202148" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 1 Frequency" Value="29.99999809" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 8 Visible" Value="1" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 3 Q" Value="0.30000001" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 6 Q" Value="0.30000001" />
+        <Param ElementID="Equalizer" ParamID="Band 1 Q" Value="0.72554350" />
+        <Param ElementID="Equalizer" ParamID="Aux: Band 4 Q" Value="0.30000001" />
+        <ExtraBytes ElementID="Equalizer" Data="" />
+    </EQ>
+    <EQ2 Enabled="1">
+        <ExtraBytes ElementID="Post Equalizer" Data="" />
+    </EQ2>
+    <Exciter Enabled="1">
+        <ExtraBytes ElementID="Exciter" Data="" />
+    </Exciter>
+    <Global Enabled="1">
+        <ExtraBytes ElementID="ElementChain" Data="AAkAAABFcXVhbGl6ZXIADQAAAExvdyBFbmQgRm9jdXMACAAAAER5bmFtaWNzABAAAABNYXN0ZXIgUmViYWxhbmNlAAkAAABNYXhpbWl6ZXI=" />
+        <ExtraBytes ElementID="Global" Data="" />
+    </Global>
+    <Imager Enabled="1">
+        <Param ElementID="Stereo Imager" ParamID="Band 3 Active" Value="1" />
+        <Param ElementID="Stereo Imager" ParamID="Band 2 Active" Value="1" />
+        <Param ElementID="Stereo Imager" ParamID="Active Band" Value="3" />
+        <Param ElementID="Stereo Imager" ParamID="Band 1 Active" Value="1" />
+        <ExtraBytes ElementID="Stereo Imager" Data="" />
+    </Imager>
+    <LowEndFocus Enabled="1">
+        <Param ElementID="Low End Focus" ParamID="Strength" Value="11.00000000" />
+        <Param ElementID="Low End Focus" ParamID="CharacterMode" Value="1" />
+        <Param ElementID="Low End Focus" ParamID="Gain" Value="0.63461590" />
+        <Param ElementID="Low End Focus" ParamID="ActionRegionHighCutoff" Value="204.07563782" />
+        <ExtraBytes ElementID="Low End Focus" Data="" />
+    </LowEndFocus>
+    <MasterRebalance Enabled="1">
+        <Param ElementID="Master Rebalance" ParamID="SourceGain" Value="0.88888931" />
+        <Param ElementID="Master Rebalance" ParamID="SourceType" Value="1" />
+        <ExtraBytes ElementID="Master Rebalance" Data="" />
+    </MasterRebalance>
+    <MatchEQ Enabled="1">
+        <ExtraBytes ElementID="Match Equalizer" Data="" />
+        <ExtraBytes ElementID="Snapshot" Data="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" />
+    </MatchEQ>
+    <Maximizer Enabled="1">
+        <Param ElementID="Maximizer" ParamID="Prevent Intersample Clipping" Value="1" />
+        <Param ElementID="Maximizer" ParamID="Threshold" Value="-4.45573807" />
+        <Param ElementID="Maximizer" ParamID="Mode" Value="3" />
+        <Param ElementID="Maximizer" ParamID="Margin" Value="-0.29999924" />
+        <Param ElementID="Maximizer" ParamID="Character" Value="1.39705884" />
+        <ExtraBytes ElementID="Maximizer" Data="" />
+    </Maximizer>
+    <Meters Enabled="1" />
+    <SpectralShaper Enabled="1">
+        <ExtraBytes ElementID="Spectral Shaper" Data="" />
+    </SpectralShaper>
+    <VintageCompressor Enabled="1">
+        <ExtraBytes ElementID="Vintage Compressor" Data="" />
+    </VintageCompressor>
+    <VintageEQ Enabled="1">
+        <ExtraBytes ElementID="Vintage EQ" Data="" />
+    </VintageEQ>
+    <VintageLimiter Enabled="1">
+        <ExtraBytes ElementID="Vintage Limiter" Data="" />
+    </VintageLimiter>
+    <VintageTape Enabled="1">
+        <ExtraBytes ElementID="Vintage Tape" Data="" />
+    </VintageTape>
+</Ozone9>

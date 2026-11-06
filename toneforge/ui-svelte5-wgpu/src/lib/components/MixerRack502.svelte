@@ -90,7 +90,36 @@
 
   <div class="inspector-grid">
     <div class="subcard">
-      <h3>Track #{selectedTrack.index} ({selectedTrack.name}) — 10 FX Insert Slots & Routing</h3>
+      <div class="subcard-header">
+        <div>
+          <h3>Track #{selectedTrack.index} ({selectedTrack.name}) — 10 FX Insert Slots & Routing</h3>
+          <span class="subtitle">{telemetry.fl26FxPresetInfo}</span>
+        </div>
+        <label class="fx-preset-select">
+          FL26 Native FX Preset (.fst):
+          <select
+            value={telemetry.fl26SelectedFxPreset}
+            onchange={(e) =>
+              telemetry.loadFl26FxPreset((e.currentTarget as HTMLSelectElement).value)}
+          >
+            <option value="Maximus: Clear Master.fst">Maximus: Clear Master.fst</option>
+            <option value="Maximus: Maximum loudness.fst">Maximus: Maximum loudness.fst</option>
+            <option value="Maximus: New York compression.fst">Maximus: New York compression.fst</option>
+            <option value="Maximus: Soundgoodizer A.fst">Maximus: Soundgoodizer A.fst</option>
+            <option value="Emphasis: Pop (heavy).fst">Emphasis: Pop (heavy).fst</option>
+            <option value="Emphasis: Louder (transient shaping).fst">Emphasis: Louder (transient shaping).fst</option>
+            <option value="Emphasis: Soft-clipper (heavy).fst">Emphasis: Soft-clipper (heavy).fst</option>
+            <option value="Emphasis — Clean upward limiter.fst">Emphasis — Clean upward limiter.fst</option>
+            <option value="Fruity Limiter: Drum compression 1.fst">Fruity Limiter: Drum compression 1.fst</option>
+            <option value="Fruity Limiter: Ducking music behind voice.fst">Fruity Limiter: Ducking music behind voice.fst</option>
+            <option value="Fruity Parametric EQ 2: Vocal presence.fst">Fruity Parametric EQ 2: Vocal presence.fst</option>
+            <option value="Fruity Parametric EQ 2: Mastering.fst">Fruity Parametric EQ 2: Mastering.fst</option>
+            <option value="Fruity Soft Clipper.fst">Fruity Soft Clipper.fst</option>
+            <option value="LuxeVerb: Shimmer Cathedral.fst">LuxeVerb: Shimmer Cathedral.fst</option>
+            <option value="Gross Beat: 1/2 Gate.fst">Gross Beat: 1/2 Gate.fst</option>
+          </select>
+        </label>
+      </div>
       <div class="slots-list">
         {#each selectedTrack.slots as slot (slot.slotIndex)}
           <div class="slot-row">
@@ -171,24 +200,35 @@
 </section>
 
 <style>
-  .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; }
-  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  h2 { margin: 0; font-size: 1rem; color: #38bdf8; }
-  .subtitle { font-size: 0.75rem; color: #94a3b8; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  h2 { margin: 0; font-size: 1rem; color: var(--accent); font-weight: 600; }
+  .subtitle { font-size: 0.75rem; color: var(--muted); }
   .bank-selector button, .route-controls button {
-    background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 0.75rem;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 500;
   }
-  .wgpu-meter-bridge { width: 100%; height: 120px; border-radius: 6px; border: 1px solid #1e293b; margin-bottom: 8px; }
+  .route-controls button {
+    background: var(--accent); color: #0b2b1e; border-color: var(--accent); font-weight: 600;
+  }
+  .route-controls input[type="number"] {
+    width: 60px; background: var(--sub-surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-family: var(--font-mono);
+  }
+  .wgpu-meter-bridge { width: 100%; height: 120px; background: var(--sub-surface); border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 10px; display: block; }
   .mixer-strips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
   .strip {
-    min-width: 74px; background: #131c31; border: 1px solid #1e293b; border-radius: 6px; padding: 6px; text-align: center; cursor: pointer; font-size: 0.72rem;
+    min-width: 76px; background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; cursor: pointer; font-size: 0.72rem;
   }
-  .strip.selected { border-color: #38bdf8; background: #172554; }
-  .strip-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .strip-peak { color: #34d399; font-family: monospace; }
-  .apdc-badge { color: #facc15; font-size: 0.68rem; }
+  .strip.selected { border-color: var(--accent); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--accent); }
+  .strip-idx { color: var(--muted); font-family: var(--font-mono); font-size: 0.68rem; }
+  .strip-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .strip-peak { color: var(--ok); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .apdc-badge { color: var(--warn); font-size: 0.68rem; font-family: var(--font-mono); }
   .inspector-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
-  .subcard { background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 8px; font-size: 0.78rem; }
-  h3 { margin: 0 0 6px 0; font-size: 0.82rem; color: #f8fafc; }
+  .subcard { background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .subcard-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .fx-preset-select { font-size: 0.72rem; color: var(--muted); }
+  .fx-preset-select select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; margin-left: 4px; font-size: 0.72rem; }
+  h3 { margin: 0; font-size: 0.82rem; font-family: var(--font-sans); color: var(--accent); font-weight: 600; }
   .slot-row, .spline-row, .route-controls { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
 </style>
+

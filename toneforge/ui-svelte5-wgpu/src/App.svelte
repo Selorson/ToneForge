@@ -129,9 +129,10 @@
 <style>
   .toneforge-shell {
     min-height: 100vh;
-    background: #090d16;
-    color: #e2e8f0;
-    padding: 12px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    padding: 12px 16px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -143,26 +144,126 @@
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    background: #0f172a;
-    border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 10px 14px;
+    background: var(--sidebar-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
   }
-  .brand { display: flex; align-items: center; gap: 10px; }
-  h1 { margin: 0; font-size: 1.15rem; color: #f8fafc; }
-  .badge { background: #1e293b; color: #38bdf8; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
-  .transport-buttons { display: flex; align-items: center; gap: 8px; }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+  .badge {
+    background: var(--surface-2);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    font-size: 0.72rem;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .transport-buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .transport-buttons button {
-    background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-weight: 600;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.78rem;
+    transition: all 0.15s ease;
   }
-  .transport-buttons button.playing { background: #10b981; color: #090d16; border-color: #10b981; }
-  .bpm-box input { width: 64px; background: #090d16; color: #f8fafc; border: 1px solid #334155; border-radius: 4px; padding: 4px; }
-  .transport-metrics { display: flex; gap: 12px; font-size: 0.78rem; font-family: monospace; color: #94a3b8; }
-  .transport-metrics strong { color: #f8fafc; }
-  .workspace-tabs { display: flex; gap: 4px; }
+  .transport-buttons button:hover {
+    border-color: var(--accent);
+  }
+  .transport-buttons button.playing {
+    background: var(--ok);
+    color: #0b2b1e;
+    border-color: var(--ok);
+    font-weight: 700;
+  }
+  .bpm-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .bpm-box input {
+    width: 68px;
+    background: var(--sub-surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .transport-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 0.76rem;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    background: var(--sub-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .transport-metrics strong {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .workspace-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
   .workspace-tabs button {
-    background: #131c31; color: #94a3b8; border: 1px solid #1e293b; border-radius: 4px; padding: 5px 10px; font-size: 0.75rem; cursor: pointer;
+    background: var(--surface-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.76rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
-  .workspace-tabs button.active { background: #38bdf8; color: #090d16; font-weight: 700; }
-  .workspace-grid { display: flex; flex-direction: column; gap: 12px; }
+  .workspace-tabs button:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  .workspace-tabs button.active {
+    background: var(--accent);
+    color: #0b2b1e;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .workspace-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
 </style>
+

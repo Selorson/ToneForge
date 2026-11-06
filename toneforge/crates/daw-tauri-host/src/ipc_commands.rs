@@ -571,3 +571,83 @@ pub fn cmd_update_automation_spline(
     Ok(fixed30)
 }
 
+/// Applies a real FabFilter Pro-Q 4 `.ffp` factory preset (`171` bundled presets) and returns the structured 24-band UI state.
+pub fn cmd_apply_proq4_ffp_preset(
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    preset_query: &str,
+) -> Result<crate::preset_library::ProQ4PresetStateDto, String> {
+    crate::preset_library::apply_proq4_preset(state, track_idx, slot_idx, preset_query)
+}
+
+/// Applies a real oeksound Soothe3 `.preset` JSON (`68` bundled presets) and returns the structured UI state.
+pub fn cmd_apply_soothe3_factory_preset(
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    preset_query: &str,
+) -> Result<crate::preset_library::Soothe3PresetStateDto, String> {
+    crate::preset_library::apply_soothe3_preset(state, track_idx, slot_idx, preset_query)
+}
+
+/// Loads a real iZotope Ozone 12 Genre Target Curve (`36` bundled genres) or Global XML preset (`111` bundled XMLs).
+pub fn cmd_load_ozone12_genre_or_xml_preset(
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    query: &str,
+    is_xml_preset: bool,
+) -> Result<crate::preset_library::Ozone12AssistantPresetDto, String> {
+    if is_xml_preset {
+        crate::preset_library::load_ozone12_global_xml_preset(state, track_idx, slot_idx, query)
+    } else {
+        crate::preset_library::load_ozone12_genre_preset(state, track_idx, slot_idx, query)
+    }
+}
+
+/// Runs the iZotope Ozone 12 AI Master Assistant Auto-Match using `GenreCnnClassifier` (`gparamsBN8.0.npz`)
+/// and `InstrumentCnnClassifier` (`instrument_classifier_params.npz`).
+pub fn cmd_run_ozone12_ai_master_assistant(
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    mel_80: Option<Vec<f32>>,
+) -> Result<crate::preset_library::Ozone12AssistantPresetDto, String> {
+    crate::preset_library::run_ozone12_master_assistant(state, track_idx, slot_idx, mel_80)
+}
+
+/// Loads a real FL Studio 26 `.fsc` Piano Roll score into `MixerEngine`.
+pub fn cmd_load_fl26_score(
+    engine: &mut daw_core_graph::MixerEngine,
+    score_query: &str,
+    target_ppq: u32,
+) -> Result<crate::project_state::PianoRollPatternDto, String> {
+    crate::preset_library::load_fl26_score_preset(engine, score_query, target_ppq)
+}
+
+/// Loads a real FL Studio 26 `.wav` studio sample kit (`808`, `909`, `MA Skipper Snare`, `SYM_STR_C_2`).
+pub fn cmd_load_fl26_sample_kit(
+    kit_query: &str,
+) -> Result<crate::preset_library::Fl26SampleKitDto, String> {
+    crate::preset_library::load_fl26_sample_kit(kit_query)
+}
+
+/// Loads and applies a real FL Studio 26 `.fst` native FX preset (`Maximus`, `Emphasis`, `Fruity Limiter`, etc.).
+pub fn cmd_load_fl26_fx_preset(
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    preset_query: &str,
+) -> Result<crate::preset_library::Fl26FxPresetDto, String> {
+    crate::preset_library::load_fl26_fx_preset(state, track_idx, slot_idx, preset_query)
+}
+
+/// Loads a real UVR5 model profile (`MDX23C`, `MDX-Net`, `HTDemucs4`, `VR-Arch 4band_v3_sn`) from `assets/uvr5/`.
+pub fn cmd_load_uvr5_model_profile(
+    profile_query: &str,
+) -> Result<crate::preset_library::Uvr5ModelProfileDto, String> {
+    crate::preset_library::load_uvr5_model_profile(profile_query)
+}
+
+

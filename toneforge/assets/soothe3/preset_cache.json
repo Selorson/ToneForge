@@ -1,0 +1,349 @@
+{
+    "entries": [
+        {
+            "idx": 0,
+            "id": "Factory default-factory",
+            "display_name": "Factory default"
+        },
+        {
+            "idx": 1,
+            "id": "Bandpass-factory",
+            "display_name": "Bandpass"
+        },
+        {
+            "idx": 2,
+            "id": "Detail extractor-factory",
+            "display_name": "Detail extractor"
+        },
+        {
+            "idx": 3,
+            "id": "Flat start-factory",
+            "display_name": "Flat start"
+        },
+        {
+            "idx": 4,
+            "id": "General purpose de-harsher-factory",
+            "display_name": "General purpose de-harsher"
+        },
+        {
+            "idx": 5,
+            "id": "Bass de-honk-factory",
+            "display_name": "Bass de-honk"
+        },
+        {
+            "idx": 6,
+            "id": "Double bass tamer-factory",
+            "display_name": "Double bass tamer"
+        },
+        {
+            "idx": 7,
+            "id": "Even low-end-factory",
+            "display_name": "Even low-end"
+        },
+        {
+            "idx": 8,
+            "id": "Remove mud from electric bass-factory",
+            "display_name": "Remove mud from electric bass"
+        },
+        {
+            "idx": 9,
+            "id": "Resonant bass cab-factory",
+            "display_name": "Resonant bass cab"
+        },
+        {
+            "idx": 10,
+            "id": "Calmer percussion-factory",
+            "display_name": "Calmer percussion"
+        },
+        {
+            "idx": 11,
+            "id": "Dampen ringy snare-factory",
+            "display_name": "Dampen ringy snare"
+        },
+        {
+            "idx": 12,
+            "id": "Drum bus smoother-factory",
+            "display_name": "Drum bus smoother"
+        },
+        {
+            "idx": 13,
+            "id": "Modern cymbal wash-factory",
+            "display_name": "Modern cymbal wash"
+        },
+        {
+            "idx": 14,
+            "id": "Tame cymbals from rooms-factory",
+            "display_name": "Tame cymbals from rooms"
+        },
+        {
+            "idx": 15,
+            "id": "Tom mic cymbal removal-factory",
+            "display_name": "Tom mic cymbal removal"
+        },
+        {
+            "idx": 16,
+            "id": "Acoustic balancer-factory",
+            "display_name": "Acoustic balancer"
+        },
+        {
+            "idx": 17,
+            "id": "De-boom acoustic guitar-factory",
+            "display_name": "De-boom acoustic guitar"
+        },
+        {
+            "idx": 18,
+            "id": "General guitar harshness-factory",
+            "display_name": "General guitar harshness"
+        },
+        {
+            "idx": 19,
+            "id": "Guitar bus tonal balancing-factory",
+            "display_name": "Guitar bus tonal balancing"
+        },
+        {
+            "idx": 20,
+            "id": "Metal chug tamer-factory",
+            "display_name": "Metal chug tamer"
+        },
+        {
+            "idx": 21,
+            "id": "Remove mud from guitars-factory",
+            "display_name": "Remove mud from guitars"
+        },
+        {
+            "idx": 22,
+            "id": "Tame the V30-factory",
+            "display_name": "Tame the V30"
+        },
+        {
+            "idx": 23,
+            "id": "Warm up that acoustic-factory",
+            "display_name": "Warm up that acoustic"
+        },
+        {
+            "idx": 24,
+            "id": "Weird formants on acoustic-factory",
+            "display_name": "Weird formants on acoustic"
+        },
+        {
+            "idx": 25,
+            "id": "Make synths wider-factory",
+            "display_name": "Make synths wider"
+        },
+        {
+            "idx": 26,
+            "id": "Make the piano harder-factory",
+            "display_name": "Make the piano harder"
+        },
+        {
+            "idx": 27,
+            "id": "Piano balancer-factory",
+            "display_name": "Piano balancer"
+        },
+        {
+            "idx": 28,
+            "id": "Push back pads-factory",
+            "display_name": "Push back pads"
+        },
+        {
+            "idx": 29,
+            "id": "Soften spikes on the piano-factory",
+            "display_name": "Soften spikes on the piano"
+        },
+        {
+            "idx": 30,
+            "id": "Supersaw softer & wider-factory",
+            "display_name": "Supersaw softer & wider"
+        },
+        {
+            "idx": 31,
+            "id": "Finesse digital tops-factory",
+            "display_name": "Finesse digital tops"
+        },
+        {
+            "idx": 32,
+            "id": "Pre-limiter 100Hz taming-factory",
+            "display_name": "Pre-limiter 100Hz taming"
+        },
+        {
+            "idx": 33,
+            "id": "Sub balancer-factory",
+            "display_name": "Sub balancer"
+        },
+        {
+            "idx": 34,
+            "id": "That Grammy balance preset-factory",
+            "display_name": "That Grammy balance preset"
+        },
+        {
+            "idx": 35,
+            "id": "The master dynEQ-factory",
+            "display_name": "The master dynEQ"
+        },
+        {
+            "idx": 36,
+            "id": "Even out gently-factory",
+            "display_name": "Even out gently"
+        },
+        {
+            "idx": 37,
+            "id": "Gentle balancing-factory",
+            "display_name": "Gentle balancing"
+        },
+        {
+            "idx": 38,
+            "id": "Lo-mid control-factory",
+            "display_name": "Lo-mid control"
+        },
+        {
+            "idx": 39,
+            "id": "Producer safe 2bus-factory",
+            "display_name": "Producer safe 2bus"
+        },
+        {
+            "idx": 40,
+            "id": "Tame mix harshness-factory",
+            "display_name": "Tame mix harshness"
+        },
+        {
+            "idx": 41,
+            "id": "Brass balancer-factory",
+            "display_name": "Brass balancer"
+        },
+        {
+            "idx": 42,
+            "id": "Choir high mid balancer-factory",
+            "display_name": "Choir high mid balancer"
+        },
+        {
+            "idx": 43,
+            "id": "De-honk cello-factory",
+            "display_name": "De-honk cello"
+        },
+        {
+            "idx": 44,
+            "id": "Orchestral high mid control-factory",
+            "display_name": "Orchestral high mid control"
+        },
+        {
+            "idx": 45,
+            "id": "Soften harsh violin-factory",
+            "display_name": "Soften harsh violin"
+        },
+        {
+            "idx": 46,
+            "id": "Warmer strings-factory",
+            "display_name": "Warmer strings"
+        },
+        {
+            "idx": 47,
+            "id": "Woodwinds tonal balance-factory",
+            "display_name": "Woodwinds tonal balance"
+        },
+        {
+            "idx": 48,
+            "id": "Bass ducker-factory",
+            "display_name": "Bass ducker"
+        },
+        {
+            "idx": 49,
+            "id": "General track spacing-factory",
+            "display_name": "General track spacing"
+        },
+        {
+            "idx": 50,
+            "id": "Kick cuts through-factory",
+            "display_name": "Kick cuts through"
+        },
+        {
+            "idx": 51,
+            "id": "Make way for lead vocal-factory",
+            "display_name": "Make way for lead vocal"
+        },
+        {
+            "idx": 52,
+            "id": "Vocoder-ish-factory",
+            "display_name": "Vocoder-ish"
+        },
+        {
+            "idx": 53,
+            "id": "Beat mangler-factory",
+            "display_name": "Beat mangler"
+        },
+        {
+            "idx": 54,
+            "id": "Formants-factory",
+            "display_name": "Formants"
+        },
+        {
+            "idx": 55,
+            "id": "Ghostly bandpass-factory",
+            "display_name": "Ghostly bandpass"
+        },
+        {
+            "idx": 56,
+            "id": "Ghostly low pass filter-factory",
+            "display_name": "Ghostly low pass filter"
+        },
+        {
+            "idx": 57,
+            "id": "Isolate harmonics-factory",
+            "display_name": "Isolate harmonics"
+        },
+        {
+            "idx": 58,
+            "id": "Underwater-factory",
+            "display_name": "Underwater"
+        },
+        {
+            "idx": 59,
+            "id": "General de-ess-factory",
+            "display_name": "General de-ess"
+        },
+        {
+            "idx": 60,
+            "id": "Less boom-factory",
+            "display_name": "Less boom"
+        },
+        {
+            "idx": 61,
+            "id": "Phone recording rescue-factory",
+            "display_name": "Phone recording rescue"
+        },
+        {
+            "idx": 62,
+            "id": "Proximity control for dialog-factory",
+            "display_name": "Proximity control for dialog"
+        },
+        {
+            "idx": 63,
+            "id": "Resonant ess control-factory",
+            "display_name": "Resonant ess control"
+        },
+        {
+            "idx": 64,
+            "id": "SM7 Vocals-factory",
+            "display_name": "SM7 Vocals"
+        },
+        {
+            "idx": 65,
+            "id": "Tame over-edgy vocals-factory",
+            "display_name": "Tame over-edgy vocals"
+        },
+        {
+            "idx": 66,
+            "id": "Vocal group therapy-factory",
+            "display_name": "Vocal group therapy"
+        },
+        {
+            "idx": 67,
+            "id": "Vocal start-factory",
+            "display_name": "Vocal start"
+        },
+        {
+            "idx": 68,
+            "id": "Vocal tracking-factory",
+            "display_name": "Vocal tracking"
+        }
+    ]
+}

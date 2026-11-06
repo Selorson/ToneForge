@@ -504,4 +504,171 @@ fn test_ozone12_chain_dynamic_maximizer_bypass_latency_and_full_telemetry_export
     );
 }
 
+#[test]
+fn test_sliding_max_heap_segment_tree_exact_sliding_window_peak() {
+    use dsp_ozone12_mastering::SlidingMaxHeap;
+
+    let window_len = 64usize;
+    let mut heap = SlidingMaxHeap::new(window_len);
+    assert_eq!(heap.window_len(), window_len);
+
+    // Deterministic pseudo-random impulse/transient sequence with varying peaks and silence
+    let mut history = Vec::new();
+    for i in 0..500usize {
+        let val = if i % 73 == 0 {
+            1.85
+        } else if i % 29 == 0 {
+            0.92
+        } else {
+            ((i as f32 * 0.137).sin().abs()) * 0.45
+        };
+        history.push(val);
+        let tree_max = heap.push_and_query_max(val);
+
+        let start = history.len().saturating_sub(window_len);
+        let expected_max = history[start..]
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max);
+        assert!(
+            (tree_max - expected_max).abs() < 1e-6,
+            "SlidingMaxHeap mismatch at step {}: got {}, expected {}",
+            i,
+            tree_max,
+            expected_max
+        );
+    }
+
+    // Verify clear() resets all nodes to 0.0 and NaN cannot poison the segment tree
+    heap.clear();
+    assert_eq!(heap.push_and_query_max(0.125), 0.125);
+    assert_eq!(heap.push_and_query_max(f32::NAN), 0.125);
+    assert!(heap.push_and_query_max(0.5).is_finite());
+    assert_eq!(heap.push_and_query_max(0.25), 0.5);
+}
+
+#[test]
+fn test_low_end_focus_punchy_vs_smooth_and_spectral_shaper_in_master_chain() {
+    use dsp_ozone12_mastering::{
+        LowEndFocusMode, LowEndFocusModule, SpectralShaperModule, SpectralShaperToneMode,
+    };
+
+    let sr = 48_000.0;
+    let mut lef_punchy = LowEndFocusModule::new(sr);
+    lef_punchy.set_frequency_range_hz(20.0, 220.0);
+    lef_punchy.mode = LowEndFocusMode::Punchy;
+    lef_punchy.contrast_percent = 75.0;
+
+    let mut lef_smooth = LowEndFocusModule::new(sr);
+    lef_smooth.set_frequency_range_hz(20.0, 220.0);
+    lef_smooth.mode = LowEndFocusMode::Smooth;
+    lef_smooth.contrast_percent = 75.0;
+
+    // Synthesize a 60 Hz kick drum burst (transient in first 400 samples, decay after)
+    let mut kick_punchy: Vec<StereoFrame> = (0..1024)
+        .map(|n| {
+            let env = if n < 256 {
+                1.0
+            } else {
+                (-(n as f64 - 256.0) / 180.0).exp()
+            };
+            let s = (0.75 * env * (2.0 * PI * 60.0 * (n as f64) / sr).sin()) as f32;
+            [s, s]
+        })
+        .collect();
+    let mut kick_smooth = kick_punchy.clone();
+
+    lef_punchy.process_frames_in_place(&mut kick_punchy);
+    lef_smooth.process_frames_in_place(&mut kick_smooth);
+
+    let peak_punchy = kick_punchy[..256]
+        .iter()
+        .fold(0.0f32, |m, f| m.max(f[0].abs()));
+    let peak_smooth = kick_smooth[..256]
+        .iter()
+        .fold(0.0f32, |m, f| m.max(f[0].abs()));
+    assert!(
+        peak_punchy > peak_smooth,
+        "LowEndFocus Punchy mode ({}) must accentuate transient attack more than Smooth mode ({})",
+        peak_punchy,
+        peak_smooth
+    );
+
+    // Verify cutoff_low_hz action region: setting [100.0, 250.0] Hz focuses +6 dB gain on 160 Hz much more than 28 Hz sub-bass
+    let mut lef_band = LowEndFocusModule::new(sr);
+    lef_band.set_frequency_range_hz(100.0, 250.0);
+    lef_band.contrast_percent = 0.0;
+    lef_band.gain_db = 6.0;
+    let mut sub_28: Vec<StereoFrame> = (0..2048)
+        .map(|n| {
+            let s = (0.4 * (2.0 * PI * 28.0 * (n as f64) / sr).sin()) as f32;
+            [s, s]
+        })
+        .collect();
+    let mut mid_160: Vec<StereoFrame> = (0..2048)
+        .map(|n| {
+            let s = (0.4 * (2.0 * PI * 160.0 * (n as f64) / sr).sin()) as f32;
+            [s, s]
+        })
+        .collect();
+    lef_band.process_frames_in_place(&mut sub_28);
+    lef_band.reset_internal();
+    lef_band.process_frames_in_place(&mut mid_160);
+    let rms_28: f32 = sub_28[512..].iter().map(|f| f[0] * f[0]).sum::<f32>();
+    let rms_160: f32 = mid_160[512..].iter().map(|f| f[0] * f[0]).sum::<f32>();
+    assert!(
+        rms_160 > rms_28 * 1.8,
+        "In-band 160 Hz energy ({}) must be boosted significantly more than out-of-band 28 Hz ({})",
+        rms_160,
+        rms_28
+    );
+
+    // Verify SpectralShaperModule tames a harsh 4.2 kHz resonance even within a single 512-sample block
+    let mut shaper = SpectralShaperModule::new(sr);
+    shaper.tone_mode = SpectralShaperToneMode::Heavy;
+    shaper.threshold_db = -24.0;
+    shaper.ceiling_reduction_db = -12.0;
+    shaper.set_center_hz(4200.0);
+
+    let mut single_block: Vec<StereoFrame> = (0..512)
+        .map(|n| {
+            let s = (0.65 * (2.0 * PI * 4200.0 * (n as f64) / sr).sin()) as f32;
+            [s, s]
+        })
+        .collect();
+    let in_energy: f32 = single_block[128..].iter().map(|f| f[0] * f[0]).sum();
+    shaper.process_frames_in_place(&mut single_block);
+    let out_energy: f32 = single_block[128..].iter().map(|f| f[0] * f[0]).sum();
+    assert!(
+        out_energy < in_energy * 0.75,
+        "SpectralShaperModule must attenuate harsh 4.2 kHz resonance within the first block (in={}, out={})",
+        in_energy,
+        out_energy
+    );
+    assert!(
+        shaper.last_reduction_db() < -1.5,
+        "SpectralShaperModule should dynamically attenuate 4.2 kHz resonance, got {} dB",
+        shaper.last_reduction_db()
+    );
+
+    // Verify Ozone12MasterChain keeps LowEndFocus & SpectralShaper disabled by default,
+    // and can enable them via normalized parameters 70..=79
+    let mut chain = Ozone12MasterChain::new(sr);
+    assert!(!chain.low_end_focus.enabled);
+    assert!(!chain.spectral_shaper.enabled);
+
+    chain.set_parameter_normalized(70, 1.0); // enable low_end_focus
+    chain.set_parameter_normalized(72, 0.85); // contrast
+    chain.set_parameter_normalized(75, 1.0); // enable spectral_shaper
+    chain.set_parameter_normalized(76, 0.5); // threshold_db
+    assert!(chain.low_end_focus.enabled);
+    assert!(chain.spectral_shaper.enabled);
+
+    let ctx = ProcessContext::default();
+    let mut master_buf = kick_punchy[..256].to_vec();
+    chain.process_slice(&ctx, &mut master_buf, None, &mut []);
+    assert!(master_buf.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
+}
+
+
 

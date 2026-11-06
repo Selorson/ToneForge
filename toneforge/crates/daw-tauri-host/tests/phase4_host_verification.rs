@@ -899,4 +899,84 @@ assert.ok(metersWgsl.includes('exciter_drive_gr: array<f32, 248>'));
     );
 }
 
+#[test]
+fn test_blueprint_section_5_5_wgsl_shaders_and_csg_compositor() {
+    use daw_tauri_host::{
+        CsgOperation, CurveUniforms, HeatmapUniforms, SdfPrimitive, SdfPrimitiveKind, csg_combine,
+        eval_sdf_primitive,
+    };
+
+    assert_eq!(std::mem::size_of::<CurveUniforms>(), 4160);
+    assert_eq!(std::mem::size_of::<HeatmapUniforms>(), 32);
+    assert_eq!(std::mem::size_of::<SdfPrimitive>(), 64);
+
+    let pts = [0.5f32; 1024];
+    let cu = CurveUniforms::from_curve_1024(1200.0, 320.0, 0.5, [0.46, 0.82, 0.86, 1.0], &pts);
+    assert!((cu.baseline_y - 0.5).abs() < 1e-6);
+    assert!((cu.ys[255][3] - 0.5).abs() < 1e-6);
+
+    // Verify all 7 SDF Primitives and 4 CSG boolean operations
+    for kind in [
+        SdfPrimitiveKind::RoundedRect,
+        SdfPrimitiveKind::SemiCircleRing,
+        SdfPrimitiveKind::Rect,
+        SdfPrimitiveKind::EllipseNewtonRaphson,
+        SdfPrimitiveKind::MsdfGlyph,
+        SdfPrimitiveKind::SpriteCapsule,
+        SdfPrimitiveKind::Squircle,
+    ] {
+        let d_center = eval_sdf_primitive([0.0, 0.0], [24.0, 18.0], [6.0, 4.0, 1.2, 4.0], kind);
+        let d_far = eval_sdf_primitive([100.0, 100.0], [24.0, 18.0], [6.0, 4.0, 1.2, 4.0], kind);
+        assert!(d_center.is_finite() && d_far.is_finite());
+        assert!(d_far > d_center);
+
+        let inst = SdfPrimitive::new(
+            [10.0, 20.0, 48.0, 36.0],
+            [6.0, 4.0, 1.2, 4.0],
+            [0.46, 0.82, 0.86, 1.0],
+            1.5,
+            4.0,
+            0.75,
+            kind,
+            CsgOperation::Union,
+        );
+        assert_eq!(bytemuck::bytes_of(&inst).len(), 64);
+    }
+
+    assert!((csg_combine(-2.0, 3.0, CsgOperation::Union) - (-2.0)).abs() < 1e-6);
+    assert!((csg_combine(-2.0, 3.0, CsgOperation::Intersect) - 3.0).abs() < 1e-6);
+    assert!((csg_combine(-2.0, -5.0, CsgOperation::Subtract) - 5.0).abs() < 1e-6);
+    assert!((csg_combine(-2.0, 3.0, CsgOperation::Replace) - 3.0).abs() < 1e-6);
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+
+    for ui_dir_name in ["ui-svelte-webgpu", "ui-svelte5-wgpu"] {
+        let shaders_dir = workspace_root.join(ui_dir_name).join("src/lib/wgpu/shaders");
+        let curve_wgsl = std::fs::read_to_string(shaders_dir.join("reduction_eq_curve.wgsl"))
+            .expect("read reduction_eq_curve.wgsl");
+        assert!(curve_wgsl.contains("struct CurveUniforms"));
+        assert!(curve_wgsl.contains("ys: array<vec4<f32>, 256>"));
+        assert!(curve_wgsl.contains("fn sample_curve_catmull_rom"));
+
+        let hm_wgsl = std::fs::read_to_string(shaders_dir.join("spectrogram_heatmap.wgsl"))
+            .expect("read spectrogram_heatmap.wgsl");
+        assert!(hm_wgsl.contains("struct HeatmapUniforms"));
+        assert!(hm_wgsl.contains("fn palette_proq4"));
+        assert!(hm_wgsl.contains("fn palette_soothe3"));
+        assert!(hm_wgsl.contains("fn palette_ozone12"));
+
+        let sdf_wgsl = std::fs::read_to_string(shaders_dir.join("sdf_uber_controls.wgsl"))
+            .expect("read sdf_uber_controls.wgsl");
+        assert!(sdf_wgsl.contains("struct SdfPrimitive"));
+        assert!(sdf_wgsl.contains("fn sd_ellipse_nr"));
+        assert!(sdf_wgsl.contains("fn sd_squircle"));
+        assert!(sdf_wgsl.contains("fn csg_combine"));
+    }
+}
+
+
 

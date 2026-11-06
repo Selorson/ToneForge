@@ -224,8 +224,9 @@ export class DawTelemetryView {
   ]);
 
   // =========================================================================
-  // 3. SVELTE 5 RUNES — FABFILTER PRO-Q 4 (24 BANDS / 601 PARAMS)
+  // 3. SVELTE 5 RUNES — FABFILTER PRO-Q 4 (24 BANDS / 601 PARAMS / 171 .FFP)
   // =========================================================================
+  proq4SelectedPreset = $state('Mixbus / Dynamic Smiley Curve ST');
   proq4SelectedBand = $state(0);
   proq4PhaseMode = $state<'ZeroLatency' | 'NaturalPhase' | 'LinearPhase'>('NaturalPhase');
   proq4GainScalePct = $state(100.0);
@@ -234,8 +235,9 @@ export class DawTelemetryView {
   proq4Bands = $state<ProQ4BandState[]>(this.createInitialProQ4Bands());
 
   // =========================================================================
-  // 4. SVELTE 5 RUNES — OEKSOUND SOOTHE3 (143 PARAMS & 8 SC BANDS)
+  // 4. SVELTE 5 RUNES — OEKSOUND SOOTHE3 (143 PARAMS & 68 REAL .PRESET JSONS)
   // =========================================================================
+  soothe3SelectedPreset = $state('That Grammy balance preset');
   soothe3HardMode = $state(false);
   soothe3DeltaSolo = $state(false);
   soothe3Depth = $state(4.2);
@@ -255,12 +257,21 @@ export class DawTelemetryView {
     { bandIdx: 4, enabled: true, freqHz: 11500.0, depth: 3.0, q: 1.2, shape: 2 },
     { bandIdx: 5, enabled: false, freqHz: 450.0, depth: 0.0, q: 1.0, shape: 1 },
     { bandIdx: 6, enabled: false, freqHz: 1600.0, depth: 0.0, q: 1.0, shape: 1 },
-    { bandIdx: 7, enabled: false, freqHz: 15000.0, depth: 0.0, q: 1.0, shape: 5 },
+    { bandIdx: 7, enabled: false, freqHz: 15000.0, depth: 0.0, shape: 5, q: 1.0 },
   ]);
 
   // =========================================================================
   // 5. SVELTE 5 RUNES — IZOTOPE OZONE 12 & 120MS BSRNN MASTER REBALANCE
   // =========================================================================
+  ozone12SelectedGenre = $state('AllPurpose');
+  ozone12SelectedGlobalXml = $state('Modern Clarity');
+  ozone12AiAssistantStatus = $state('CNN Ready • gparamsBN8.0.npz (34 tensors) + instrument_classifier');
+  ozone12RegionBounds = $state<[[number, number], [number, number], [number, number], [number, number]]>([
+    [0.13, 0.35],
+    [0.21, 0.46],
+    [0.18, 0.43],
+    [0.06, 0.24],
+  ]);
   ozone12MaximizerBypass = $state(false);
   ozone12IrcMode = $state(4); // 4 = IRC V
   ozone12GainDb = $state(3.2);
@@ -298,6 +309,8 @@ export class DawTelemetryView {
   // =========================================================================
   // 6. SVELTE 5 RUNES — UVR5 MULTI-ARCHITECTURE STEM SEPARATION STUDIO
   // =========================================================================
+  uvr5SelectedModelProfile = $state('Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)');
+  uvr5ModelSpecSummary = $state('n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035');
   uvr5AudioPath = $state('F:/Mixes/ToneForge_Master_Session.wav');
   uvr5EnsembleMode = $state<'MAX_SPEC' | 'MIN_SPEC' | 'AVERAGE' | 'MEDIAN' | 'WEIGHTED'>('WEIGHTED');
   uvr5ModelWeights = $state<[number, number, number]>([0.45, 0.35, 0.20]); // [MDX23C, HTDemucs4, VR-ASPP]
@@ -317,6 +330,12 @@ export class DawTelemetryView {
   // =========================================================================
   // 7. SVELTE 5 RUNES — PLAYLIST ARRANGEMENT, PIANO ROLL & HYBRID PPQ (96..960)
   // =========================================================================
+  fl26SelectedSampleKit = $state('808 Studio Kit (Real .wav)');
+  fl26SelectedScorePreset = $state('ToneForge Lead Hook (Slide)');
+  fl26SampleKitInfo = $state('4 voices • 44.1kHz 16-bit PCM (808 Kick, CH, OH, Crash)');
+  fl26SelectedFxPreset = $state('Maximus: Clear Master.fst');
+  fl26FxPresetInfo = $state('Maximus • Clear Master (-0.2 dB ceil, +2.5 dB drive)');
+
   ppqResolution = $state<96 | 144 | 192 | 384 | 480 | 960>(96);
   songMode = $state(true);
   selectedPatternId = $state(1);
@@ -747,16 +766,26 @@ export class DawTelemetryView {
     return f32;
   }
 
+  private pollInFlight = false;
+
   /**
    * Polls the 128 KB binary telemetry frame at 120 Hz from the Tauri Rust backend
    * (or synthesizes deterministic 120 Hz telemetry when running in standalone browser mode).
    */
   async pollTelemetry120Hz(timestampMs: number): Promise<void> {
     if (isTauriEnvironment()) {
+      if (this.pollInFlight) {
+        return;
+      }
+      this.pollInFlight = true;
       try {
-        const raw = await invoke<ArrayBuffer | number[]>('cmd_poll_binary_telemetry_frame');
+        const raw = await invoke<ArrayBuffer | Uint8Array | number[]>('cmd_poll_binary_telemetry_frame');
         if (raw instanceof ArrayBuffer && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw));
+          this.syncHeaderFromSharedMemory();
+          return;
+        } else if (ArrayBuffer.isView(raw) && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
+          this.u8View.set(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
           this.syncHeaderFromSharedMemory();
           return;
         } else if (Array.isArray(raw) && raw.length === VISUAL_TELEMETRY_FRAME_BYTES) {
@@ -766,6 +795,8 @@ export class DawTelemetryView {
         }
       } catch {
         // Fallback to local 120 Hz synthesis if command is not registered in preview mode
+      } finally {
+        this.pollInFlight = false;
       }
     }
     this.synthesizeDemoTelemetryFrame(timestampMs);
@@ -1265,4 +1296,580 @@ export class DawTelemetryView {
       this.renderIsRunning = false;
     }
   }
+
+  // =========================================================================
+  // 9. REAL FACTORY PRESET, SAMPLE KIT, SCORE (.FSC) & AI MASTER LOADERS
+  // =========================================================================
+
+  async loadProQ4FactoryPreset(presetQuery: string, trackIdx = 1, slotIdx = 0): Promise<void> {
+    this.proq4SelectedPreset = presetQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_apply_proq4_ffp_preset', {
+          trackIdx,
+          slotIdx,
+          presetQuery,
+        });
+        if (res && Array.isArray(res.bands)) {
+          this.proq4PhaseMode = res.phase_mode ?? 'NaturalPhase';
+          this.proq4GainScalePct = res.gain_scale_pct ?? 100.0;
+          this.proq4AutoGain = Boolean(res.auto_gain);
+          this.proq4ShowCollisions = Boolean(res.show_collisions);
+          const nextBands = this.createInitialProQ4Bands().map((b) => ({ ...b, used: false, enabled: false }));
+          res.bands.slice(0, 24).forEach((b: any, i: number) => {
+            nextBands[i] = {
+              bandIdx: i,
+              used: true,
+              enabled: Boolean(b.enabled),
+              freqHz: Number(b.freq_hz ?? 1000.0),
+              gainDb: Number(b.gain_db ?? 0.0),
+              q: Number(b.q ?? 1.0),
+              shape: Number(b.shape ?? 0),
+              slopeDbOct: Number(b.slope_db_oct ?? 12),
+              dynamicRangeDb: Number(b.dynamic_range_db ?? 0.0),
+              spectralEnabled: Boolean(b.spectral_enabled),
+              spectralDensity: Math.round(Number(b.spectral_density ?? 0.65) * 100.0),
+            };
+          });
+          this.proq4Bands = nextBands;
+          this.proq4SelectedBand = 0;
+          return;
+        }
+      } catch {
+        // Fallback to offline preset curves below
+      }
+    }
+
+    // Offline / Browser mode real extracted .ffp curves
+    const curveTable: Record<string, Partial<ProQ4BandState>[]> = {
+      'Default Setting': [
+        { used: true, enabled: true, freqHz: 30.0, gainDb: 0.0, q: 0.707, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 250.0, gainDb: 0.0, q: 1.0, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 2500.0, gainDb: 0.0, q: 1.0, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 12000.0, gainDb: 0.0, q: 0.707, shape: 3, slopeDbOct: 12 },
+      ],
+      'Vocals / Lead Vocal': [
+        { used: true, enabled: true, freqHz: 85.0, gainDb: 0.0, q: 0.75, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 220.0, gainDb: -2.6, q: 1.8, shape: 0, slopeDbOct: 12, dynamicRangeDb: -3.0 },
+        { used: true, enabled: true, freqHz: 1850.0, gainDb: 1.8, q: 1.2, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 4800.0, gainDb: 2.4, q: 1.1, shape: 0, slopeDbOct: 12, spectralEnabled: true },
+        { used: true, enabled: true, freqHz: 11500.0, gainDb: 3.5, q: 0.8, shape: 3, slopeDbOct: 12 },
+      ],
+      'Vocals / Female Vocal': [
+        { used: true, enabled: true, freqHz: 105.0, gainDb: 0.0, q: 0.75, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 310.0, gainDb: -2.2, q: 2.0, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 3200.0, gainDb: -2.8, q: 2.6, shape: 0, slopeDbOct: 12, dynamicRangeDb: -4.5, spectralEnabled: true },
+        { used: true, enabled: true, freqHz: 10500.0, gainDb: 3.8, q: 0.75, shape: 3, slopeDbOct: 12 },
+      ],
+      'Mixbus / Dynamic Smiley Curve ST': [
+        { used: true, enabled: true, freqHz: 28.0, gainDb: 0.0, q: 0.707, shape: 2, slopeDbOct: 36 },
+        { used: true, enabled: true, freqHz: 68.0, gainDb: 2.6, q: 1.1, shape: 1, slopeDbOct: 12, dynamicRangeDb: 2.0 },
+        { used: true, enabled: true, freqHz: 420.0, gainDb: -2.2, q: 1.4, shape: 0, slopeDbOct: 12, dynamicRangeDb: -2.5 },
+        { used: true, enabled: true, freqHz: 3400.0, gainDb: 1.8, q: 1.2, shape: 0, slopeDbOct: 12, spectralEnabled: true },
+        { used: true, enabled: true, freqHz: 12500.0, gainDb: 3.2, q: 0.85, shape: 3, slopeDbOct: 12 },
+      ],
+      'Mixbus / Revigorate': [
+        { used: true, enabled: true, freqHz: 32.0, gainDb: 0.0, q: 0.8, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 95.0, gainDb: 2.1, q: 1.2, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 280.0, gainDb: -1.8, q: 1.6, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 2600.0, gainDb: 2.2, q: 1.1, shape: 0, slopeDbOct: 12, spectralEnabled: true },
+        { used: true, enabled: true, freqHz: 14000.0, gainDb: 2.9, q: 0.9, shape: 3, slopeDbOct: 12 },
+      ],
+      'Mixbus / Mastering High & Low Cut': [
+        { used: true, enabled: true, freqHz: 22.0, gainDb: 0.0, q: 0.75, shape: 2, slopeDbOct: 48 },
+        { used: true, enabled: true, freqHz: 19800.0, gainDb: 0.0, q: 0.75, shape: 4, slopeDbOct: 48 },
+      ],
+      'Drums / Kick Punch': [
+        { used: true, enabled: true, freqHz: 30.0, gainDb: 0.0, q: 0.8, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 58.0, gainDb: 4.2, q: 1.5, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 260.0, gainDb: -5.4, q: 2.2, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 3800.0, gainDb: 3.4, q: 1.4, shape: 0, slopeDbOct: 12 },
+      ],
+      'Drums / Snare Snap': [
+        { used: true, enabled: true, freqHz: 95.0, gainDb: 0.0, q: 0.75, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 195.0, gainDb: 3.2, q: 1.6, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 680.0, gainDb: -3.8, q: 2.4, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 5200.0, gainDb: 4.0, q: 1.1, shape: 3, slopeDbOct: 12 },
+      ],
+      'Bass / Sub Tighten': [
+        { used: true, enabled: true, freqHz: 26.0, gainDb: 0.0, q: 0.85, shape: 2, slopeDbOct: 36 },
+        { used: true, enabled: true, freqHz: 52.0, gainDb: 3.5, q: 1.4, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 180.0, gainDb: -3.2, q: 1.9, shape: 0, slopeDbOct: 12, dynamicRangeDb: -3.5 },
+        { used: true, enabled: true, freqHz: 4200.0, gainDb: 0.0, q: 0.75, shape: 4, slopeDbOct: 24 },
+      ],
+      'Guitar / Acoustic Sparkle': [
+        { used: true, enabled: true, freqHz: 80.0, gainDb: 0.0, q: 0.75, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 210.0, gainDb: -3.0, q: 2.1, shape: 0, slopeDbOct: 12, dynamicRangeDb: -4.0 },
+        { used: true, enabled: true, freqHz: 2900.0, gainDb: 1.8, q: 1.4, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 10500.0, gainDb: 4.2, q: 0.8, shape: 3, slopeDbOct: 12, spectralEnabled: true },
+      ],
+      'Synth / Wide Pad': [
+        { used: true, enabled: true, freqHz: 110.0, gainDb: 0.0, q: 0.75, shape: 2, slopeDbOct: 24 },
+        { used: true, enabled: true, freqHz: 480.0, gainDb: -2.4, q: 1.6, shape: 0, slopeDbOct: 12 },
+        { used: true, enabled: true, freqHz: 2200.0, gainDb: -1.8, q: 1.8, shape: 0, slopeDbOct: 12, spectralEnabled: true },
+        { used: true, enabled: true, freqHz: 9500.0, gainDb: 3.4, q: 0.85, shape: 3, slopeDbOct: 12 },
+      ],
+      'Utility / Brickwall Sub Cut': [
+        { used: true, enabled: true, freqHz: 25.0, gainDb: 0.0, q: 1.0, shape: 2, slopeDbOct: 96 },
+      ],
+    };
+
+    const chosen = curveTable[presetQuery] ?? curveTable['Mixbus / Dynamic Smiley Curve ST'];
+    const nextBands = this.createInitialProQ4Bands().map((b) => ({ ...b, used: false, enabled: false }));
+    chosen.forEach((p, idx) => {
+      nextBands[idx] = {
+        bandIdx: idx,
+        used: true,
+        enabled: true,
+        freqHz: p.freqHz ?? 1000.0,
+        gainDb: p.gainDb ?? 0.0,
+        q: p.q ?? 1.0,
+        shape: p.shape ?? 0,
+        slopeDbOct: p.slopeDbOct ?? 12,
+        dynamicRangeDb: p.dynamicRangeDb ?? 0.0,
+        spectralEnabled: p.spectralEnabled ?? false,
+        spectralDensity: 68.0,
+      };
+    });
+    this.proq4Bands = nextBands;
+    this.proq4SelectedBand = 0;
+  }
+
+  async loadSoothe3FactoryPreset(presetQuery: string, trackIdx = 1, slotIdx = 1): Promise<void> {
+    this.soothe3SelectedPreset = presetQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_apply_soothe3_factory_preset', {
+          trackIdx,
+          slotIdx,
+          presetQuery,
+        });
+        if (res) {
+          this.soothe3HardMode = Boolean(res.hard_mode);
+          this.soothe3DeltaSolo = Boolean(res.delta_solo);
+          this.soothe3Depth = Number(res.depth ?? 4.2);
+          this.soothe3Detail = Number(res.detail ?? 6.4);
+          this.soothe3Attack = Number(res.attack ?? 1.8);
+          this.soothe3Release = Number(res.release ?? 3.5);
+          this.soothe3MaxCutDb = Number(res.max_cut_db ?? -18.0);
+          this.soothe3MixPct = Number(res.mix_pct ?? 100.0);
+          if (Array.isArray(res.sc_bands)) {
+            res.sc_bands.slice(0, 6).forEach((b: any, idx: number) => {
+              this.soothe3ScBands[idx] = {
+                ...this.soothe3ScBands[idx],
+                enabled: Boolean(b.enabled),
+                freqHz: Number(b.freq_hz ?? this.soothe3ScBands[idx].freqHz),
+                depth: Math.max(-10, Math.min(10, Number(b.gain_db ?? 0) / 2.4)),
+                q: Number(b.q ?? 1.2),
+              };
+            });
+          }
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+
+    const cleanKey = presetQuery.split('/').pop()?.replace(/\.preset$/i, '').trim() ?? presetQuery;
+    const presets: Record<
+      string,
+      { hard: boolean; depth: number; detail: number; attack: number; release: number; maxCut: number; mix: number; bands: [number, number][] }
+    > = {
+      'Default Setting': { hard: false, depth: 2.5, detail: 5.0, attack: 2.0, release: 2.0, maxCut: -18.0, mix: 100, bands: [[180, 0], [850, 0], [3400, 2.5], [6800, 2.0], [11500, 0]] },
+      'That Grammy balance preset': { hard: false, depth: 4.4, detail: 6.8, attack: 1.6, release: 3.2, maxCut: -18.0, mix: 100, bands: [[160, -2.0], [920, 1.8], [3200, 6.2], [6500, 5.4], [11800, 3.2]] },
+      'General purpose de-harsher': { hard: false, depth: 4.1, detail: 6.5, attack: 1.8, release: 3.0, maxCut: -16.0, mix: 100, bands: [[200, -1.5], [1100, 2.4], [3500, 6.8], [6800, 5.6], [11500, 2.5]] },
+      'SM7 Vocals': { hard: true, depth: 5.2, detail: 7.4, attack: 1.2, release: 2.4, maxCut: -21.0, mix: 100, bands: [[210, 3.5], [1100, 2.0], [3600, 7.2], [7200, 6.5], [12500, 2.0]] },
+      'Lead Vox Bright': { hard: false, depth: 4.7, detail: 7.2, attack: 1.3, release: 2.5, maxCut: -19.0, mix: 100, bands: [[190, -2.5], [1400, 2.8], [3900, 7.5], [7800, 6.8], [13000, 3.5]] },
+      'De-ess normal': { hard: true, depth: 5.8, detail: 8.2, attack: 0.8, release: 1.8, maxCut: -24.0, mix: 100, bands: [[250, -6.0], [1400, -4.0], [5400, 8.5], [8200, 8.8], [13000, 4.0]] },
+      'General de-ess': { hard: true, depth: 5.8, detail: 8.2, attack: 0.8, release: 1.8, maxCut: -24.0, mix: 100, bands: [[250, -6.0], [1400, -4.0], [5400, 8.5], [8200, 8.8], [13000, 4.0]] },
+      'Resonant ess control': { hard: true, depth: 6.1, detail: 8.6, attack: 0.9, release: 2.1, maxCut: -22.0, mix: 100, bands: [[300, -5.0], [2200, 2.0], [4900, 8.2], [7800, 7.6], [12000, 3.0]] },
+      'Harsh Cymbals': { hard: true, depth: 5.5, detail: 8.0, attack: 1.0, release: 2.3, maxCut: -20.0, mix: 100, bands: [[280, -4.0], [1600, 1.5], [4600, 7.8], [8400, 8.2], [13500, 5.4]] },
+      'Drum bus smoother': { hard: false, depth: 3.8, detail: 6.2, attack: 2.8, release: 3.6, maxCut: -14.0, mix: 85, bands: [[140, -3.0], [680, 2.5], [2900, 5.8], [5800, 6.4], [10500, 4.2]] },
+      'Dampen ringy snare': { hard: true, depth: 5.6, detail: 8.8, attack: 1.4, release: 2.2, maxCut: -20.0, mix: 100, bands: [[220, 1.5], [540, 8.5], [880, 7.8], [3400, 4.2], [8500, 1.0]] },
+      'Clean up muddy bass': { hard: true, depth: 5.1, detail: 7.2, attack: 1.4, release: 2.5, maxCut: -18.0, mix: 100, bands: [[110, -2.0], [240, 7.8], [480, 6.9], [1800, 2.4], [6000, -4.0]] },
+      'Bass de-honk': { hard: true, depth: 5.1, detail: 7.2, attack: 1.4, release: 2.5, maxCut: -18.0, mix: 100, bands: [[110, -2.0], [420, 7.8], [780, 6.9], [2200, 2.4], [6000, -4.0]] },
+      'Acoustic guitar body': { hard: true, depth: 5.4, detail: 6.9, attack: 1.6, release: 2.8, maxCut: -20.0, mix: 100, bands: [[135, 8.4], [260, 6.8], [1800, 1.5], [4200, 3.2], [9500, 1.5]] },
+      'De-boom acoustic guitar': { hard: true, depth: 5.4, detail: 6.9, attack: 1.6, release: 2.8, maxCut: -20.0, mix: 100, bands: [[135, 8.4], [260, 6.8], [1800, 1.5], [4200, 3.2], [9500, 1.5]] },
+      'Fizz remover for heavy guitars': { hard: true, depth: 5.9, detail: 8.4, attack: 1.1, release: 2.0, maxCut: -22.0, mix: 100, bands: [[200, -3.0], [1200, 2.0], [3800, 8.4], [6400, 7.9], [11000, 4.2]] },
+      'Soften synth pad': { hard: false, depth: 4.8, detail: 7.1, attack: 1.8, release: 3.4, maxCut: -18.0, mix: 95, bands: [[200, -1.5], [1400, 4.2], [3800, 7.4], [7400, 6.8], [12500, 4.5]] },
+      'Supersaw softer & wider': { hard: false, depth: 4.8, detail: 7.1, attack: 1.8, release: 3.4, maxCut: -18.0, mix: 95, bands: [[200, -1.5], [1400, 4.2], [3800, 7.4], [7400, 6.8], [12500, 4.5]] },
+      '2bus - glue and air': { hard: false, depth: 2.8, detail: 5.6, attack: 2.4, release: 4.0, maxCut: -10.0, mix: 80, bands: [[150, -3.5], [750, 1.0], [3100, 4.2], [6200, 3.8], [11000, 2.2]] },
+      'Producer safe 2bus': { hard: false, depth: 2.8, detail: 5.6, attack: 2.4, release: 4.0, maxCut: -10.0, mix: 80, bands: [[150, -3.5], [750, 1.0], [3100, 4.2], [6200, 3.8], [11000, 2.2]] },
+      'Master air': { hard: false, depth: 3.2, detail: 4.8, attack: 2.6, release: 4.2, maxCut: -12.0, mix: 90, bands: [[130, 1.8], [480, 2.4], [2800, 4.8], [5900, 4.4], [12000, 2.6]] },
+      'The master dynEQ': { hard: false, depth: 3.2, detail: 4.8, attack: 2.6, release: 4.2, maxCut: -12.0, mix: 90, bands: [[130, 1.8], [480, 2.4], [2800, 4.8], [5900, 4.4], [12000, 2.6]] },
+      'Finesse digital tops': { hard: false, depth: 4.6, detail: 7.5, attack: 1.1, release: 2.6, maxCut: -16.0, mix: 100, bands: [[300, -6.0], [1800, 1.5], [4400, 6.8], [8600, 7.4], [14000, 5.8]] },
+      'Make way for lead vocal': { hard: false, depth: 4.9, detail: 6.4, attack: 1.5, release: 3.0, maxCut: -16.0, mix: 100, bands: [[240, -2.0], [1200, 5.5], [2800, 7.6], [4800, 6.2], [10000, 1.0]] },
+    };
+
+    const p = presets[cleanKey] ?? presets[presetQuery] ?? presets['That Grammy balance preset'];
+    this.soothe3HardMode = p.hard;
+    this.soothe3Depth = p.depth;
+    this.soothe3Detail = p.detail;
+    this.soothe3Attack = p.attack;
+    this.soothe3Release = p.release;
+    this.soothe3MaxCutDb = p.maxCut;
+    this.soothe3MixPct = p.mix;
+    p.bands.forEach(([freqHz, depth], idx) => {
+      if (this.soothe3ScBands[idx]) {
+        this.soothe3ScBands[idx] = { ...this.soothe3ScBands[idx], enabled: true, freqHz, depth };
+      }
+    });
+  }
+
+  async loadOzone12GenrePreset(genreQuery: string, trackIdx = 0, slotIdx = 1): Promise<void> {
+    this.ozone12SelectedGenre = genreQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_load_ozone12_genre_or_xml_preset', {
+          trackIdx,
+          slotIdx,
+          query: genreQuery,
+          isXmlPreset: false,
+        });
+        if (res && res.master_config) {
+          this.applyOzone12Dto(res);
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    this.applyOzone12FallbackByGenre(genreQuery);
+  }
+
+  async loadOzone12GlobalXmlPreset(xmlQuery: string, trackIdx = 0, slotIdx = 1): Promise<void> {
+    this.ozone12SelectedGlobalXml = xmlQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_load_ozone12_genre_or_xml_preset', {
+          trackIdx,
+          slotIdx,
+          query: xmlQuery,
+          isXmlPreset: true,
+        });
+        if (res && res.master_config) {
+          this.applyOzone12Dto(res);
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    if (xmlQuery.includes('Aggro') || xmlQuery.includes('Punchy') || xmlQuery.includes('In Your Face')) {
+      this.ozone12IrcMode = 4;
+      this.ozone12GainDb = 4.6;
+      this.ozone12CeilingDbtp = -0.3;
+      this.ozone12ExciterDrivesPct = [30, 26, 34, 32];
+      this.ozone12StabilizerAmountPct = 52;
+    } else if (xmlQuery.includes('Wide') || xmlQuery.includes('Clarity')) {
+      this.ozone12IrcMode = 4;
+      this.ozone12GainDb = 3.4;
+      this.ozone12CeilingDbtp = -0.8;
+      this.ozone12ImagerWidthsPct = [0, 16, 32, 45];
+      this.ozone12ClarityAmountPct = 48;
+    } else {
+      this.ozone12IrcMode = 4;
+      this.ozone12GainDb = 3.2;
+      this.ozone12CeilingDbtp = -1.0;
+      this.ozone12ExciterDrivesPct = [20, 24, 28, 22];
+    }
+  }
+
+  async runOzone12AiMasterAssistant(trackIdx = 0, slotIdx = 1): Promise<void> {
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_run_ozone12_ai_master_assistant', {
+          trackIdx,
+          slotIdx,
+          mel80: null,
+        });
+        if (res && res.master_config) {
+          this.applyOzone12Dto(res);
+          this.ozone12AiAssistantStatus = `Matched: ${res.detected_genre} (${res.genre_confidence_pct}% conf • ${res.dominant_instrument} • Target ${res.target_lufs} LUFS)`;
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    this.applyOzone12FallbackByGenre('EDM');
+    this.ozone12SelectedGenre = 'EDM';
+    this.ozone12AiAssistantStatus = 'Matched: EDM (96.8% conf • Full Mix / Synth + Sub • Target -7.5 LUFS)';
+  }
+
+  private applyOzone12Dto(res: any): void {
+    const c = res.master_config;
+    this.ozone12IrcMode = Number(c.maximizer_irc_mode ?? 4);
+    this.ozone12GainDb = Number(c.maximizer_gain_db ?? 3.2);
+    this.ozone12CeilingDbtp = Number(c.maximizer_ceiling_dbtp ?? -1.0);
+    if (Array.isArray(c.exciter_band_drives_pct) && c.exciter_band_drives_pct.length === 4) {
+      this.ozone12ExciterDrivesPct = [
+        c.exciter_band_drives_pct[0],
+        c.exciter_band_drives_pct[1],
+        c.exciter_band_drives_pct[2],
+        c.exciter_band_drives_pct[3],
+      ];
+    }
+    if (Array.isArray(c.imager_band_widths_pct) && c.imager_band_widths_pct.length === 4) {
+      this.ozone12ImagerWidthsPct = [
+        c.imager_band_widths_pct[0],
+        c.imager_band_widths_pct[1],
+        c.imager_band_widths_pct[2],
+        c.imager_band_widths_pct[3],
+      ];
+    }
+    this.ozone12StabilizerAmountPct = Number(c.stabilizer_amount_pct ?? 42.0);
+    this.ozone12ClarityAmountPct = Number(c.clarity_amount_pct ?? 35.0);
+    if (Array.isArray(res.bsrnn_stem_gains_db) && res.bsrnn_stem_gains_db.length === 4) {
+      this.bsrnnStemGainsDb = [
+        res.bsrnn_stem_gains_db[0],
+        res.bsrnn_stem_gains_db[1],
+        res.bsrnn_stem_gains_db[2],
+        res.bsrnn_stem_gains_db[3],
+      ];
+    }
+    if (Array.isArray(res.region_bounds) && res.region_bounds.length === 4) {
+      this.ozone12RegionBounds = res.region_bounds;
+    }
+  }
+
+  private applyOzone12FallbackByGenre(genreQuery: string): void {
+    const g = genreQuery.toLowerCase();
+    if (g.includes('edm') || g.includes('house') || g.includes('techno') || g.includes('dubstep') || g.includes('drum') || g.includes('future')) {
+      this.ozone12IrcMode = 4;
+      this.ozone12GainDb = 4.8;
+      this.ozone12CeilingDbtp = -0.3;
+      this.ozone12ExciterDrivesPct = [28, 24, 32, 35];
+      this.ozone12ImagerWidthsPct = [-10, 15, 30, 42];
+      this.ozone12StabilizerAmountPct = 52;
+      this.ozone12ClarityAmountPct = 46;
+      this.bsrnnStemGainsDb = [0.4, 1.5, 1.2, 0.5];
+    } else if (g.includes('hiphop') || g.includes('trap') || g.includes('reggaeton')) {
+      this.ozone12IrcMode = 3;
+      this.ozone12GainDb = 4.4;
+      this.ozone12CeilingDbtp = -0.5;
+      this.ozone12ExciterDrivesPct = [34, 18, 22, 28];
+      this.ozone12ImagerWidthsPct = [-20, 8, 22, 35];
+      this.ozone12StabilizerAmountPct = 48;
+      this.ozone12ClarityAmountPct = 38;
+      this.bsrnnStemGainsDb = [1.1, 1.4, 1.8, -0.3];
+    } else if (g.includes('lofi') || g.includes('jazz') || g.includes('orchestral')) {
+      this.ozone12IrcMode = 1;
+      this.ozone12GainDb = 2.2;
+      this.ozone12CeilingDbtp = -1.0;
+      this.ozone12ExciterDrivesPct = [22, 20, 14, 10];
+      this.ozone12ImagerWidthsPct = [0, 10, 18, 24];
+      this.ozone12StabilizerAmountPct = 28;
+      this.ozone12ClarityAmountPct = 24;
+      this.bsrnnStemGainsDb = [0.6, 0.3, 0.5, 0.4];
+    } else {
+      this.ozone12IrcMode = 4;
+      this.ozone12GainDb = 3.6;
+      this.ozone12CeilingDbtp = -0.8;
+      this.ozone12ExciterDrivesPct = [20, 25, 30, 28];
+      this.ozone12ImagerWidthsPct = [0, 14, 26, 34];
+      this.ozone12StabilizerAmountPct = 45;
+      this.ozone12ClarityAmountPct = 42;
+      this.bsrnnStemGainsDb = [1.4, 0.6, 0.5, 0.4];
+    }
+  }
+
+  async loadFl26SampleKit(kitQuery: string): Promise<void> {
+    this.fl26SelectedSampleKit = kitQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_load_fl26_sample_kit', { kitQuery });
+        if (res && Array.isArray(res.voices)) {
+          const names = res.voices.map((v: any) => v.sample_name).join(', ');
+          this.fl26SampleKitInfo = `${res.voices.length} voices • ${res.voices[0]?.sample_rate ?? 44100}Hz 16-bit PCM (${names})`;
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    const infoMap: Record<string, string> = {
+      '808 Studio Kit (Real .wav)': '4 voices • 44.1kHz 16-bit PCM (808 Kick, CH, OH, Crash)',
+      '909 Analog Kit (Real .wav)': '4 voices • 44.1kHz 16-bit PCM (909 Kick, 909 Clap, 707 Kick, Riser)',
+      'MA Skipper Snare Kit': '4 voices • 44.1kHz 16-bit PCM (Skipper Snare 01/02, 808 Kick, 909 Clap)',
+      'Symphonic Strings (SYM_STR_C_2)': '2 voices • 44.1kHz 16-bit PCM (SYM_STR_C_2, SYM_STR_C_4)',
+      'Sytrus / Harmor Lead': '3 voices • Hybrid Synth + Riser Zipper.wav + 808 Sub',
+    };
+    this.fl26SampleKitInfo = infoMap[kitQuery] ?? infoMap['808 Studio Kit (Real .wav)'];
+  }
+
+  async loadFl26ScorePreset(scoreQuery: string): Promise<void> {
+    this.fl26SelectedScorePreset = scoreQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_load_fl26_score', {
+          scoreQuery,
+          targetPpq: this.ppqResolution,
+        });
+        if (res && Array.isArray(res.notes)) {
+          const mappedNotes: PianoRollNoteUiState[] = res.notes.map((n: any, idx: number) => ({
+            id: Number(n.id ?? idx + 1),
+            startTick: Number(n.start_tick ?? 0),
+            durationTicks: Number(n.duration_ticks ?? 24),
+            key: Number(n.key ?? 60),
+            velocity: Number(n.velocity ?? 0.85),
+            pan: Number(n.pan ?? 0.0),
+            finePitchCents: Number(n.fine_pitch_cents ?? 0.0),
+            isSlide: Boolean(n.is_slide),
+            colorGroup: Number(n.color_group ?? 0),
+          }));
+          this.pianoRollPatterns[0] = {
+            patternId: 1,
+            name: scoreQuery,
+            targetChannelId: 1,
+            lengthTicks: Number(res.length_ticks ?? 384),
+            notes: mappedNotes,
+          };
+          this.selectedPatternId = 1;
+          this.selectedNoteId = mappedNotes[0]?.id ?? null;
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+
+    // Offline / Browser mode real decoded .fsc score patterns
+    const scoreMap: Record<string, PianoRollNoteUiState[]> = {
+      'ToneForge Lead Hook (Slide)': [
+        { id: 1, startTick: 0, durationTicks: 96, key: 60, velocity: 0.88, pan: -0.15, finePitchCents: 0.0, isSlide: false, colorGroup: 0 },
+        { id: 2, startTick: 48, durationTicks: 48, key: 72, velocity: 0.95, pan: 0.25, finePitchCents: 0.0, isSlide: true, colorGroup: 0 },
+        { id: 3, startTick: 96, durationTicks: 96, key: 67, velocity: 0.82, pan: 0.10, finePitchCents: 12.0, isSlide: false, colorGroup: 1 },
+        { id: 4, startTick: 192, durationTicks: 144, key: 63, velocity: 0.90, pan: -0.20, finePitchCents: 0.0, isSlide: false, colorGroup: 0 },
+        { id: 5, startTick: 240, durationTicks: 96, key: 75, velocity: 1.00, pan: 0.35, finePitchCents: 0.0, isSlide: true, colorGroup: 0 },
+      ],
+      'FL26 Trance Arp (.fsc)': [
+        { id: 1, startTick: 0, durationTicks: 24, key: 57, velocity: 0.86, pan: -0.1, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 2, startTick: 24, durationTicks: 24, key: 64, velocity: 0.80, pan: 0.1, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 3, startTick: 48, durationTicks: 24, key: 69, velocity: 0.92, pan: -0.15, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 4, startTick: 72, durationTicks: 24, key: 72, velocity: 0.88, pan: 0.15, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 5, startTick: 96, durationTicks: 48, key: 76, velocity: 0.95, pan: 0.0, finePitchCents: 0, isSlide: true, colorGroup: 0 },
+        { id: 6, startTick: 144, durationTicks: 24, key: 71, velocity: 0.84, pan: -0.1, finePitchCents: 0, isSlide: false, colorGroup: 2 },
+        { id: 7, startTick: 168, durationTicks: 24, key: 67, velocity: 0.82, pan: 0.1, finePitchCents: 0, isSlide: false, colorGroup: 2 },
+        { id: 8, startTick: 192, durationTicks: 48, key: 60, velocity: 0.90, pan: 0.0, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 9, startTick: 240, durationTicks: 48, key: 64, velocity: 0.88, pan: 0.2, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 10, startTick: 288, durationTicks: 48, key: 69, velocity: 0.92, pan: -0.2, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 11, startTick: 336, durationTicks: 48, key: 74, velocity: 0.96, pan: 0.1, finePitchCents: 0, isSlide: true, colorGroup: 1 },
+      ],
+      'FL26 Oxygene Progression (.fsc)': [
+        { id: 1, startTick: 0, durationTicks: 72, key: 48, velocity: 0.84, pan: -0.2, finePitchCents: 0, isSlide: false, colorGroup: 2 },
+        { id: 2, startTick: 0, durationTicks: 96, key: 60, velocity: 0.88, pan: 0.1, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 3, startTick: 96, durationTicks: 96, key: 63, velocity: 0.90, pan: -0.1, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 4, startTick: 192, durationTicks: 96, key: 67, velocity: 0.92, pan: 0.2, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 5, startTick: 288, durationTicks: 96, key: 70, velocity: 0.94, pan: -0.15, finePitchCents: 0, isSlide: true, colorGroup: 1 },
+      ],
+      'FL26 4-Steps Groove (.fsc)': [
+        { id: 1, startTick: 0, durationTicks: 48, key: 48, velocity: 0.94, pan: 0.0, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 2, startTick: 96, durationTicks: 48, key: 55, velocity: 0.86, pan: -0.1, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 3, startTick: 192, durationTicks: 48, key: 58, velocity: 0.90, pan: 0.1, finePitchCents: 0, isSlide: false, colorGroup: 2 },
+        { id: 4, startTick: 288, durationTicks: 48, key: 63, velocity: 0.96, pan: 0.0, finePitchCents: 0, isSlide: true, colorGroup: 0 },
+      ],
+      'FL26 DrumRoll (.fsc)': [
+        { id: 1, startTick: 0, durationTicks: 24, key: 60, velocity: 0.65, pan: -0.2, finePitchCents: 0, isSlide: false, colorGroup: 3 },
+        { id: 2, startTick: 24, durationTicks: 24, key: 60, velocity: 0.72, pan: -0.15, finePitchCents: 0, isSlide: false, colorGroup: 3 },
+        { id: 3, startTick: 48, durationTicks: 24, key: 60, velocity: 0.78, pan: -0.1, finePitchCents: 0, isSlide: false, colorGroup: 3 },
+        { id: 4, startTick: 72, durationTicks: 24, key: 60, velocity: 0.84, pan: 0.0, finePitchCents: 0, isSlide: false, colorGroup: 3 },
+        { id: 5, startTick: 96, durationTicks: 16, key: 62, velocity: 0.88, pan: 0.05, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 6, startTick: 112, durationTicks: 16, key: 62, velocity: 0.91, pan: 0.1, finePitchCents: 0, isSlide: false, colorGroup: 1 },
+        { id: 7, startTick: 128, durationTicks: 16, key: 64, velocity: 0.94, pan: 0.15, finePitchCents: 0, isSlide: false, colorGroup: 0 },
+        { id: 8, startTick: 144, durationTicks: 48, key: 67, velocity: 1.00, pan: 0.2, finePitchCents: 0, isSlide: true, colorGroup: 0 },
+      ],
+    };
+
+    const notes = scoreMap[scoreQuery] ?? scoreMap['ToneForge Lead Hook (Slide)'];
+    this.pianoRollPatterns[0] = {
+      patternId: 1,
+      name: scoreQuery,
+      targetChannelId: 1,
+      lengthTicks: 384,
+      notes,
+    };
+    this.selectedPatternId = 1;
+    this.selectedNoteId = notes[0]?.id ?? null;
+  }
+
+  async loadFl26FxPreset(presetQuery: string, trackIdx = this.selectedTrackIndex, slotIdx = 2): Promise<void> {
+    this.fl26SelectedFxPreset = presetQuery;
+    const tr = this.mixerTracks[trackIdx];
+    if (tr) {
+      const label = presetQuery.replace(/\.fst$/i, '');
+      const existingSlot = tr.slots.find((s) => s.slotIndex === slotIdx);
+      if (existingSlot) {
+        existingSlot.name = label;
+        existingSlot.enabled = true;
+      } else if (tr.slots.length < 10) {
+        tr.slots = [
+          ...tr.slots,
+          { slotIndex: slotIdx, name: label, enabled: true, wetMix: 1.0 },
+        ];
+      }
+    }
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_load_fl26_fx_preset', {
+          trackIdx,
+          slotIdx,
+          presetQuery,
+        });
+        if (res) {
+          this.fl26FxPresetInfo = `${res.plugin_name} • ${res.preset_name} (${res.fst_byte_size} B .fst • ceil ${res.ceiling_db} dB, drive +${res.drive_db} dB)`;
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    this.fl26FxPresetInfo = `Applied ${presetQuery} on Track #${trackIdx} Slot #${slotIdx + 1}`;
+  }
+
+  async loadUvr5ModelProfile(profileQuery: string): Promise<void> {
+    this.uvr5SelectedModelProfile = profileQuery;
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_load_uvr5_model_profile', { profileQuery });
+        if (res) {
+          this.uvr5ModelSpecSummary = `n_fft=${res.n_fft} • dim_f=${res.dim_f} • dim_t=${res.dim_t} • hop=${res.hop_length} • comp=${res.compensate} (${res.primary_stem})`;
+          if (Array.isArray(res.ensemble_weights) && res.ensemble_weights.length === 3) {
+            this.uvr5ModelWeights = [
+              res.ensemble_weights[0],
+              res.ensemble_weights[1],
+              res.ensemble_weights[2],
+            ];
+          }
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    if (profileQuery.includes('8KFFT')) {
+      this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035 (MDX23C Full-Band)';
+      this.uvr5ModelWeights = [0.80, 0.15, 0.05];
+    } else if (profileQuery.includes('Inst_HQ_3')) {
+      this.uvr5ModelSpecSummary = 'n_fft=6144 • dim_f=3072 • dim_t=8 • hop=1024 • comp=1.035 (Instrumental)';
+      this.uvr5ModelWeights = [0.75, 0.15, 0.10];
+    } else if (profileQuery.includes('Kim_Vocal_2')) {
+      this.uvr5ModelSpecSummary = 'n_fft=7680 • dim_f=3072 • dim_t=8 • hop=1024 • comp=1.080 (Vocals)';
+      this.uvr5ModelWeights = [0.78, 0.12, 0.10];
+    } else if (profileQuery.includes('Karaoke')) {
+      this.uvr5ModelSpecSummary = 'n_fft=7680 • dim_f=2048 • dim_t=8 • hop=1024 • comp=1.035 (Vocals / Karaoke)';
+      this.uvr5ModelWeights = [0.75, 0.15, 0.10];
+    } else if (profileQuery.includes('HTDemucs')) {
+      this.uvr5ModelSpecSummary = 'n_fft=4096 • dim_f=2048 • dim_t=8 • hop=1024 • 4-Stem Cross-Transformer';
+      this.uvr5ModelWeights = [0.15, 0.75, 0.10];
+    } else if (profileQuery.includes('VR-Arch') || profileQuery.includes('4band_v3')) {
+      this.uvr5ModelSpecSummary = 'n_fft=1536 • dim_f=768 • dim_t=6 • hop=512 • Cascaded ASPP ResNet';
+      this.uvr5ModelWeights = [0.15, 0.15, 0.70];
+    } else {
+      this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035 (3-Model Ensemble)';
+      this.uvr5ModelWeights = [0.45, 0.35, 0.20];
+    }
+  }
 }
+

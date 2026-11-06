@@ -8,6 +8,16 @@ members = [
     "crates/ai-uvr5-stem-engine",
     "crates/daw-tauri-host",
     "tools/extract_cleanroom_assets",
+    "shell/src-tauri",
+]
+default-members = [
+    "crates/daw-core-graph",
+    "crates/dsp-proq4-eq",
+    "crates/dsp-soothe3-spectral",
+    "crates/dsp-ozone12-mastering",
+    "crates/ai-uvr5-stem-engine",
+    "crates/daw-tauri-host",
+    "tools/extract_cleanroom_assets",
 ]
 
 [workspace.package]

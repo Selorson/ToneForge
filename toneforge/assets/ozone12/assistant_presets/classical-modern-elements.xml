@@ -1,0 +1,49 @@
+<?xml version="1.0" standalone="yes" ?>
+<Ozone8 Comments="This Preset File has been Modified by clean_assistant_presets.py to enforce important invariants" LastModified="1505336370" LastUsed="1505336212" PluginBuild="726" PluginVer="8000" PresetVer="1">
+    <DynamicEQ Enabled="1" />
+    <Dynamics Enabled="1" />
+    <EQ Enabled="1">
+        <Param ElementID="Equalizer" ParamID="Band 1 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 1 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 2 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 2 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 3 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 3 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 4 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 4 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 5 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 5 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 6 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 6 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 7 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 7 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 8 Enable" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Band 8 Visible" Value="0" />
+        <Param ElementID="Equalizer" ParamID="Bypass" Value="0" />
+    </EQ>
+    <EQ2 Enabled="1">
+        <Param ElementID="Post Equalizer" ParamID="Band 1 Q" Value="2.23" />
+        <Param ElementID="Post Equalizer" ParamID="Band 7 Q" Value="2.23" />
+        <Param ElementID="Post Equalizer" ParamID="Band 7 Frequency" Value="6000.0" />
+    </EQ2>
+    <Exciter Enabled="1" />
+    <Global Enabled="1">
+        <ExtraBytes Data="AAkAAABFcXVhbGl6ZXIADQAAAFN0ZXJlbyBJbWFnZXIACQAAAE1heGltaXplcg==" ElementID="ElementChain" />
+    </Global>
+    <Imager Enabled="1">
+        <Param ElementID="Stereo Imager" ParamID="Bypass" Value="1" />
+    </Imager>
+    <Maximizer Enabled="1">
+        <Param ElementID="Maximizer" ParamID="Character" Value="3.00000000" />
+        <Param ElementID="Maximizer" ParamID="Prevent Intersample Clipping" Value="1" />
+        <Param ElementID="Maximizer" ParamID="Stereo Link" Value="20.00000000" />
+        <Param ElementID="Maximizer" ParamID="Stereo Transient Link Amount" Value="20.00000000" />
+        <Param ElementID="Maximizer" ParamID="Bypass" Value="0" />
+    </Maximizer>
+    <Meters Enabled="1" />
+    <SpectralShaper Enabled="1" />
+    <VintageCompressor Enabled="1" />
+    <VintageEQ Enabled="1" />
+    <VintageLimiter Enabled="1" />
+    <VintageTape Enabled="1" />
+</Ozone8>

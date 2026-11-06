@@ -37,7 +37,9 @@ pub use bsrnn_streaming::{
     RealTimeBsrnnStemNode, RealtimeBsrnnStemNode, StemKind,
 };
 pub use npz_gru_legacy::{
-    DEFAULT_GPARAMS_NPZ_PATHS, GenreCnnClassifier, NumpyArrayF32, load_npz_archive_bytes,
+    DEFAULT_GPARAMS_NPZ_PATHS, DEFAULT_INSTRUMENT_NPZ_PATHS, DEFAULT_VOCALS_GRU_NPZ_PATHS,
+    DenseLayerWeights, GenreCnnClassifier, GruLayerWeights, InstrumentCnnClassifier,
+    NpzArchiveReader, NumpyArrayF32, OzoneNpzGruEngine, load_npz_archive_bytes,
     load_npz_archive_file,
 };
 pub use spectral_ensemble::{

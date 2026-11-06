@@ -538,6 +538,10 @@ impl OzoneDspModule for ClarityModule {
         let rel_alpha =
             (-1.0 / ((self.release_ms.clamp(10.0, 1000.0) as f64) * 0.001 * self.sample_rate))
                 .exp();
+        let amt = (self.amount_percent.clamp(0.0, 100.0) as f64) * 0.01;
+        let tilt = self.tilt_db_per_oct.clamp(-6.0, 6.0) as f64;
+        let f_lo = self.focus_low_hz as f64;
+        let f_hi = self.focus_high_hz as f64;
 
         for idx in 0..n {
             let mut l = left[idx] as f64;
@@ -563,6 +567,20 @@ impl OzoneDspModule for ClarityModule {
             }
             left[idx] = l as f32;
             right[idx] = r as f32;
+        }
+
+        let ref_db = 10.0 * (self.broadband_env + 1e-12).log10();
+        for i in 0..6 {
+            let freq = CLARITY_BARK_FREQS[i];
+            if freq < f_lo || freq > f_hi {
+                self.band_gain_db[i] *= 0.9;
+                continue;
+            }
+            let octaves_from_1k = (freq / 1000.0).log2();
+            let target_rel_db = (-3.0 + tilt) * octaves_from_1k;
+            let band_rel_db = 10.0 * (self.band_env[i] + 1e-12).log10() - ref_db;
+            let deficit_db = (target_rel_db - band_rel_db).clamp(-4.5, 6.0);
+            self.band_gain_db[i] = 0.75 * self.band_gain_db[i] + 0.25 * (deficit_db * amt);
         }
         self.refresh_shaper_eq();
     }
@@ -618,17 +636,23 @@ pub enum LowEndFocusMode {
 }
 
 /// iZotope Ozone 12 Low End Focus (`LowEndFocusModule` / `OzoneLowEndFocus`).
+///
+/// Uses a Linkwitz-Riley 4th-order (`24 dB/oct`) crossover in `[20.0..300.0 Hz]` and
+/// dual fast/slow envelope followers (`Punchy` vs `Smooth`) to shape low-end transient contrast
+/// without altering upper-frequency phase coherence.
 #[derive(Clone, Debug)]
 pub struct LowEndFocusModule {
     pub enabled: bool,
     pub mode: LowEndFocusMode,
     /// Contrast in `[-100.0, +100.0]`%.
     pub contrast_percent: f32,
+    pub cutoff_low_hz: f32,
     pub cutoff_high_hz: f32,
     pub gain_db: f32,
     crossover: LinkwitzRiley4BandCrossover,
     env_fast: f64,
     env_slow: f64,
+    last_delta_db: f32,
     sample_rate: f64,
 }
 
@@ -647,19 +671,54 @@ impl LowEndFocusModule {
             enabled: true,
             mode: LowEndFocusMode::Punchy,
             contrast_percent: 25.0,
+            cutoff_low_hz: 20.0,
             cutoff_high_hz: 180.0,
             gain_db: 0.0,
             crossover: LinkwitzRiley4BandCrossover::new([180.0, 1200.0, 6000.0], sr),
             env_fast: 0.0,
             env_slow: 0.0,
+            last_delta_db: 0.0,
             sample_rate: sr,
         }
+    }
+
+    fn sync_crossover(&mut self) {
+        let hi = self.cutoff_high_hz.clamp(20.0, 300.0) as f64;
+        if self.cutoff_low_hz > 20.5 {
+            let lo = (self.cutoff_low_hz as f64).clamp(20.0, (hi - 5.0).max(20.0));
+            let hi_adj = hi.max(lo + 5.0);
+            self.crossover
+                .set_crossover_frequencies(self.sample_rate, lo, hi_adj, 6000.0);
+        } else {
+            self.crossover
+                .set_crossover_frequencies(self.sample_rate, hi, 1200.0, 6000.0);
+        }
+    }
+
+    pub fn set_cutoff_hz(&mut self, cutoff_hz: f32) {
+        self.cutoff_high_hz = cutoff_hz.clamp(20.0, 300.0);
+        if self.cutoff_low_hz > self.cutoff_high_hz {
+            self.cutoff_low_hz = self.cutoff_high_hz;
+        }
+        self.sync_crossover();
+    }
+
+    pub fn set_frequency_range_hz(&mut self, low_hz: f32, high_hz: f32) {
+        self.cutoff_low_hz = low_hz.clamp(20.0, 300.0);
+        self.cutoff_high_hz = high_hz.clamp(self.cutoff_low_hz.max(20.0), 300.0);
+        self.sync_crossover();
+    }
+
+    #[inline]
+    pub fn last_delta_db(&self) -> f32 {
+        self.last_delta_db
     }
 
     pub fn reset_internal(&mut self) {
         self.crossover.reset();
         self.env_fast = 0.0;
         self.env_slow = 0.0;
+        self.last_delta_db = 0.0;
     }
 
     #[inline]
@@ -679,23 +738,44 @@ impl LowEndFocusModule {
         let a_slow = (-1.0 / (slow_tau * self.sample_rate)).exp();
         let contrast = (self.contrast_percent.clamp(-100.0, 100.0) as f64) * 0.01;
         let makeup_lin = 10.0f64.powf((self.gain_db as f64) / 20.0);
+        let mode_sign = match self.mode {
+            LowEndFocusMode::Punchy => 1.0,
+            LowEndFocusMode::Smooth => -0.65,
+        };
+        let bandpass_focus = self.cutoff_low_hz > 20.5;
 
+        let mut last_gain = 1.0f64;
         for frame in io.iter_mut() {
             let bands = self.crossover.split_stereo(frame[0] as f64, frame[1] as f64);
-            let low_l = bands[0][0];
-            let low_r = bands[0][1];
-            let peak = low_l.abs().max(low_r.abs());
+            let (focus_l, focus_r) = if bandpass_focus {
+                (bands[1][0], bands[1][1])
+            } else {
+                (bands[0][0], bands[0][1])
+            };
+            let peak = focus_l.abs().max(focus_r.abs());
 
             self.env_fast = a_fast * self.env_fast + (1.0 - a_fast) * peak;
             self.env_slow = a_slow * self.env_slow + (1.0 - a_slow) * peak;
 
             let diff_norm = (self.env_fast - self.env_slow) / (self.env_slow + 1e-5);
-            let low_gain = (1.0 + contrast * diff_norm * 0.65).clamp(0.35, 2.2) * makeup_lin;
+            let low_gain =
+                (1.0 + contrast * mode_sign * diff_norm * 0.65).clamp(0.35, 2.2) * makeup_lin;
+            last_gain = low_gain;
 
-            let out_l = low_l * low_gain + bands[1][0] + bands[2][0] + bands[3][0];
-            let out_r = low_r * low_gain + bands[1][1] + bands[2][1] + bands[3][1];
+            let (out_l, out_r) = if bandpass_focus {
+                (
+                    bands[0][0] + focus_l * low_gain + bands[2][0] + bands[3][0],
+                    bands[0][1] + focus_r * low_gain + bands[2][1] + bands[3][1],
+                )
+            } else {
+                (
+                    focus_l * low_gain + bands[1][0] + bands[2][0] + bands[3][0],
+                    focus_r * low_gain + bands[1][1] + bands[2][1] + bands[3][1],
+                )
+            };
             *frame = [out_l as f32, out_r as f32];
         }
+        self.last_delta_db = (20.0 * last_gain.max(1e-6).log10()) as f32;
     }
 }
 
@@ -706,12 +786,7 @@ impl OzoneDspModule for LowEndFocusModule {
 
     fn reset(&mut self, sample_rate: f64, _max_block_size: usize) {
         self.sample_rate = sample_rate.max(8000.0);
-        self.crossover.set_crossover_frequencies(
-            self.sample_rate,
-            self.cutoff_high_hz as f64,
-            1200.0,
-            6000.0,
-        );
+        self.sync_crossover();
         self.reset_internal();
     }
 
@@ -730,16 +805,81 @@ impl OzoneDspModule for LowEndFocusModule {
     }
 }
 
+impl UnifiedDspNode for LowEndFocusModule {
+    fn name(&self) -> &'static str {
+        "iZotope Ozone 12 Low End Focus"
+    }
+
+    fn latency_samples(&self) -> usize {
+        0
+    }
+
+    fn prepare(&mut self, sample_rate: f64, max_block_size: usize) {
+        OzoneDspModule::reset(self, sample_rate, max_block_size);
+    }
+
+    fn reset_state(&mut self) {
+        self.reset_internal();
+    }
+
+    fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
+        let v = norm_val.clamp(0.0, 1.0);
+        match param_id {
+            0 => self.enabled = v >= 0.5,
+            1 => {
+                self.mode = if v < 0.5 {
+                    LowEndFocusMode::Punchy
+                } else {
+                    LowEndFocusMode::Smooth
+                };
+            }
+            2 => self.contrast_percent = -100.0 + v * 200.0,
+            3 => self.set_cutoff_hz(20.0 + v * 280.0),
+            4 => self.gain_db = -12.0 + v * 24.0,
+            _ => {}
+        }
+    }
+
+    fn current_gain_reduction_db(&self) -> f32 {
+        self.last_delta_db.min(0.0)
+    }
+
+    fn process_slice(
+        &mut self,
+        _ctx: &ProcessContext,
+        main_io: &mut [StereoFrame],
+        _sidechain_in: Option<&[StereoFrame]>,
+        _aux_sends_out: &mut [&mut [StereoFrame]],
+    ) {
+        self.process_frames_in_place(main_io);
+    }
+}
+
+/// Tone compression ratios for `SpectralShaperModule`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpectralShaperToneMode {
+    /// Light (`2:1` ratio)
+    Light = 0,
+    /// Medium (`4:1` ratio)
+    Medium = 1,
+    /// Heavy (`8:1` ratio)
+    Heavy = 2,
+}
+
 /// iZotope Ozone 12 Spectral Shaper (`SpectralShaperModule` / `OzoneSpectralShaper`).
 #[derive(Clone, Debug)]
 pub struct SpectralShaperModule {
     pub enabled: bool,
+    pub tone_mode: SpectralShaperToneMode,
     pub threshold_db: f32,
     pub ceiling_reduction_db: f32,
     pub center_hz: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
     detector_bp: StereoBiquadF64,
     dynamic_eq: StereoBiquadF64,
     env: f64,
+    last_reduction_db: f32,
     sample_rate: f64,
 }
 
@@ -756,12 +896,16 @@ impl SpectralShaperModule {
         let sr = sample_rate.max(8000.0);
         let mut m = Self {
             enabled: true,
+            tone_mode: SpectralShaperToneMode::Medium,
             threshold_db: -18.0,
-            ceiling_reduction_db: -6.0,
+            ceiling_reduction_db: -12.0,
             center_hz: 4200.0,
+            attack_ms: 5.0,
+            release_ms: 45.0,
             detector_bp: StereoBiquadF64::default(),
             dynamic_eq: StereoBiquadF64::default(),
             env: 0.0,
+            last_reduction_db: 0.0,
             sample_rate: sr,
         };
         m.detector_bp.set_bandpass(4200.0, 1.5, sr);
@@ -769,10 +913,22 @@ impl SpectralShaperModule {
         m
     }
 
+    pub fn set_center_hz(&mut self, center_hz: f32) {
+        self.center_hz = center_hz.clamp(20.0, 20_000.0);
+        self.detector_bp
+            .set_bandpass(self.center_hz as f64, 1.5, self.sample_rate);
+    }
+
+    #[inline]
+    pub fn last_reduction_db(&self) -> f32 {
+        self.last_reduction_db
+    }
+
     pub fn reset_internal(&mut self) {
         self.detector_bp.reset();
         self.dynamic_eq.reset();
         self.env = 0.0;
+        self.last_reduction_db = 0.0;
     }
 
     #[inline]
@@ -781,24 +937,46 @@ impl SpectralShaperModule {
             return;
         }
         let thresh_lin = 10.0f64.powf((self.threshold_db as f64) / 20.0);
-        let alpha = (-1.0 / (0.008 * self.sample_rate)).exp();
+        let atk_alpha =
+            (-1.0 / ((self.attack_ms.clamp(0.5, 200.0) as f64) * 0.001 * self.sample_rate)).exp();
+        let rel_alpha =
+            (-1.0 / ((self.release_ms.clamp(5.0, 1000.0) as f64) * 0.001 * self.sample_rate)).exp();
+        let slope = match self.tone_mode {
+            SpectralShaperToneMode::Light => 0.50,  // 2:1
+            SpectralShaperToneMode::Medium => 0.75, // 4:1
+            SpectralShaperToneMode::Heavy => 0.875, // 8:1
+        };
+        let center_f64 = self.center_hz as f64;
+        let ceil_f64 = self.ceiling_reduction_db as f64;
 
-        for frame in io.iter_mut() {
+        for (idx, frame) in io.iter_mut().enumerate() {
             let (dl, dr) = self.detector_bp.tick(frame[0] as f64, frame[1] as f64);
             let p = dl.abs().max(dr.abs());
-            self.env = alpha * self.env + (1.0 - alpha) * p;
+            let coeff = if p > self.env { atk_alpha } else { rel_alpha };
+            self.env = coeff * self.env + (1.0 - coeff) * p;
+            if (idx & 15) == 0 {
+                let step_cut_db = if self.env > thresh_lin {
+                    let over_db = 20.0 * (self.env / thresh_lin).log10();
+                    (-slope * over_db).max(ceil_f64)
+                } else {
+                    0.0
+                };
+                self.dynamic_eq
+                    .set_peaking_eq(center_f64, 1.5, step_cut_db, self.sample_rate);
+            }
             let (yl, yr) = self.dynamic_eq.tick(frame[0] as f64, frame[1] as f64);
             *frame = [yl as f32, yr as f32];
         }
 
         let cut_db = if self.env > thresh_lin {
             let over_db = 20.0 * (self.env / thresh_lin).log10();
-            (-0.6 * over_db).max(self.ceiling_reduction_db as f64)
+            (-slope * over_db).max(ceil_f64)
         } else {
             0.0
         };
+        self.last_reduction_db = cut_db as f32;
         self.dynamic_eq
-            .set_peaking_eq(self.center_hz as f64, 1.5, cut_db, self.sample_rate);
+            .set_peaking_eq(center_f64, 1.5, cut_db, self.sample_rate);
     }
 }
 
@@ -828,5 +1006,57 @@ impl OzoneDspModule for SpectralShaperModule {
             left[i] = frame_buf[0][0];
             right[i] = frame_buf[0][1];
         }
+    }
+}
+
+impl UnifiedDspNode for SpectralShaperModule {
+    fn name(&self) -> &'static str {
+        "iZotope Ozone 12 Spectral Shaper"
+    }
+
+    fn latency_samples(&self) -> usize {
+        0
+    }
+
+    fn prepare(&mut self, sample_rate: f64, max_block_size: usize) {
+        OzoneDspModule::reset(self, sample_rate, max_block_size);
+    }
+
+    fn reset_state(&mut self) {
+        self.reset_internal();
+    }
+
+    fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
+        let v = norm_val.clamp(0.0, 1.0);
+        match param_id {
+            0 => self.enabled = v >= 0.5,
+            1 => self.threshold_db = -60.0 + v * 60.0,
+            2 => self.ceiling_reduction_db = -24.0 + v * 24.0,
+            3 => self.set_center_hz(20.0 * 1000.0f32.powf(v)),
+            4 => {
+                self.tone_mode = if v < 0.33 {
+                    SpectralShaperToneMode::Light
+                } else if v < 0.67 {
+                    SpectralShaperToneMode::Medium
+                } else {
+                    SpectralShaperToneMode::Heavy
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn current_gain_reduction_db(&self) -> f32 {
+        self.last_reduction_db
+    }
+
+    fn process_slice(
+        &mut self,
+        _ctx: &ProcessContext,
+        main_io: &mut [StereoFrame],
+        _sidechain_in: Option<&[StereoFrame]>,
+        _aux_sends_out: &mut [&mut [StereoFrame]],
+    ) {
+        self.process_frames_in_place(main_io);
     }
 }

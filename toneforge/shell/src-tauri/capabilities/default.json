@@ -1,0 +1,19 @@
+{
+  "identifier": "default",
+  "description": "Default ToneForge Studio desktop window and IPC permissions.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-center",
+    "core:window:allow-set-focus"
+  ]
+}

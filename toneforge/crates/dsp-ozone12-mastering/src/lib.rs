@@ -64,8 +64,8 @@ pub use multiband_imager::{
 };
 pub use spectral_modules::{
     ClarityModule, LowEndFocusMode, LowEndFocusModule, OzoneClarity, OzoneLowEndFocus,
-    OzoneSpectralShaper, OzoneStabilizer, SpectralShaperModule, StabilizerMode, StabilizerModule,
-    StabilizerTarget,
+    OzoneSpectralShaper, OzoneStabilizer, SpectralShaperModule, SpectralShaperToneMode,
+    StabilizerMode, StabilizerModule, StabilizerTarget,
 };
 pub use stem_eq_rebalance::{
     MasterRebalanceModule, OzoneMasterRebalance, OzoneStemEq, OzoneStemIndex, StemEqBandSet,
@@ -173,8 +173,8 @@ impl UnifiedDspNode for Ozone12MasterChain {
         UnifiedDspNode::prepare(&mut self.unlimiter, sr, max_block_size);
         UnifiedDspNode::prepare(&mut self.stabilizer, sr, max_block_size);
         UnifiedDspNode::prepare(&mut self.clarity, sr, max_block_size);
-        OzoneDspModule::reset(&mut self.low_end_focus, sr, max_block_size);
-        OzoneDspModule::reset(&mut self.spectral_shaper, sr, max_block_size);
+        UnifiedDspNode::prepare(&mut self.low_end_focus, sr, max_block_size);
+        UnifiedDspNode::prepare(&mut self.spectral_shaper, sr, max_block_size);
         UnifiedDspNode::prepare(&mut self.impact, sr, max_block_size);
         UnifiedDspNode::prepare(&mut self.bass_control, sr, max_block_size);
         UnifiedDspNode::prepare(&mut self.exciter, sr, max_block_size);
@@ -187,8 +187,8 @@ impl UnifiedDspNode for Ozone12MasterChain {
         UnifiedDspNode::reset_state(&mut self.unlimiter);
         UnifiedDspNode::reset_state(&mut self.stabilizer);
         UnifiedDspNode::reset_state(&mut self.clarity);
-        self.low_end_focus.reset_internal();
-        self.spectral_shaper.reset_internal();
+        UnifiedDspNode::reset_state(&mut self.low_end_focus);
+        UnifiedDspNode::reset_state(&mut self.spectral_shaper);
         UnifiedDspNode::reset_state(&mut self.impact);
         UnifiedDspNode::reset_state(&mut self.bass_control);
         UnifiedDspNode::reset_state(&mut self.exciter);
@@ -207,6 +207,12 @@ impl UnifiedDspNode for Ozone12MasterChain {
             55..=64 => self.clarity.set_parameter_normalized(param_id - 55, norm_val),
             65 => self.maximizer.set_parameter_normalized(12, norm_val),
             66 => self.maximizer.set_parameter_normalized(13, norm_val),
+            70..=74 => self
+                .low_end_focus
+                .set_parameter_normalized(param_id - 70, norm_val),
+            75..=79 => self
+                .spectral_shaper
+                .set_parameter_normalized(param_id - 75, norm_val),
             _ => {}
         }
     }

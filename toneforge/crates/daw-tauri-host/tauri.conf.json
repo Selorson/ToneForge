@@ -13,11 +13,12 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "ToneForge — Hybrid DAW + AI Mastering & Stem Workstation",
-        "width": 1920,
-        "height": 1080,
+        "title": "ToneForge Studio — Hybrid DAW + AI Mastering & Stem Workstation",
+        "width": 1600,
+        "height": 940,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "backgroundColor": "#0E1B1D"
       }
     ],
     "security": {
@@ -27,5 +28,16 @@
         "Cross-Origin-Embedder-Policy": "require-corp"
       }
     }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
   }
 }
+

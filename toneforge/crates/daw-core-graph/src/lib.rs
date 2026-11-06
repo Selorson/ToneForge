@@ -121,7 +121,11 @@ pub use apdc_engine::{
     SampleAccurateAutomationQueue, VoiceEventKind,
 };
 pub use audio_io::{
-    AsioSampleFormat, ProAudioThreadGuard, WasapiAsioBlockAdapter, convert_f32_to_int32_lsb,
+    ASIO_INT32_SCALE_F32, AsioSampleFormat, MmcssThreadPriority, ProAudioThreadGuard,
+    WasapiAsioBlockAdapter, asio_planar_f32_to_int32_lsb, asio_planar_to_stereo_frames,
+    convert_f32_to_int16_lsb, convert_f32_to_int24_lsb, convert_f32_to_int32_lsb,
+    convert_int32_lsb_to_f32, stereo_frames_to_asio_planar, stereo_frames_to_wasapi_interleaved,
+    wasapi_interleaved_to_stereo_frames,
 };
 pub use automation_spline::{
     AutomationClipArticulator, ControllerLink, InternalControllerBus, LfoModulator, LfoWaveform,

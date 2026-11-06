@@ -168,6 +168,36 @@
       "sha256_prefix": "650969e7c5ffe544"
     },
     {
+      "category": "assistant_cnn",
+      "relative_dest_path": "models/assistant_cnn/instrument_classifier_params.npz",
+      "size_bytes": 19853709,
+      "sha256_prefix": "fadda21a950924b1"
+    },
+    {
+      "category": "assistant_cnn",
+      "relative_dest_path": "ozone12/models/instrument_classifier_params.npz",
+      "size_bytes": 19853709,
+      "sha256_prefix": "fadda21a950924b1"
+    },
+    {
+      "category": "assistant_cnn",
+      "relative_dest_path": "ozone12/models/gparamsBN8.0.npz",
+      "size_bytes": 6522880,
+      "sha256_prefix": "650969e7c5ffe544"
+    },
+    {
+      "category": "npz_gru_stems",
+      "relative_dest_path": "ozone12/models/vocals-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256_prefix": "fe652a1f334b984f"
+    },
+    {
+      "category": "npz_gru_stems",
+      "relative_dest_path": "models/npz_gru_stems/vocals-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256_prefix": "fe652a1f334b984f"
+    },
+    {
       "category": "dk_triode_lut",
       "relative_dest_path": "exciter_luts/exciter-triode-48000.000000.dat",
       "size_bytes": 2074532,

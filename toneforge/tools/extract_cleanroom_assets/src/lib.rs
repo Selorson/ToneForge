@@ -212,6 +212,8 @@ pub fn run_cleanroom_extraction(
     }
 
     if extract_realtime_binaries {
+        fs::create_dir_all(toneforge_assets_dir.join("ozone12/models"))
+            .map_err(|e| e.to_string())?;
         let priority_targets = [
             (
                 "models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
@@ -228,6 +230,21 @@ pub fn run_cleanroom_extraction(
                 "assistant_cnn",
                 "models/assistant_cnn/gparamsBN8.0.npz",
             ),
+            (
+                "Referencing/DSP/instrument_classifier_params.npz",
+                "assistant_cnn",
+                "models/assistant_cnn/instrument_classifier_params.npz",
+            ),
+            (
+                "Referencing/DSP/instrument_classifier_params.npz",
+                "assistant_cnn",
+                "ozone12/models/instrument_classifier_params.npz",
+            ),
+            (
+                "Referencing/DSP/gparamsBN8.0.npz",
+                "assistant_cnn",
+                "ozone12/models/gparamsBN8.0.npz",
+            ),
         ];
         for (vpath, cat, rel_dest) in priority_targets {
             if let Some(entry) = toc_entries.iter().find(|e| e.virtual_path == vpath) {
@@ -239,6 +256,37 @@ pub fn run_cleanroom_extraction(
                     rel_dest,
                 )?;
                 extracted_files.push(rec);
+            }
+        }
+
+        // Copy vocals-small_sanitized.npz (26,261,516 bytes) from ssepnpz
+        let vocals_npz_src = extracted_targets_dir
+            .join("ozone12")
+            .join("requiredFiles_component")
+            .join("ssepnpz")
+            .join("vocals-small_sanitized.npz");
+        if vocals_npz_src.exists() {
+            let vocals_bytes = fs::read(&vocals_npz_src)
+                .map_err(|e| format!("Failed to read {}: {e}", vocals_npz_src.display()))?;
+            let mut hasher = Sha256::new();
+            hasher.update(&vocals_bytes);
+            let digest_hex = hex::encode(hasher.finalize());
+
+            for rel_dest in [
+                "ozone12/models/vocals-small_sanitized.npz",
+                "models/npz_gru_stems/vocals-small_sanitized.npz",
+            ] {
+                let full_dest = toneforge_assets_dir.join(rel_dest);
+                if let Some(parent) = full_dest.parent() {
+                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                fs::write(&full_dest, &vocals_bytes).map_err(|e| e.to_string())?;
+                extracted_files.push(ExtractedAssetRecord {
+                    category: "npz_gru_stems".to_string(),
+                    relative_dest_path: rel_dest.to_string(),
+                    size_bytes: vocals_bytes.len() as u64,
+                    sha256_prefix: digest_hex[..16].to_string(),
+                });
             }
         }
     }

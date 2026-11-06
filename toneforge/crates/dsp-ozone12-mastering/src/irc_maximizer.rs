@@ -48,14 +48,20 @@ impl SlidingMaxHeap {
     }
 
     #[inline]
+    pub fn clear(&mut self) {
+        self.reset();
+    }
+
+    #[inline]
     pub fn window_len(&self) -> usize {
         self.window_len
     }
 
     #[inline(always)]
     pub fn push_and_query_max(&mut self, val: f32) -> f32 {
+        let clean_val = if val.is_nan() { 0.0 } else { val };
         let mut idx = self.capacity_pow2 + self.write_pos;
-        self.tree[idx] = val;
+        self.tree[idx] = clean_val;
         idx >>= 1;
         while idx > 0 {
             let left = self.tree[idx * 2];

@@ -252,7 +252,7 @@ export class WebGpu120FpsRenderer {
           {
             view: this.context.getCurrentTexture().createView(),
             loadOp: 'clear',
-            clearValue: { r: 0.035, g: 0.05, b: 0.085, a: 1.0 },
+            clearValue: { r: 0.031, g: 0.067, b: 0.071, a: 1.0 },
             storeOp: 'store',
           },
         ],
@@ -270,7 +270,7 @@ export class WebGpu120FpsRenderer {
     if (!ctx) return;
     const w = this.canvas.width;
     const h = this.canvas.height;
-    ctx.fillStyle = '#090d16';
+    ctx.fillStyle = '#081112';
     ctx.fillRect(0, 0, w, h);
 
     if (this.mode === 'proq4') {
@@ -285,7 +285,7 @@ export class WebGpu120FpsRenderer {
         ctx.lineTo(x, y);
       }
       ctx.lineTo(w, h);
-      ctx.fillStyle = 'rgba(34, 211, 238, 0.22)';
+      ctx.fillStyle = 'rgba(118, 210, 219, 0.22)';
       ctx.fill();
 
       // Draw 24-Band Composite Response Curve
@@ -299,7 +299,7 @@ export class WebGpu120FpsRenderer {
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = '#facc15';
+      ctx.strokeStyle = '#fbbf24';
       ctx.lineWidth = 2.2;
       ctx.stroke();
     } else if (this.mode === 'soothe3') {
@@ -314,10 +314,10 @@ export class WebGpu120FpsRenderer {
       }
       ctx.lineTo(w, 0);
       ctx.fillStyle = telemetry.soothe3DeltaSolo
-        ? 'rgba(251, 146, 60, 0.45)'
-        : 'rgba(244, 63, 94, 0.38)';
+        ? 'rgba(251, 191, 36, 0.42)'
+        : 'rgba(224, 112, 112, 0.36)';
       ctx.fill();
-      ctx.strokeStyle = '#fb7185';
+      ctx.strokeStyle = '#E07070';
       ctx.lineWidth = 2.0;
       ctx.stroke();
     } else {
@@ -328,10 +328,11 @@ export class WebGpu120FpsRenderer {
         const normL = Math.max(0, Math.min(1, (m.peakLDb + 60) / 60));
         const normR = Math.max(0, Math.min(1, (m.peakRDb + 60) / 60));
         const x = i * meterW;
-        ctx.fillStyle = '#10b981';
+        ctx.fillStyle = '#4ade80';
         ctx.fillRect(x + 2, h * (1 - normL), meterW * 0.38, h * normL);
         ctx.fillRect(x + meterW * 0.45, h * (1 - normR), meterW * 0.38, h * normR);
       }
     }
   }
 }
+

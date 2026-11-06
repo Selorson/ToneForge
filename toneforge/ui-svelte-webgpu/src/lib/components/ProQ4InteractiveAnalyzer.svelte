@@ -98,6 +98,31 @@
       </span>
     </div>
     <div class="phase-modes">
+      <label class="preset-select">
+        Factory Preset (171 Real .ffp):
+        <select
+          value={telemetry.proq4SelectedPreset}
+          onchange={(e) =>
+            telemetry.loadProQ4FactoryPreset((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each [
+            'Default Setting',
+            'Vocals / Lead Vocal',
+            'Vocals / Female Vocal',
+            'Mixbus / Dynamic Smiley Curve ST',
+            'Mixbus / Revigorate',
+            'Mixbus / Mastering High & Low Cut',
+            'Drums / Kick Punch',
+            'Drums / Snare Snap',
+            'Bass / Sub Tighten',
+            'Guitar / Acoustic Sparkle',
+            'Synth / Wide Pad',
+            'Utility / Brickwall Sub Cut',
+          ] as preset}
+            <option value={preset}>{preset}</option>
+          {/each}
+        </select>
+      </label>
       {#each ['ZeroLatency', 'NaturalPhase', 'LinearPhase'] as mode}
         <button
           class={telemetry.proq4PhaseMode === mode ? 'active' : ''}
@@ -267,23 +292,32 @@
 </section>
 
 <style>
-  .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; }
-  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  h2 { margin: 0; font-size: 1rem; color: #facc15; }
-  .subtitle { font-size: 0.75rem; color: #94a3b8; }
-  .phase-modes button {
-    background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; margin-left: 4px;
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  h2 { margin: 0; font-size: 1rem; color: var(--warn); font-weight: 600; }
+  .subtitle { font-size: 0.75rem; color: var(--muted); }
+  .phase-modes { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .preset-select { font-size: 0.75rem; color: var(--muted); margin-right: 6px; }
+  .preset-select select {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-left: 4px; font-size: 0.74rem;
   }
-  .phase-modes button.active { background: #facc15; color: #090d16; font-weight: 700; }
-  .canvas-wrap { position: relative; width: 100%; height: 260px; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; }
-  .proq4-canvas { width: 100%; height: 100%; display: block; }
+  .phase-modes button {
+    background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75rem; margin-left: 4px;
+  }
+  .phase-modes button.active { background: var(--accent); color: #0b2b1e; border-color: var(--accent); font-weight: 600; }
+  .canvas-wrap { position: relative; width: 100%; height: 260px; background: var(--sub-surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .proq4-canvas { width: 100%; height: 100%; display: block; background: var(--sub-surface); }
   .eq-handle {
     position: absolute; transform: translate(-50%, -50%); width: 22px; height: 22px; border-radius: 50%;
-    background: #facc15; color: #090d16; border: 2px solid #ffffff; font-size: 0.7rem; font-weight: 700; cursor: grab;
+    background: var(--warn); color: #0b2b1e; border: 2px solid var(--text); font-size: 0.7rem; font-weight: 700; cursor: grab;
   }
-  .eq-handle.selected { box-shadow: 0 0 12px #facc15; transform: translate(-50%, -50%) scale(1.18); }
-  .eq-handle.spectral { background: #38bdf8; }
+  .eq-handle.selected { box-shadow: 0 0 12px var(--warn); transform: translate(-50%, -50%) scale(1.18); }
+  .eq-handle.spectral { background: var(--accent); }
   .band-controls {
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 10px; font-size: 0.76rem; background: #090d16; padding: 8px; border-radius: 6px;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 10px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--sub-surface-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius);
+  }
+  .band-controls select {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
   }
 </style>
+

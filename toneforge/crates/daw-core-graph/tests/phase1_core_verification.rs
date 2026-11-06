@@ -873,3 +873,95 @@ fn test_multislice_peak_meter_retention_and_patcher_param_connection() {
     assert!((buf[0][0] - 0.5).abs() < 1e-6);
 }
 
+#[test]
+fn test_wasapi_asio_bridge_and_mmcss_pro_audio_guard() {
+    use daw_core_graph::{
+        ASIO_INT32_SCALE_F32, MmcssThreadPriority, ProAudioThreadGuard, WasapiAsioBlockAdapter,
+        asio_planar_f32_to_int32_lsb, asio_planar_to_stereo_frames, convert_f32_to_int16_lsb,
+        convert_f32_to_int24_lsb, convert_f32_to_int32_lsb, convert_int32_lsb_to_f32,
+        stereo_frames_to_asio_planar, stereo_frames_to_wasapi_interleaved,
+        wasapi_interleaved_to_stereo_frames,
+    };
+
+    // 1. Verify 2,147,483,520.0_f32 (0x4EFF_FFFF) ASIO Int32LSB converter at 0x039B9B80
+    assert_eq!(ASIO_INT32_SCALE_F32.to_bits(), 0x4EFF_FFFF);
+    assert_eq!(convert_f32_to_int32_lsb(1.0), 2_147_483_520);
+    assert_eq!(convert_f32_to_int32_lsb(1.5), 2_147_483_520); // clamped, no i32 overflow
+    assert_eq!(convert_f32_to_int32_lsb(-1.0), -2_147_483_520);
+    assert_eq!(convert_f32_to_int32_lsb(0.0), 0);
+    assert!((convert_int32_lsb_to_f32(convert_f32_to_int32_lsb(0.5)) - 0.5).abs() < 1e-6);
+    assert_eq!(convert_f32_to_int16_lsb(1.0), 32_767);
+    assert_eq!(convert_f32_to_int24_lsb(1.0), [0xFF, 0xFF, 0x7F]);
+
+    // 2. Verify Interleaved WASAPI <-> StereoFrame <-> Planar ASIO roundtrips
+    let interleaved_in = [0.25f32, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
+    let mut frames = [[0.0f32; 2]; 4];
+    assert_eq!(
+        wasapi_interleaved_to_stereo_frames(&interleaved_in, &mut frames),
+        4
+    );
+    assert_eq!(frames[0], [0.25, -0.25]);
+    assert_eq!(frames[3], [1.0, -1.0]);
+
+    let mut left = [0.0f32; 4];
+    let mut right = [0.0f32; 4];
+    assert_eq!(
+        stereo_frames_to_asio_planar(&frames, &mut left, &mut right),
+        4
+    );
+    assert_eq!(left, [0.25, 0.5, 0.75, 1.0]);
+    assert_eq!(right, [-0.25, -0.5, -0.75, -1.0]);
+
+    let mut frames_back = [[0.0f32; 2]; 4];
+    assert_eq!(
+        asio_planar_to_stereo_frames(&left, &right, &mut frames_back),
+        4
+    );
+    assert_eq!(frames_back, frames);
+
+    let mut interleaved_out = [0.0f32; 8];
+    assert_eq!(
+        stereo_frames_to_wasapi_interleaved(&frames_back, &mut interleaved_out),
+        4
+    );
+    assert_eq!(interleaved_out, interleaved_in);
+
+    let mut left_i32 = [0i32; 4];
+    let mut right_i32 = [0i32; 4];
+    assert_eq!(
+        asio_planar_f32_to_int32_lsb(&left, &right, &mut left_i32, &mut right_i32),
+        4
+    );
+    assert_eq!(left_i32[3], 2_147_483_520);
+    assert_eq!(right_i32[3], -2_147_483_520);
+
+    // 3. Verify WasapiAsioBlockAdapter bridging 480-sample WASAPI packets into 256-sample ASIO blocks
+    let mut adapter = WasapiAsioBlockAdapter::new(64, 512);
+    let wasapi_pkt: Vec<f32> = (0..200).map(|i| (i as f32) * 0.001).collect(); // 100 stereo frames
+    assert_eq!(adapter.push_wasapi_interleaved(&wasapi_pkt), 100);
+    assert_eq!(adapter.available_frames(), 100);
+
+    let mut asio_l = [0.0f32; 64];
+    let mut asio_r = [0.0f32; 64];
+    assert!(adapter.pop_asio_planar_block(&mut asio_l, &mut asio_r));
+    assert_eq!(adapter.available_frames(), 36);
+    assert!((asio_l[10] - 0.020).abs() < 1e-6);
+    assert!((asio_r[10] - 0.021).abs() < 1e-6);
+
+    // Verify NaN safety and undersized output slice rejection
+    assert_eq!(convert_f32_to_int32_lsb(f32::NAN), 0);
+    assert_eq!(convert_f32_to_int16_lsb(f32::NAN), 0);
+    assert_eq!(convert_f32_to_int24_lsb(f32::NAN), [0, 0, 0]);
+    assert!(!adapter.pop_asio_block(&mut []));
+    let mut short_buf = [[0.0f32; 2]; 32];
+    assert!(!adapter.pop_asio_block(&mut short_buf));
+
+    // 4. Verify Windows MMCSS "Pro Audio" RAII Thread Guard
+    let guard = ProAudioThreadGuard::elevate_current_thread();
+    assert_eq!(guard.priority(), MmcssThreadPriority::Critical);
+    #[cfg(target_os = "windows")]
+    assert!(guard.is_elevated());
+    drop(guard);
+}
+
+

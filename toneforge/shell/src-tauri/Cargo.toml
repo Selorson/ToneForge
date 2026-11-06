@@ -1,0 +1,24 @@
+[package]
+name = "toneforge-studio"
+version = "0.1.0"
+description = "ToneForge Studio — 120 FPS WebGPU Mastering & Stem Workstation (Tauri v2 Desktop Shell)"
+edition = "2024"
+
+[[bin]]
+name = "ToneForge_Studio"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+daw-core-graph.workspace = true
+daw-tauri-host = { path = "../../crates/daw-tauri-host" }
+tauri = { version = "2", features = [] }
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

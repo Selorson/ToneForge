@@ -6,6 +6,41 @@
   const STEM_NAMES = ['Vocals', 'Drums', 'Bass', 'Other'];
   const IRC_MODES = ['IRC I', 'IRC II', 'IRC III', 'IRC IV', 'IRC V', 'IRC LL'];
   const EXCITER_MODES = ['Analog', 'Retro', 'Tape', 'Warm', '12AX7 Triode', 'Dual Triode', 'Tube'];
+  const OZONE12_GENRES = [
+    'AllPurpose',
+    'Pop',
+    'EDM',
+    'HipHop',
+    'Trap',
+    'Rock',
+    'LoFi',
+    'KPopJPop',
+    'RnbSoul',
+    'Jazz',
+    'Orchestral',
+    'Modern',
+    'DancePop',
+    'House',
+    'Techno',
+    'DrumAndBass',
+    'Dubstep',
+    'FutureBass',
+    'Metal',
+    'Reggaeton',
+  ];
+  const OZONE12_GLOBAL_PRESETS = [
+    'Modern Clarity',
+    'Aggro Dance',
+    'Clean & Wide',
+    'Warm & Open',
+    'Punchy Low End',
+    'CD Master',
+    'Streaming Master (-14 LUFS)',
+    'pop-modern-pro.xml',
+    'edm-modern-pro.xml',
+    'hiphop-modern-pro.xml',
+    'rock-modern-pro.xml',
+  ];
 </script>
 
 <section class="panel ozone12-panel">
@@ -13,8 +48,37 @@
     <div>
       <h2>iZotope Ozone 12 Mastering Console & 120ms Real-Time BSRNN Stem Rebalance</h2>
       <span class="subtitle">
-        12AX7 DK-Triode LUT Exciter · IRC V Multi-Band Maximizer (4× True-Peak) · Imager · Stabilizer · 0x09000 Telemetry
+        12AX7 DK-Triode LUT Exciter · IRC V Multi-Band Maximizer (4× True-Peak) · Imager · Stabilizer · {telemetry.ozone12AiAssistantStatus}
       </span>
+    </div>
+    <div class="ozone-preset-bar">
+      <label>
+        Genre Target Curve (36 Real IZRESEMBED):
+        <select
+          value={telemetry.ozone12SelectedGenre}
+          onchange={(e) =>
+            telemetry.loadOzone12GenrePreset((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each OZONE12_GENRES as g}
+            <option value={g}>{g === 'AllPurpose' ? 'AllPurpose (Neutral Reference)' : g}</option>
+          {/each}
+        </select>
+      </label>
+      <label>
+        Global Mastering Preset (82 Real XML):
+        <select
+          value={telemetry.ozone12SelectedGlobalXml}
+          onchange={(e) =>
+            telemetry.loadOzone12GlobalXmlPreset((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each OZONE12_GLOBAL_PRESETS as gp}
+            <option value={gp}>{gp}</option>
+          {/each}
+        </select>
+      </label>
+      <button class="ai-assist-btn" onclick={() => telemetry.runOzone12AiMasterAssistant()}>
+        ✨ AI Master Assistant (Auto-Match)
+      </button>
     </div>
     <div class="lufs-readout">
       <span>M: <strong>{telemetry.lufsMomentary.toFixed(1)}</strong> LUFS</span>
@@ -175,13 +239,19 @@
 </section>
 
 <style>
-  .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
   .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
-  h2 { margin: 0; font-size: 1rem; color: #34d399; }
-  .subtitle { font-size: 0.75rem; color: #94a3b8; }
-  .lufs-readout { display: flex; gap: 12px; font-size: 0.78rem; background: #090d16; padding: 6px 10px; border-radius: 6px; border: 1px solid #1e293b; }
+  h2 { margin: 0; font-size: 1rem; color: var(--ok); font-weight: 600; }
+  .subtitle { font-size: 0.75rem; color: var(--muted); }
+  .ozone-preset-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.75rem; color: var(--muted); }
+  .ozone-preset-bar select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-left: 4px; font-size: 0.74rem; }
+  .ai-assist-btn { background: var(--accent); color: #0b2b1e; border: 1px solid var(--accent); border-radius: 6px; padding: 5px 10px; font-weight: 600; cursor: pointer; font-size: 0.75rem; }
+  .lufs-readout { display: flex; gap: 12px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--sub-surface); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); }
+  .lufs-readout strong { color: var(--accent); }
   .ozone-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-  .module-card { background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 10px; font-size: 0.75rem; display: flex; flex-direction: column; gap: 6px; }
-  h3 { margin: 0 0 4px 0; font-size: 0.82rem; color: #38bdf8; }
+  .module-card { background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-size: 0.75rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 6px; }
+  .module-card select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  h3 { margin: 0 0 4px 0; font-size: 0.82rem; font-family: var(--font-sans); color: var(--accent); font-weight: 600; }
   .band-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 </style>
+

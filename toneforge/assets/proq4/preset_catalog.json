@@ -1,0 +1,1028 @@
+[
+  {
+    "category": "Aces",
+    "filename": "De-Harsher ST.ffp",
+    "relative_path": "Aces/De-Harsher ST.ffp",
+    "size_bytes": 14567
+  },
+  {
+    "category": "Aces",
+    "filename": "De-Harsher.ffp",
+    "relative_path": "Aces/De-Harsher.ffp",
+    "size_bytes": 14381
+  },
+  {
+    "category": "Aces",
+    "filename": "Lo-Fi Box.ffp",
+    "relative_path": "Aces/Lo-Fi Box.ffp",
+    "size_bytes": 14541
+  },
+  {
+    "category": "Aces",
+    "filename": "Magic Nasal Box Cure.ffp",
+    "relative_path": "Aces/Magic Nasal Box Cure.ffp",
+    "size_bytes": 14582
+  },
+  {
+    "category": "Aces",
+    "filename": "Musical Bandpass Filter.ffp",
+    "relative_path": "Aces/Musical Bandpass Filter.ffp",
+    "size_bytes": 14428
+  },
+  {
+    "category": "Aces",
+    "filename": "Musical High Cut Filter ST.ffp",
+    "relative_path": "Aces/Musical High Cut Filter ST.ffp",
+    "size_bytes": 14694
+  },
+  {
+    "category": "Aces",
+    "filename": "Musical High Cut Filter.ffp",
+    "relative_path": "Aces/Musical High Cut Filter.ffp",
+    "size_bytes": 14490
+  },
+  {
+    "category": "Aces",
+    "filename": "Musical Low Cut Filter ST.ffp",
+    "relative_path": "Aces/Musical Low Cut Filter ST.ffp",
+    "size_bytes": 14692
+  },
+  {
+    "category": "Aces",
+    "filename": "Musical Low Cut Filter.ffp",
+    "relative_path": "Aces/Musical Low Cut Filter.ffp",
+    "size_bytes": 14504
+  },
+  {
+    "category": "Bass",
+    "filename": "Bass Balancer.ffp",
+    "relative_path": "Bass/Bass Balancer.ffp",
+    "size_bytes": 14180
+  },
+  {
+    "category": "Bass",
+    "filename": "Bass Gtr - Brighten.ffp",
+    "relative_path": "Bass/Bass Gtr - Brighten.ffp",
+    "size_bytes": 14232
+  },
+  {
+    "category": "Bass",
+    "filename": "Bass Gtr - DI Transformation.ffp",
+    "relative_path": "Bass/Bass Gtr - DI Transformation.ffp",
+    "size_bytes": 14305
+  },
+  {
+    "category": "Bass",
+    "filename": "Bass Gtr - Tonal Control.ffp",
+    "relative_path": "Bass/Bass Gtr - Tonal Control.ffp",
+    "size_bytes": 14211
+  },
+  {
+    "category": "Bass",
+    "filename": "Classic Synth Bass EQ.ffp",
+    "relative_path": "Bass/Classic Synth Bass EQ.ffp",
+    "size_bytes": 14211
+  },
+  {
+    "category": "Bass",
+    "filename": "Djent Bass Punch and Cut.ffp",
+    "relative_path": "Bass/Djent Bass Punch and Cut.ffp",
+    "size_bytes": 14959
+  },
+  {
+    "category": "Bass",
+    "filename": "Nail the Bass Down.ffp",
+    "relative_path": "Bass/Nail the Bass Down.ffp",
+    "size_bytes": 14457
+  },
+  {
+    "category": "Bass",
+    "filename": "Soft DI Bass 01.ffp",
+    "relative_path": "Bass/Soft DI Bass 01.ffp",
+    "size_bytes": 14329
+  },
+  {
+    "category": "Bass",
+    "filename": "Soft DI Bass 02.ffp",
+    "relative_path": "Bass/Soft DI Bass 02.ffp",
+    "size_bytes": 14367
+  },
+  {
+    "category": "Bass",
+    "filename": "Soft DI Bass 03.ffp",
+    "relative_path": "Bass/Soft DI Bass 03.ffp",
+    "size_bytes": 14438
+  },
+  {
+    "category": "Bass",
+    "filename": "Synth Bass Mid Layer.ffp",
+    "relative_path": "Bass/Synth Bass Mid Layer.ffp",
+    "size_bytes": 14109
+  },
+  {
+    "category": "Brass",
+    "filename": "High Sax Resonance Control.ffp",
+    "relative_path": "Brass/High Sax Resonance Control.ffp",
+    "size_bytes": 14881
+  },
+  {
+    "category": "Brass",
+    "filename": "Resonance Control Mids.ffp",
+    "relative_path": "Brass/Resonance Control Mids.ffp",
+    "size_bytes": 15070
+  },
+  {
+    "category": "Brass",
+    "filename": "Trumpet High Detail.ffp",
+    "relative_path": "Brass/Trumpet High Detail.ffp",
+    "size_bytes": 15181
+  },
+  {
+    "category": "Root",
+    "filename": "Clean.ffp",
+    "relative_path": "Root/Clean.ffp",
+    "size_bytes": 14350
+  },
+  {
+    "category": "Root",
+    "filename": "Default Setting.ffp",
+    "relative_path": "Root/Default Setting.ffp",
+    "size_bytes": 14544
+  },
+  {
+    "category": "Drums",
+    "filename": "Drumbus - Mud Control and Magic.ffp",
+    "relative_path": "Drums/Drumbus - Mud Control and Magic.ffp",
+    "size_bytes": 14196
+  },
+  {
+    "category": "Drums",
+    "filename": "Drumbus Impact.ffp",
+    "relative_path": "Drums/Drumbus Impact.ffp",
+    "size_bytes": 15313
+  },
+  {
+    "category": "Drums",
+    "filename": "Drumbus Punch.ffp",
+    "relative_path": "Drums/Drumbus Punch.ffp",
+    "size_bytes": 14194
+  },
+  {
+    "category": "Drums",
+    "filename": "Dynamic Percussion.ffp",
+    "relative_path": "Drums/Dynamic Percussion.ffp",
+    "size_bytes": 14226
+  },
+  {
+    "category": "Drums",
+    "filename": "EDM Clap - Mids instead of Highs.ffp",
+    "relative_path": "Drums/EDM Clap - Mids instead of Highs.ffp",
+    "size_bytes": 14179
+  },
+  {
+    "category": "Drums",
+    "filename": "EDM Kick 1 - Punch.ffp",
+    "relative_path": "Drums/EDM Kick 1 - Punch.ffp",
+    "size_bytes": 14200
+  },
+  {
+    "category": "Drums",
+    "filename": "EDM Kick 2 - Sustain.ffp",
+    "relative_path": "Drums/EDM Kick 2 - Sustain.ffp",
+    "size_bytes": 14152
+  },
+  {
+    "category": "Drums",
+    "filename": "EDM Kick 3 - Click Modifier.ffp",
+    "relative_path": "Drums/EDM Kick 3 - Click Modifier.ffp",
+    "size_bytes": 14131
+  },
+  {
+    "category": "Drums",
+    "filename": "EDM Kick 4 - Mid Scoop and Click Control.ffp",
+    "relative_path": "Drums/EDM Kick 4 - Mid Scoop and Click Control.ffp",
+    "size_bytes": 14201
+  },
+  {
+    "category": "Drums",
+    "filename": "Full Range Compression.ffp",
+    "relative_path": "Drums/Full Range Compression.ffp",
+    "size_bytes": 14417
+  },
+  {
+    "category": "Drums",
+    "filename": "HiHat 1 - Low Cut and Bright.ffp",
+    "relative_path": "Drums/HiHat 1 - Low Cut and Bright.ffp",
+    "size_bytes": 14137
+  },
+  {
+    "category": "Drums",
+    "filename": "HiHat 2 - Accenting High-Mids.ffp",
+    "relative_path": "Drums/HiHat 2 - Accenting High-Mids.ffp",
+    "size_bytes": 14174
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - Bad PZM Rescue.ffp",
+    "relative_path": "Drums/Kick - Bad PZM Rescue.ffp",
+    "size_bytes": 14385
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - IN 01.ffp",
+    "relative_path": "Drums/Kick - IN 01.ffp",
+    "size_bytes": 14369
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - IN 02.ffp",
+    "relative_path": "Drums/Kick - IN 02.ffp",
+    "size_bytes": 14365
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - IN 03.ffp",
+    "relative_path": "Drums/Kick - IN 03.ffp",
+    "size_bytes": 14312
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - IN 04.ffp",
+    "relative_path": "Drums/Kick - IN 04.ffp",
+    "size_bytes": 14558
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - OUT 01.ffp",
+    "relative_path": "Drums/Kick - OUT 01.ffp",
+    "size_bytes": 14354
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick - OUT 02.ffp",
+    "relative_path": "Drums/Kick - OUT 02.ffp",
+    "size_bytes": 14351
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick 1 inside mic - Punch and Click.ffp",
+    "relative_path": "Drums/Kick 1 inside mic - Punch and Click.ffp",
+    "size_bytes": 14094
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick 1 outside mic - Subs and Bleed Control.ffp",
+    "relative_path": "Drums/Kick 1 outside mic - Subs and Bleed Control.ffp",
+    "size_bytes": 14150
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick 2 inside mic - Punch and Click.ffp",
+    "relative_path": "Drums/Kick 2 inside mic - Punch and Click.ffp",
+    "size_bytes": 14111
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick 2 outside mic - Punch and Sustain.ffp",
+    "relative_path": "Drums/Kick 2 outside mic - Punch and Sustain.ffp",
+    "size_bytes": 14161
+  },
+  {
+    "category": "Drums",
+    "filename": "Kick Fixer.ffp",
+    "relative_path": "Drums/Kick Fixer.ffp",
+    "size_bytes": 14196
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 01.ffp",
+    "relative_path": "Drums/Overheads 01.ffp",
+    "size_bytes": 14430
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 02.ffp",
+    "relative_path": "Drums/Overheads 02.ffp",
+    "size_bytes": 14554
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 03 ST.ffp",
+    "relative_path": "Drums/Overheads 03 ST.ffp",
+    "size_bytes": 14455
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 03.ffp",
+    "relative_path": "Drums/Overheads 03.ffp",
+    "size_bytes": 14367
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 04.ffp",
+    "relative_path": "Drums/Overheads 04.ffp",
+    "size_bytes": 14318
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 05.ffp",
+    "relative_path": "Drums/Overheads 05.ffp",
+    "size_bytes": 14820
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 1 - Mud Cleanup and Control.ffp",
+    "relative_path": "Drums/Overheads 1 - Mud Cleanup and Control.ffp",
+    "size_bytes": 14100
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 2 - Low Suppression and Highs Extraction.ffp",
+    "relative_path": "Drums/Overheads 2 - Low Suppression and Highs Extraction.ffp",
+    "size_bytes": 14210
+  },
+  {
+    "category": "Drums",
+    "filename": "Overheads 3 - Darkener.ffp",
+    "relative_path": "Drums/Overheads 3 - Darkener.ffp",
+    "size_bytes": 14198
+  },
+  {
+    "category": "Drums",
+    "filename": "Programmed Percussion Punch.ffp",
+    "relative_path": "Drums/Programmed Percussion Punch.ffp",
+    "size_bytes": 14221
+  },
+  {
+    "category": "Drums",
+    "filename": "Room 01.ffp",
+    "relative_path": "Drums/Room 01.ffp",
+    "size_bytes": 14559
+  },
+  {
+    "category": "Drums",
+    "filename": "Room 1 - Mud Removal and Control.ffp",
+    "relative_path": "Drums/Room 1 - Mud Removal and Control.ffp",
+    "size_bytes": 14122
+  },
+  {
+    "category": "Drums",
+    "filename": "Room 2 - Bright and Resonance Control.ffp",
+    "relative_path": "Drums/Room 2 - Bright and Resonance Control.ffp",
+    "size_bytes": 14238
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare - BTM 01.ffp",
+    "relative_path": "Drums/Snare - BTM 01.ffp",
+    "size_bytes": 14131
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare - BTM 02.ffp",
+    "relative_path": "Drums/Snare - BTM 02.ffp",
+    "size_bytes": 14273
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare - TOP 01.ffp",
+    "relative_path": "Drums/Snare - TOP 01.ffp",
+    "size_bytes": 14365
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare - TOP 02.ffp",
+    "relative_path": "Drums/Snare - TOP 02.ffp",
+    "size_bytes": 14379
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare - TOP 03.ffp",
+    "relative_path": "Drums/Snare - TOP 03.ffp",
+    "size_bytes": 14137
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare - TOP 04.ffp",
+    "relative_path": "Drums/Snare - TOP 04.ffp",
+    "size_bytes": 14496
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare 1 bottom - Bleed Control and Resonance.ffp",
+    "relative_path": "Drums/Snare 1 bottom - Bleed Control and Resonance.ffp",
+    "size_bytes": 14147
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare 1 top - Punch and Bleed Control.ffp",
+    "relative_path": "Drums/Snare 1 top - Punch and Bleed Control.ffp",
+    "size_bytes": 14184
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare 2 bottom - Rattle Control and Body.ffp",
+    "relative_path": "Drums/Snare 2 bottom - Rattle Control and Body.ffp",
+    "size_bytes": 14219
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare 2 top - Control and Sustain.ffp",
+    "relative_path": "Drums/Snare 2 top - Control and Sustain.ffp",
+    "size_bytes": 14161
+  },
+  {
+    "category": "Drums",
+    "filename": "Snare Salvage.ffp",
+    "relative_path": "Drums/Snare Salvage.ffp",
+    "size_bytes": 14176
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom - Floor 01.ffp",
+    "relative_path": "Drums/Tom - Floor 01.ffp",
+    "size_bytes": 14379
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom - Floor 02.ffp",
+    "relative_path": "Drums/Tom - Floor 02.ffp",
+    "size_bytes": 14467
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom - Rack 01.ffp",
+    "relative_path": "Drums/Tom - Rack 01.ffp",
+    "size_bytes": 14335
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom - Rack 02.ffp",
+    "relative_path": "Drums/Tom - Rack 02.ffp",
+    "size_bytes": 14409
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom - Rack 03.ffp",
+    "relative_path": "Drums/Tom - Rack 03.ffp",
+    "size_bytes": 14499
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom Floor 1 - Punch and Click.ffp",
+    "relative_path": "Drums/Tom Floor 1 - Punch and Click.ffp",
+    "size_bytes": 14135
+  },
+  {
+    "category": "Drums",
+    "filename": "Tom Rack 1 - Punch and Click.ffp",
+    "relative_path": "Drums/Tom Rack 1 - Punch and Click.ffp",
+    "size_bytes": 14106
+  },
+  {
+    "category": "Guitar",
+    "filename": "Ac Guitar - Control and Excitement (Unlinked Stereo).ffp",
+    "relative_path": "Guitar/Ac Guitar - Control and Excitement (Unlinked Stereo).ffp",
+    "size_bytes": 14245
+  },
+  {
+    "category": "Guitar",
+    "filename": "Ac Guitar - Control and Excitement.ffp",
+    "relative_path": "Guitar/Ac Guitar - Control and Excitement.ffp",
+    "size_bytes": 14170
+  },
+  {
+    "category": "Guitar",
+    "filename": "Ac Guitar - Mud Removal 1.ffp",
+    "relative_path": "Guitar/Ac Guitar - Mud Removal 1.ffp",
+    "size_bytes": 14070
+  },
+  {
+    "category": "Guitar",
+    "filename": "Ac Guitar - Mud Removal 2 (Unlinked Stereo).ffp",
+    "relative_path": "Guitar/Ac Guitar - Mud Removal 2 (Unlinked Stereo).ffp",
+    "size_bytes": 14241
+  },
+  {
+    "category": "Guitar",
+    "filename": "Ac Guitar - Mud Removal 2.ffp",
+    "relative_path": "Guitar/Ac Guitar - Mud Removal 2.ffp",
+    "size_bytes": 14164
+  },
+  {
+    "category": "Guitar",
+    "filename": "AC Guitar Through Mix.ffp",
+    "relative_path": "Guitar/AC Guitar Through Mix.ffp",
+    "size_bytes": 15158
+  },
+  {
+    "category": "Guitar",
+    "filename": "Anger.ffp",
+    "relative_path": "Guitar/Anger.ffp",
+    "size_bytes": 14408
+  },
+  {
+    "category": "Guitar",
+    "filename": "Forward Bite.ffp",
+    "relative_path": "Guitar/Forward Bite.ffp",
+    "size_bytes": 14227
+  },
+  {
+    "category": "Guitar",
+    "filename": "Guitar Repair.ffp",
+    "relative_path": "Guitar/Guitar Repair.ffp",
+    "size_bytes": 14080
+  },
+  {
+    "category": "Guitar",
+    "filename": "Mellow it a little.ffp",
+    "relative_path": "Guitar/Mellow it a little.ffp",
+    "size_bytes": 14452
+  },
+  {
+    "category": "Guitar",
+    "filename": "Nylon Guitar Solo.ffp",
+    "relative_path": "Guitar/Nylon Guitar Solo.ffp",
+    "size_bytes": 14467
+  },
+  {
+    "category": "Guitar",
+    "filename": "Tight Range.ffp",
+    "relative_path": "Guitar/Tight Range.ffp",
+    "size_bytes": 14347
+  },
+  {
+    "category": "Keys",
+    "filename": "Gentle Stereo Narrowing.ffp",
+    "relative_path": "Keys/Gentle Stereo Narrowing.ffp",
+    "size_bytes": 14201
+  },
+  {
+    "category": "Keys",
+    "filename": "Hammond Levelling.ffp",
+    "relative_path": "Keys/Hammond Levelling.ffp",
+    "size_bytes": 15331
+  },
+  {
+    "category": "Keys",
+    "filename": "Keyscape Felt for Mix.ffp",
+    "relative_path": "Keys/Keyscape Felt for Mix.ffp",
+    "size_bytes": 14886
+  },
+  {
+    "category": "Keys",
+    "filename": "More Bark for Rhodes.ffp",
+    "relative_path": "Keys/More Bark for Rhodes.ffp",
+    "size_bytes": 14679
+  },
+  {
+    "category": "Keys",
+    "filename": "Piano Soft for Mix.ffp",
+    "relative_path": "Keys/Piano Soft for Mix.ffp",
+    "size_bytes": 14303
+  },
+  {
+    "category": "Keys",
+    "filename": "Piano Soft for Playing.ffp",
+    "relative_path": "Keys/Piano Soft for Playing.ffp",
+    "size_bytes": 14307
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Clarity ST.ffp",
+    "relative_path": "Mixbus/Clarity ST.ffp",
+    "size_bytes": 14488
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Clarity.ffp",
+    "relative_path": "Mixbus/Clarity.ffp",
+    "size_bytes": 14398
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Dynamic Smiley Curve ST.ffp",
+    "relative_path": "Mixbus/Dynamic Smiley Curve ST.ffp",
+    "size_bytes": 14663
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Dynamic Smiley Curve.ffp",
+    "relative_path": "Mixbus/Dynamic Smiley Curve.ffp",
+    "size_bytes": 14414
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Ear Friendly Polish.ffp",
+    "relative_path": "Mixbus/Ear Friendly Polish.ffp",
+    "size_bytes": 15683
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Elixir.ffp",
+    "relative_path": "Mixbus/Elixir.ffp",
+    "size_bytes": 14707
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix de-clutter (mid).ffp",
+    "relative_path": "Mixbus/Mix de-clutter (mid).ffp",
+    "size_bytes": 14073
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix de-clutter.ffp",
+    "relative_path": "Mixbus/Mix de-clutter.ffp",
+    "size_bytes": 14048
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Deharsh 2.3kHz.ffp",
+    "relative_path": "Mixbus/Mix Deharsh 2.3kHz.ffp",
+    "size_bytes": 14100
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Deharsh 4kHz.ffp",
+    "relative_path": "Mixbus/Mix Deharsh 4kHz.ffp",
+    "size_bytes": 14100
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Deharsh Broadband.ffp",
+    "relative_path": "Mixbus/Mix Deharsh Broadband.ffp",
+    "size_bytes": 14147
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix General Purpose Balancing 1.ffp",
+    "relative_path": "Mixbus/Mix General Purpose Balancing 1.ffp",
+    "size_bytes": 14330
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix General Purpose Balancing 2.ffp",
+    "relative_path": "Mixbus/Mix General Purpose Balancing 2.ffp",
+    "size_bytes": 14244
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Mud Removal 130Hz.ffp",
+    "relative_path": "Mixbus/Mix Mud Removal 130Hz.ffp",
+    "size_bytes": 14082
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Mud Removal 200Hz.ffp",
+    "relative_path": "Mixbus/Mix Mud Removal 200Hz.ffp",
+    "size_bytes": 14082
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Mud Removal 300Hz.ffp",
+    "relative_path": "Mixbus/Mix Mud Removal 300Hz.ffp",
+    "size_bytes": 14082
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Mix Mud Removal 400Hz.ffp",
+    "relative_path": "Mixbus/Mix Mud Removal 400Hz.ffp",
+    "size_bytes": 14082
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Revigorate.ffp",
+    "relative_path": "Mixbus/Revigorate.ffp",
+    "size_bytes": 14566
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Subgroup Sorcery ST.ffp",
+    "relative_path": "Mixbus/Subgroup Sorcery ST.ffp",
+    "size_bytes": 14404
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Subgroup Sorcery.ffp",
+    "relative_path": "Mixbus/Subgroup Sorcery.ffp",
+    "size_bytes": 14303
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Supreme Transparency.ffp",
+    "relative_path": "Mixbus/Supreme Transparency.ffp",
+    "size_bytes": 14577
+  },
+  {
+    "category": "Mixbus",
+    "filename": "Width with Control.ffp",
+    "relative_path": "Mixbus/Width with Control.ffp",
+    "size_bytes": 14553
+  },
+  {
+    "category": "Sends",
+    "filename": "Delay Stereo to Middle Movement.ffp",
+    "relative_path": "Sends/Delay Stereo to Middle Movement.ffp",
+    "size_bytes": 14390
+  },
+  {
+    "category": "Sends",
+    "filename": "Notches for Delay Send.ffp",
+    "relative_path": "Sends/Notches for Delay Send.ffp",
+    "size_bytes": 14245
+  },
+  {
+    "category": "Sends",
+    "filename": "Phase Chaos.ffp",
+    "relative_path": "Sends/Phase Chaos.ffp",
+    "size_bytes": 14333
+  },
+  {
+    "category": "Sends",
+    "filename": "Send FX Cleanup.ffp",
+    "relative_path": "Sends/Send FX Cleanup.ffp",
+    "size_bytes": 14240
+  },
+  {
+    "category": "Strings",
+    "filename": "Creamy Strings.ffp",
+    "relative_path": "Strings/Creamy Strings.ffp",
+    "size_bytes": 14886
+  },
+  {
+    "category": "Strings",
+    "filename": "Problem Frequencies for String Section.ffp",
+    "relative_path": "Strings/Problem Frequencies for String Section.ffp",
+    "size_bytes": 14291
+  },
+  {
+    "category": "Surround",
+    "filename": "Center Voice.ffp",
+    "relative_path": "Surround/Center Voice.ffp",
+    "size_bytes": 13999
+  },
+  {
+    "category": "Surround",
+    "filename": "Front Flat 5 Bands.ffp",
+    "relative_path": "Surround/Front Flat 5 Bands.ffp",
+    "size_bytes": 14023
+  },
+  {
+    "category": "Surround",
+    "filename": "Front Flat 6 Bands.ffp",
+    "relative_path": "Surround/Front Flat 6 Bands.ffp",
+    "size_bytes": 14023
+  },
+  {
+    "category": "Surround",
+    "filename": "Front Flat 7 Bands.ffp",
+    "relative_path": "Surround/Front Flat 7 Bands.ffp",
+    "size_bytes": 14024
+  },
+  {
+    "category": "Synth",
+    "filename": "EDM Complextro - Mid Side Mayhem.ffp",
+    "relative_path": "Synth/EDM Complextro - Mid Side Mayhem.ffp",
+    "size_bytes": 14230
+  },
+  {
+    "category": "Synth",
+    "filename": "EDM Trance Pluck - Mid Side Separation.ffp",
+    "relative_path": "Synth/EDM Trance Pluck - Mid Side Separation.ffp",
+    "size_bytes": 14156
+  },
+  {
+    "category": "Synth",
+    "filename": "Fast Food Notch.ffp",
+    "relative_path": "Synth/Fast Food Notch.ffp",
+    "size_bytes": 14109
+  },
+  {
+    "category": "Synth",
+    "filename": "Make it Tiny.ffp",
+    "relative_path": "Synth/Make it Tiny.ffp",
+    "size_bytes": 14149
+  },
+  {
+    "category": "Synth",
+    "filename": "Push Pad into Background.ffp",
+    "relative_path": "Synth/Push Pad into Background.ffp",
+    "size_bytes": 14274
+  },
+  {
+    "category": "Synth",
+    "filename": "Width and Warmth.ffp",
+    "relative_path": "Synth/Width and Warmth.ffp",
+    "size_bytes": 14542
+  },
+  {
+    "category": "Templates",
+    "filename": "Flat 5 Bands.ffp",
+    "relative_path": "Templates/Flat 5 Bands.ffp",
+    "size_bytes": 14023
+  },
+  {
+    "category": "Templates",
+    "filename": "Flat 6 Bands.ffp",
+    "relative_path": "Templates/Flat 6 Bands.ffp",
+    "size_bytes": 14023
+  },
+  {
+    "category": "Templates",
+    "filename": "Flat 7 Bands.ffp",
+    "relative_path": "Templates/Flat 7 Bands.ffp",
+    "size_bytes": 14024
+  },
+  {
+    "category": "Utility",
+    "filename": "Band Pass Narrow.ffp",
+    "relative_path": "Utility/Band Pass Narrow.ffp",
+    "size_bytes": 14072
+  },
+  {
+    "category": "Utility",
+    "filename": "Band Pass Wide.ffp",
+    "relative_path": "Utility/Band Pass Wide.ffp",
+    "size_bytes": 14070
+  },
+  {
+    "category": "Utility",
+    "filename": "Bell Flat Top.ffp",
+    "relative_path": "Utility/Bell Flat Top.ffp",
+    "size_bytes": 14013
+  },
+  {
+    "category": "Utility",
+    "filename": "Bell Surgical.ffp",
+    "relative_path": "Utility/Bell Surgical.ffp",
+    "size_bytes": 14075
+  },
+  {
+    "category": "Utility",
+    "filename": "Boost High Side.ffp",
+    "relative_path": "Utility/Boost High Side.ffp",
+    "size_bytes": 14060
+  },
+  {
+    "category": "Utility",
+    "filename": "Cut Low Side.ffp",
+    "relative_path": "Utility/Cut Low Side.ffp",
+    "size_bytes": 14133
+  },
+  {
+    "category": "Utility",
+    "filename": "Dim High Side.ffp",
+    "relative_path": "Utility/Dim High Side.ffp",
+    "size_bytes": 14161
+  },
+  {
+    "category": "Utility",
+    "filename": "High Boost.ffp",
+    "relative_path": "Utility/High Boost.ffp",
+    "size_bytes": 14058
+  },
+  {
+    "category": "Utility",
+    "filename": "High Cut Brickwall.ffp",
+    "relative_path": "Utility/High Cut Brickwall.ffp",
+    "size_bytes": 14113
+  },
+  {
+    "category": "Utility",
+    "filename": "High Cut.ffp",
+    "relative_path": "Utility/High Cut.ffp",
+    "size_bytes": 14026
+  },
+  {
+    "category": "Utility",
+    "filename": "High Shelf Brickwall.ffp",
+    "relative_path": "Utility/High Shelf Brickwall.ffp",
+    "size_bytes": 14010
+  },
+  {
+    "category": "Utility",
+    "filename": "High Shelf.ffp",
+    "relative_path": "Utility/High Shelf.ffp",
+    "size_bytes": 14019
+  },
+  {
+    "category": "Utility",
+    "filename": "Low Boost.ffp",
+    "relative_path": "Utility/Low Boost.ffp",
+    "size_bytes": 14012
+  },
+  {
+    "category": "Utility",
+    "filename": "Low Cut Brickwall.ffp",
+    "relative_path": "Utility/Low Cut Brickwall.ffp",
+    "size_bytes": 14114
+  },
+  {
+    "category": "Utility",
+    "filename": "Low Cut.ffp",
+    "relative_path": "Utility/Low Cut.ffp",
+    "size_bytes": 14034
+  },
+  {
+    "category": "Utility",
+    "filename": "Low Shelf Brickwall.ffp",
+    "relative_path": "Utility/Low Shelf Brickwall.ffp",
+    "size_bytes": 14008
+  },
+  {
+    "category": "Utility",
+    "filename": "Low Shelf.ffp",
+    "relative_path": "Utility/Low Shelf.ffp",
+    "size_bytes": 14018
+  },
+  {
+    "category": "Utility",
+    "filename": "Phone.ffp",
+    "relative_path": "Utility/Phone.ffp",
+    "size_bytes": 14154
+  },
+  {
+    "category": "Utility",
+    "filename": "RIAA.ffp",
+    "relative_path": "Utility/RIAA.ffp",
+    "size_bytes": 14189
+  },
+  {
+    "category": "Utility",
+    "filename": "Subtle Stereo Enhancer.ffp",
+    "relative_path": "Utility/Subtle Stereo Enhancer.ffp",
+    "size_bytes": 14148
+  },
+  {
+    "category": "Utility",
+    "filename": "Tilt Shelf.ffp",
+    "relative_path": "Utility/Tilt Shelf.ffp",
+    "size_bytes": 14044
+  },
+  {
+    "category": "Vocals",
+    "filename": "Articulated Rhymes.ffp",
+    "relative_path": "Vocals/Articulated Rhymes.ffp",
+    "size_bytes": 15318
+  },
+  {
+    "category": "Vocals",
+    "filename": "Bad Vocal Rescue.ffp",
+    "relative_path": "Vocals/Bad Vocal Rescue.ffp",
+    "size_bytes": 14545
+  },
+  {
+    "category": "Vocals",
+    "filename": "Bright Vocals with De-Ess.ffp",
+    "relative_path": "Vocals/Bright Vocals with De-Ess.ffp",
+    "size_bytes": 14576
+  },
+  {
+    "category": "Vocals",
+    "filename": "Choir - Fullness and Air.ffp",
+    "relative_path": "Vocals/Choir - Fullness and Air.ffp",
+    "size_bytes": 14167
+  },
+  {
+    "category": "Vocals",
+    "filename": "Forward Controlled Vocal.ffp",
+    "relative_path": "Vocals/Forward Controlled Vocal.ffp",
+    "size_bytes": 14484
+  },
+  {
+    "category": "Vocals",
+    "filename": "Lo-Fi Bandpass Radio.ffp",
+    "relative_path": "Vocals/Lo-Fi Bandpass Radio.ffp",
+    "size_bytes": 14544
+  },
+  {
+    "category": "Vocals",
+    "filename": "Production Ready Vocals.ffp",
+    "relative_path": "Vocals/Production Ready Vocals.ffp",
+    "size_bytes": 15363
+  },
+  {
+    "category": "Vocals",
+    "filename": "Vocal Lead 1.ffp",
+    "relative_path": "Vocals/Vocal Lead 1.ffp",
+    "size_bytes": 14130
+  },
+  {
+    "category": "Vocals",
+    "filename": "Vocal Lead 2.ffp",
+    "relative_path": "Vocals/Vocal Lead 2.ffp",
+    "size_bytes": 14161
+  },
+  {
+    "category": "Vocals",
+    "filename": "Vocal Lead 3.ffp",
+    "relative_path": "Vocals/Vocal Lead 3.ffp",
+    "size_bytes": 14159
+  },
+  {
+    "category": "Vocals",
+    "filename": "Vocal.ffp",
+    "relative_path": "Vocals/Vocal.ffp",
+    "size_bytes": 14037
+  }
+]

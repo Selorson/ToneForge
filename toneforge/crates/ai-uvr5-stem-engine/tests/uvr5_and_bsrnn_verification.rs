@@ -514,4 +514,75 @@ fn test_realtime_bsrnn_active_stem_alignment_mute_cancellation_and_midstream_aut
     );
 }
 
+#[test]
+fn test_npz_archive_reader_and_ozone_npz_gru_engine_real_models() {
+    use ai_uvr5_stem_engine::{InstrumentCnnClassifier, NpzArchiveReader, OzoneNpzGruEngine};
+
+    let vocals_npz_path =
+        Path::new(r"f:\FL studio\toneforge\assets\ozone12\models\vocals-small_sanitized.npz");
+    let gparams_npz_path =
+        Path::new(r"f:\FL studio\toneforge\assets\ozone12\models\gparamsBN8.0.npz");
+    let inst_npz_path = Path::new(
+        r"f:\FL studio\toneforge\assets\ozone12\models\instrument_classifier_params.npz",
+    );
+
+    assert!(vocals_npz_path.exists());
+    assert!(gparams_npz_path.exists());
+    assert!(inst_npz_path.exists());
+
+    assert_eq!(
+        std::fs::metadata(vocals_npz_path).unwrap().len(),
+        26_261_516
+    );
+    assert_eq!(std::fs::metadata(gparams_npz_path).unwrap().len(), 6_522_880);
+    assert_eq!(std::fs::metadata(inst_npz_path).unwrap().len(), 19_853_709);
+
+    // 1. Parse vocals-small_sanitized.npz via NpzArchiveReader & OzoneNpzGruEngine
+    let vocals_reader = NpzArchiveReader::from_file(vocals_npz_path).unwrap();
+    assert_eq!(vocals_reader.tensor_count(), 27);
+
+    let mut gru_engine = OzoneNpzGruEngine::from_reader(&vocals_reader).unwrap();
+    assert_eq!(gru_engine.fft_size, 2048);
+    assert_eq!(gru_engine.fft_stride, 512);
+    assert_eq!(gru_engine.sampling_rate, 44_100);
+    assert_eq!(gru_engine.weight_tensor_count, 22);
+    assert_eq!(gru_engine.total_npy_entries, 27);
+
+    // Run 1 frame of 2050-bin stereo STFT magnitude through 2-layer GRU-512 + Dense-2050
+    let mut x_mag = [0.0f32; 2050];
+    for (k, val) in x_mag.iter_mut().enumerate() {
+        *val = ((k as f32 * 0.031).sin().abs()) * 0.25;
+    }
+    let mut out_mask = [0.0f32; 2050];
+    gru_engine.forward_stft_frame(&x_mag, &mut out_mask);
+    assert!(
+        out_mask
+            .iter()
+            .all(|&m| m.is_finite() && m > 0.0 && m < 1.0),
+        "OzoneNpzGruEngine mask values must be finite and in (0, 1)"
+    );
+
+    gru_engine.reset_hidden_state();
+    assert_eq!(gru_engine.h1_state, gru_engine.gru1.h_0);
+    assert_eq!(gru_engine.h2_state, gru_engine.gru2.h_0);
+
+    // 2. Parse gparamsBN8.0.npz and instrument_classifier_params.npz and run 10-class Mel-80 inference
+    let genre_cnn = GenreCnnClassifier::from_npz_file(gparams_npz_path).unwrap();
+    assert_eq!(genre_cnn.tensor_count(), 34);
+    let mut mel_80 = [0.0f32; 80];
+    for (b, m) in mel_80.iter_mut().enumerate() {
+        *m = -25.0 + (b as f32) * 0.22;
+    }
+    let genre_probs = genre_cnn.classify_mel_80(&mel_80);
+    assert!(genre_probs.iter().all(|&p| p.is_finite() && p >= 0.0));
+    assert!((genre_probs.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+
+    let inst_cnn = InstrumentCnnClassifier::from_npz_file(inst_npz_path).unwrap();
+    assert_eq!(inst_cnn.tensor_count(), 12);
+    let inst_probs = inst_cnn.classify_mel_80(&mel_80);
+    assert!(inst_probs.iter().all(|&p| p.is_finite() && p >= 0.0));
+    assert!((inst_probs.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+}
+
+
 

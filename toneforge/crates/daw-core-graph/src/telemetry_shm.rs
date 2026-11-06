@@ -10,8 +10,8 @@ use std::mem::{align_of, offset_of, size_of};
 /// Exact byte size of `VisualTelemetryFrame` (`131,072` bytes = `0x20000` = `128 KB`).
 pub const VISUAL_TELEMETRY_FRAME_BYTES: usize = 131_072;
 
-/// Default capacity of the lock-free `rtrb` SPSC command channel (`4,096` slots).
-pub const DEFAULT_COMMAND_RING_CAPACITY: usize = 4096;
+/// Default capacity of the lock-free `rtrb` SPSC command channel (`16,384` slots).
+pub const DEFAULT_COMMAND_RING_CAPACITY: usize = 16_384;
 
 /// Offset `0x00000..0x0003F` (`64 B` = `0x0040`): Transport & Master Bus Metering Header.
 #[repr(C)]

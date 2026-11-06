@@ -1006,4 +1006,86 @@ fn test_phase5_overlapping_slide_notes_with_tempomap_and_deterministic_post_play
     );
 }
 
+#[test]
+fn test_cowriter_camcast_theme_and_full_ui_byte_parity() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+    let ui_a = workspace_root.join("ui-svelte-webgpu");
+    let ui_b = workspace_root.join("ui-svelte5-wgpu");
+
+    // 1. Verify Co-Writer & CamCast Studio theme variables and fractalNoise overlay in app.css & index.html
+    let app_css = std::fs::read_to_string(ui_a.join("src/app.css")).expect("read src/app.css");
+    for token in [
+        "--bg: #0E1B1D;",
+        "--surface: #152224;",
+        "--surface-2: #1a2a2d;",
+        "--sidebar-bg: #0b2b1e;",
+        "--border: rgba(118, 210, 219, 0.15);",
+        "--text: #F7F6E5;",
+        "--muted: rgba(247, 246, 229, 0.5);",
+        "--accent: #76D2DB;",
+        "--ok: #4ade80;",
+        "--warn: #fbbf24;",
+        "--err: #E07070;",
+        "--radius: 8px;",
+        "Space Grotesk",
+        "Cascadia Mono",
+        "fractalNoise",
+    ] {
+        assert!(
+            app_css.contains(token),
+            "src/app.css must contain Co-Writer/CamCast Studio theme token: {token}"
+        );
+    }
+
+    let index_html = std::fs::read_to_string(ui_a.join("index.html")).expect("read index.html");
+    assert!(index_html.contains("Space+Grotesk"));
+    assert!(index_html.contains("#0E1B1D"));
+    assert!(index_html.contains("#F7F6E5"));
+
+    // 2. Verify 100% byte-for-byte parity across all UI files and WGSL shaders
+    for rel_path in [
+        "index.html",
+        "src/main.ts",
+        "src/app.css",
+        "src/App.svelte",
+        "src/lib/state/daw_master_store.svelte.ts",
+        "src/lib/wgpu/renderer_120fps.ts",
+        "src/lib/wgpu/shaders/proq4_curve.wgsl",
+        "src/lib/wgpu/shaders/soothe3_heatmap.wgsl",
+        "src/lib/wgpu/shaders/mixer_meters.wgsl",
+        "src/lib/wgpu/shaders/reduction_eq_curve.wgsl",
+        "src/lib/wgpu/shaders/spectrogram_heatmap.wgsl",
+        "src/lib/wgpu/shaders/sdf_uber_controls.wgsl",
+        "src/lib/components/PlaylistPianoRollEditor.svelte",
+        "src/lib/components/ProQ4InteractiveAnalyzer.svelte",
+        "src/lib/components/Soothe3ResonanceView.svelte",
+        "src/lib/components/Ozone12MasterChain.svelte",
+        "src/lib/components/MixerRack502.svelte",
+        "src/lib/components/PatcherNodeCanvas.svelte",
+        "src/lib/components/Uvr5EnsembleStudio.svelte",
+        "src/lib/components/OfflineRenderStudio.svelte",
+    ] {
+        let bytes_a = std::fs::read(ui_a.join(rel_path))
+            .unwrap_or_else(|e| panic!("Failed to read ui-svelte-webgpu/{rel_path}: {e}"));
+        let bytes_b = std::fs::read(ui_b.join(rel_path))
+            .unwrap_or_else(|e| panic!("Failed to read ui-svelte5-wgpu/{rel_path}: {e}"));
+        assert_eq!(
+            bytes_a, bytes_b,
+            "File {rel_path} must be 100% byte-for-byte identical between ui-svelte-webgpu and ui-svelte5-wgpu"
+        );
+    }
+
+    // 3. Verify built frontend dist and ToneForge Studio icons exist
+    assert!(ui_a.join("dist/index.html").exists());
+    assert!(ui_b.join("dist/index.html").exists());
+    let ico_bytes =
+        std::fs::read(workspace_root.join("icons/icon.ico")).expect("read icons/icon.ico");
+    assert!(ico_bytes.len() > 100 && &ico_bytes[0..4] == &[0, 0, 1, 0]);
+}
+
+
 
