@@ -185,6 +185,8 @@ impl UnifiedDspNode for Soothe3Processor {
 
     fn export_visual_telemetry(&self, frame: &mut VisualTelemetryFrame) {
         self.export_reduction_frame(&mut frame.soothe3_reduction);
+        let row = (frame.header.frame_seq as usize) % 20;
+        frame.spectrogram_ring[row] = frame.soothe3_reduction.input_spec_db;
     }
 
     fn process_slice(

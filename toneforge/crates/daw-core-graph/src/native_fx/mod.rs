@@ -504,6 +504,12 @@ impl UnifiedDspNode for GrossBeatTimeBufferNode {
 
     fn set_parameter_normalized(&mut self, _param_id: u32, _norm_val: f32) {}
 
+    fn export_visual_telemetry(&self, frame: &mut crate::telemetry_shm::VisualTelemetryFrame) {
+        let len = self.history_ring.len().max(1) as f32;
+        let phase = (self.write_pos as f32 / len).clamp(0.0, 1.0);
+        frame.automation_spline.gross_beat_playhead_pos = [phase, phase];
+    }
+
     fn process_slice(
         &mut self,
         ctx: &ProcessContext,

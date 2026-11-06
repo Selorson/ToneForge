@@ -205,6 +205,8 @@ impl UnifiedDspNode for Ozone12MasterChain {
             36..=44 => self.stabilizer.set_parameter_normalized(param_id - 36, norm_val),
             45..=54 => self.impact.set_parameter_normalized(param_id - 45, norm_val),
             55..=64 => self.clarity.set_parameter_normalized(param_id - 55, norm_val),
+            65 => self.maximizer.set_parameter_normalized(12, norm_val),
+            66 => self.maximizer.set_parameter_normalized(13, norm_val),
             _ => {}
         }
     }

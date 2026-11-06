@@ -458,6 +458,8 @@ impl UnifiedDspNode for ProQ4Processor {
 
     fn export_visual_telemetry(&self, frame: &mut VisualTelemetryFrame) {
         self.export_spectrum_frame(&mut frame.proq4_spectrum);
+        let row = (frame.header.frame_seq as usize) % 20;
+        frame.spectrogram_ring[row] = frame.proq4_spectrum.post_db;
     }
 
     fn process_slice(

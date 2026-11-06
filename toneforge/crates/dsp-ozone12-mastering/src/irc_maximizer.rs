@@ -910,6 +910,10 @@ impl UnifiedDspNode for IrcVMultiBandMaximizer {
                 self.irc_mode = IrcMode::from_index((v * 5.0).round() as u32);
                 self.sync_core_parameters();
             }
+            13 => {
+                self.prevent_intersample_clipping = v >= 0.5;
+                self.sync_core_parameters();
+            }
             _ => {}
         }
     }

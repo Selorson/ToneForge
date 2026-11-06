@@ -1,4 +1,4 @@
-// GPU-Instanced Signed Distance Field (SDF) Uber-Shader for 500-Track Mixer & Knobs
+// GPU-Instanced Signed Distance Field (SDF) Uber-Shader for 502-Track Mixer & Knobs
 struct SdfControlInstance {
     rect_bounds: vec4<f32>,
     values: vec4<f32>,

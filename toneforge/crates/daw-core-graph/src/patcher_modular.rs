@@ -386,6 +386,15 @@ impl UnifiedDspNode for PatcherGraphNode {
         }
     }
 
+    fn export_visual_telemetry(&self, frame: &mut crate::telemetry_shm::VisualTelemetryFrame) {
+        let limit = self.nodes.len().min(510);
+        for i in 0..limit {
+            let lat_weight = (self.nodes[i].dsp.latency_samples() as f32) * 0.0005;
+            frame.automation_spline.patcher_node_cpu_pct[i] = (0.15 + lat_weight).min(25.0);
+            self.nodes[i].dsp.export_visual_telemetry(frame);
+        }
+    }
+
     /// Executes `sub_79cd80(ModularMap, Length)` in topological order with Zero Heap Allocation.
     fn process_slice(
         &mut self,

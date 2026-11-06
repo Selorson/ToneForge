@@ -566,12 +566,34 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
     }
 
     fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
-        let idx = (param_id as usize) & 3;
-        self.stem_gains_db[idx] = -12.0 + norm_val.clamp(0.0, 1.0) * 24.0;
+        let v = norm_val.clamp(0.0, 1.0);
+        match param_id {
+            0..=3 => self.stem_gains_db[param_id as usize] = -12.0 + v * 24.0,
+            4..=7 => self.stem_solo[(param_id - 4) as usize] = v >= 0.5,
+            8..=11 => self.stem_mute[(param_id - 8) as usize] = v >= 0.5,
+            _ => {}
+        }
     }
 
     fn export_visual_telemetry(&self, frame: &mut VisualTelemetryFrame) {
         frame.ozone12_telemetry.stem_rms_db = self.stem_rms_db;
+        let mut solo_mask = 0u32;
+        let mut mute_mask = 0u32;
+        for s in 0..BSRNN_STEM_COUNT {
+            if self.stem_solo[s] {
+                solo_mask |= 1 << s;
+            }
+            if self.stem_mute[s] {
+                mute_mask |= 1 << s;
+            }
+        }
+        frame.header.active_stem_mode = if self.is_unity_bypass() {
+            0
+        } else if (solo_mask | mute_mask) != 0 {
+            (solo_mask << 4) | mute_mask
+        } else {
+            1
+        };
     }
 
     fn process_slice(

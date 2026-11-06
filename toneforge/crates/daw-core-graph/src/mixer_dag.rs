@@ -1545,11 +1545,13 @@ impl MixerEngine {
             self.tracks[MASTER_TRACK_INDEX].meter.peak_l_db,
             self.tracks[MASTER_TRACK_INDEX].meter.peak_r_db,
         ];
+        let mut active_slots = 0usize;
         if process_all {
             for i in 0..MAX_MIXER_TRACKS {
                 frame.track_meters[i] = self.tracks[i].meter;
                 for slot in &self.tracks[i].slots {
                     if slot.enabled {
+                        active_slots += 1;
                         slot.plugin.export_visual_telemetry(frame);
                     }
                 }
@@ -1560,12 +1562,14 @@ impl MixerEngine {
                     frame.track_meters[u] = self.tracks[u].meter;
                     for slot in &self.tracks[u].slots {
                         if slot.enabled {
+                            active_slots += 1;
                             slot.plugin.export_visual_telemetry(frame);
                         }
                     }
                 }
             }
         }
+        frame.header.cpu_load_pct = (1.2 + (active_slots as f32) * 0.85).min(99.9);
         self.controller_bus
             .export_telemetry_norm(&mut frame.automation_spline.controller_values_norm);
         self.telemetry_input.publish();
