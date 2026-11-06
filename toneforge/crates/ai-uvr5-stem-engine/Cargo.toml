@@ -21,3 +21,9 @@ wide = { workspace = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+dsp-proq4-eq = { workspace = true }
+dsp-soothe3-spectral = { workspace = true }
+dsp-ozone12-mastering = { workspace = true }

@@ -1,0 +1,7 @@
+VTAPE: Bypass	Vintage Tape	Bypass
+VTAPE: Input Drive	Vintage Tape	Input/Drive
+VTAPE: Bias	Vintage Tape	Bias
+VTAPE: Speed	Vintage Tape	Tape Speed
+VTAPE: Harmonics	Vintage Tape	Even Harmonics
+VTAPE: Low Emphasis	Vintage Tape	Head Bump
+VTAPE: High Emphasis	Vintage Tape	High Frequency Emphasis

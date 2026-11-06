@@ -1,0 +1,20 @@
+STBL: Bypass	Stabilizer	Bypass
+STBL: Tame Transients On/Off	Stabilizer	TameTransients
+STBL: Stereo/Main Amount	Stabilizer	Amount
+STBL: Stereo/Main Speed (Shape Mode)	Stabilizer	Speed
+STBL: Stereo/Main Smoothing	Stabilizer	FreqSmoothing
+STBL: Stereo/Main Sensitivity	Stabilizer	CutModeSensitivity
+STBL: Stereo/Main Speed (Cut Mode)	Stabilizer	CutModeSpeed
+STBL: Stereo/Main Low Amount	Stabilizer	LFStrength
+STBL: Stereo/Main Mid Amount	Stabilizer	MFStrength
+STBL: Stereo/Main High Amount	Stabilizer	HFStrength
+STBL: Stereo/Main Bypass	Stabilizer	BypassMain
+STBL: Aux Amount	Stabilizer	Aux: Amount
+STBL: Aux Speed (Shape Mode)	Stabilizer	Aux: Speed
+STBL: Aux Smoothing	Stabilizer	Aux: FreqSmoothing
+STBL: Aux Sensitivity	Stabilizer	Aux: CutModeSensitivity
+STBL: Aux Speed (Cut Mode)	Stabilizer	Aux: CutModeSpeed
+STBL: Aux Low Amount	Stabilizer	Aux: LFStrength
+STBL: Aux Mid Amount	Stabilizer	Aux: MFStrength
+STBL: Aux High Amount	Stabilizer	Aux: HFStrength
+STBL: Aux Bypass	Stabilizer	BypassAux

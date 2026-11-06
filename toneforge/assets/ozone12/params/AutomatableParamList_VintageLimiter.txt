@@ -1,0 +1,6 @@
+VLIM: Bypass	Vintage Limiter	Bypass
+VLIM: Tube Type	Vintage Limiter	Vintage Mode
+VLIM: Threshold	Vintage Limiter	Threshold
+VLIM: Ceiling	Vintage Limiter	Margin
+VLIM: Link Threshold and Ceiling	Vintage Limiter	Link Threshold and Margin
+VLIM: Character	Vintage Limiter	Character

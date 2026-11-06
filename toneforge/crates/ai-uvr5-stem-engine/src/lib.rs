@@ -1,167 +1,49 @@
-//! `ai-uvr5-stem-engine`:
-//! 1. Real-Time Low-Latency Streaming (`120 ms` APDC) Unity-Identity Additive Stem EQ & Master Rebalance
-//!    (`models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` & `delimit_exp009_ep080_fixed2.onnx`).
-//! 2. Offline UVR5 Spectral Ensemble (`MAX_SPEC`, `MIN_SPEC`, `AVERAGE`) and Phase Inversion (`invert_audio`).
+//! `ai-uvr5-stem-engine` — Complete Clean-Room Implementation of Ozone 12 Real-Time BSRNN
+//! Stem Engine & UVR5 Multi-Architecture Offline Stem Separation + Spectral Ensemble:
+//!
+//! 1. **Real-Time Low-Latency (`120 ms` = `5,760` samples @ 48 kHz) 4-Stem BSRNN Pipeline**
+//!    (`RealTimeBsrnnStemNode` / `RealtimeBsrnnStemNode`):
+//!    - Lock-Free `rtrb::RingBuffer` SPSC worker queue (`0` heap allocations on the audio thread).
+//!    - 13-subband BSRNN STFT (`N_fft = 2048`, `hop = 512`) + recurrent state `[2, 2, 2, 1, 13, 128]`.
+//!    - Unity-Identity Additive stem rebalance & EQ (`Y = X_delayed + sum_s (Delta H_s - 1) * S_s`),
+//!      strictly bit-transparent when stem gains are `0.0 dB`.
+//!    - ONNX model descriptor & verifier for `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` and
+//!      `delimit_exp009_ep080_fixed2.onnx`.
+//! 2. **Offline Multi-Model UVR5 Stem Separation Framework**:
+//!    - **MDX-Net / MDX23C `TFC-TDF v3`** (`TfcTdfBlock`, `Mdx23cSeparator`, Complex-as-Channels `CaC`,
+//!      Nyquist bin trim/pad, STFT overlap-add with Hann window chunk boundary anti-aliasing, and
+//!      2-pass phase-inverted bias denoising).
+//!    - **Hybrid Transformer Demucs v4 (`HTDemucs4`)** (`CrossTransformerEncoder` bidirectional
+//!      Time <-> Frequency cross-attention + dual-domain waveform/STFT U-Net synthesis).
+//!    - **VR Architecture `CascadedASPPNet`** (`AsppModule` with dilations `[1, 2, 4, 8, 16]` +
+//!      3-stage cascaded multi-band U-Net + UVR5 aggressiveness tuning).
+//! 3. **Multi-Model `SpectralEnsembler`**:
+//!    - Supports `MaxSpec` (`MAX_SPEC`), `MinSpec` (`MIN_SPEC`), `Average` (`AVERAGE`),
+//!      `Median`, and `Weighted` ensemble modes with complex phase preservation, inter-model
+//!      circular phase coherence denoising, and `invert_audio` phase-inverted stem subtraction.
 
-use daw_core_graph::{ApdcDelayLine, ProcessContext, StereoFrame, UnifiedDspNode};
-use rustfft::num_complex::Complex32;
+pub mod bsrnn_streaming;
+pub mod npz_gru_legacy;
+pub mod spectral_ensemble;
+pub mod uvr5_htdemucs;
+pub mod uvr5_mdx_tfctdf;
+pub mod uvr5_vr_aspp;
 
-/// Real-time 4-stem BSRNN lookahead latency in seconds (`120 ms`, `5,760` samples @ 48 kHz).
-pub const BSRNN_REALTIME_LATENCY_SEC: f64 = 0.120;
-
-/// Spectral ensemble combination mode (`lib_v5/spec_utils.py` `ensembler`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SpectralEnsembleMode {
-    MaxSpec,
-    MinSpec,
-    Average,
-}
-
-/// Combines multiple complex STFT spectrograms `models[m][bin]` using UVR5's phase-preserving
-/// `MAX_SPEC` / `MIN_SPEC` / `AVERAGE` rule (`lib_v5/spec_utils.py`).
-/// Zero Heap Allocation.
-pub fn combine_complex_spectrogram_frame(
-    mode: SpectralEnsembleMode,
-    model_frames: &[&[Complex32]],
-    out_frame: &mut [Complex32],
-) {
-    if model_frames.is_empty() {
-        out_frame.fill(Complex32::new(0.0, 0.0));
-        return;
-    }
-    let bins = out_frame.len();
-    let num_models = model_frames.len();
-    let inv_m = 1.0 / (num_models as f32);
-
-    for k in 0..bins {
-        match mode {
-            SpectralEnsembleMode::MaxSpec => {
-                let mut best = model_frames[0][k];
-                let mut best_mag_sq = best.norm_sqr();
-                for m in 1..num_models {
-                    let c = model_frames[m][k];
-                    let mag_sq = c.norm_sqr();
-                    if mag_sq > best_mag_sq {
-                        best_mag_sq = mag_sq;
-                        best = c;
-                    }
-                }
-                out_frame[k] = best;
-            }
-            SpectralEnsembleMode::MinSpec => {
-                let mut best = model_frames[0][k];
-                let mut best_mag_sq = best.norm_sqr();
-                for m in 1..num_models {
-                    let c = model_frames[m][k];
-                    let mag_sq = c.norm_sqr();
-                    if mag_sq < best_mag_sq {
-                        best_mag_sq = mag_sq;
-                        best = c;
-                    }
-                }
-                out_frame[k] = best;
-            }
-            SpectralEnsembleMode::Average => {
-                let mut sum = Complex32::new(0.0, 0.0);
-                for m in 0..num_models {
-                    sum += model_frames[m][k];
-                }
-                out_frame[k] = sum * inv_m;
-            }
-        }
-    }
-}
-
-/// Real-Time `120 ms` Unity-Identity Additive 4-Stem Rebalance Node (`DSP::OzoneStemEQ` `0x1857397B0`).
-/// Satisfies `Y = X_delayed + sum_s (Delta_H_s - 1) * S_s` so when all stem gains are `0.0 dB`,
-/// `Y === X_delayed` is strictly bit-transparent!
-pub struct RealtimeBsrnnStemNode {
-    pub stem_gains_db: [f32; 4], // [Vocals, Drums, Bass, Other]
-    sample_rate: f64,
-    latency_samples: usize,
-    delay_line: ApdcDelayLine,
-}
-
-impl Default for RealtimeBsrnnStemNode {
-    fn default() -> Self {
-        Self::new(48_000.0)
-    }
-}
-
-impl RealtimeBsrnnStemNode {
-    pub fn new(sample_rate: f64) -> Self {
-        let lat = (BSRNN_REALTIME_LATENCY_SEC * sample_rate).round() as usize;
-        let mut delay_line = ApdcDelayLine::with_capacity(lat.max(16384));
-        delay_line.set_delay_samples(lat);
-        Self {
-            stem_gains_db: [0.0; 4],
-            sample_rate,
-            latency_samples: lat,
-            delay_line,
-        }
-    }
-}
-
-impl UnifiedDspNode for RealtimeBsrnnStemNode {
-    fn name(&self) -> &'static str {
-        "Ozone 12 Real-Time 120ms BSRNN 4-Stem Rebalance"
-    }
-
-    fn latency_samples(&self) -> usize {
-        self.latency_samples
-    }
-
-    fn prepare(&mut self, sample_rate: f64, _max_block_size: usize) {
-        self.sample_rate = sample_rate.max(8000.0);
-        self.latency_samples = (BSRNN_REALTIME_LATENCY_SEC * self.sample_rate).round() as usize;
-        self.delay_line
-            .ensure_capacity(self.latency_samples.max(16384));
-        self.delay_line.set_delay_samples(self.latency_samples);
-    }
-
-    fn reset_state(&mut self) {
-        self.delay_line.reset();
-    }
-
-    fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
-        let idx = (param_id as usize) & 3;
-        self.stem_gains_db[idx] = -12.0 + norm_val.clamp(0.0, 1.0) * 24.0;
-    }
-
-    fn process_slice(
-        &mut self,
-        _ctx: &ProcessContext,
-        main_io: &mut [StereoFrame],
-        _sidechain_in: Option<&[StereoFrame]>,
-        _aux_sends_out: &mut [&mut [StereoFrame]],
-    ) {
-        // Delay dry reference by exact 120ms APDC (`x_delayed[n]`).
-        // At 0.0 dB stem gains, `Delta Y_base == 0`, preserving bit-transparency.
-        self.delay_line.process_in_place(main_io);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_uvr5_spectral_ensembler_and_realtime_bsrnn_apdc() {
-        let m1 = [Complex32::new(3.0, 4.0), Complex32::new(1.0, 0.0)];
-        let m2 = [Complex32::new(1.0, 1.0), Complex32::new(0.0, 5.0)];
-        let frames: [&[Complex32]; 2] = [&m1, &m2];
-        let mut out = [Complex32::new(0.0, 0.0); 2];
-
-        combine_complex_spectrogram_frame(SpectralEnsembleMode::MaxSpec, &frames, &mut out);
-        assert_eq!(out[0], Complex32::new(3.0, 4.0));
-        assert_eq!(out[1], Complex32::new(0.0, 5.0));
-
-        combine_complex_spectrogram_frame(SpectralEnsembleMode::MinSpec, &frames, &mut out);
-        assert_eq!(out[0], Complex32::new(1.0, 1.0));
-        assert_eq!(out[1], Complex32::new(1.0, 0.0));
-
-        let node = RealtimeBsrnnStemNode::new(48_000.0);
-        assert_eq!(node.latency_samples(), 5760);
-    }
-}
-
+pub use bsrnn_streaming::{
+    BSRNN_FREQ_BINS, BSRNN_HIDDEN_STATE_LEN, BSRNN_HIDDEN_STATE_SHAPE, BSRNN_HOP_SIZE,
+    BSRNN_LATENCY_SAMPLES_48K, BSRNN_N_FFT, BSRNN_REALTIME_LATENCY_SEC, BSRNN_STEM_COUNT,
+    BSRNN_SUBBAND_BINS, BsrnnInputHop, BsrnnOutputHop, BsrnnStreamingWorker,
+    DEFAULT_BSRNN_ONNX_PATHS, DEFAULT_DELIMIT_ONNX_PATHS, OnnxModelDescriptor,
+    RealTimeBsrnnStemNode, RealtimeBsrnnStemNode, StemKind,
+};
+pub use npz_gru_legacy::{
+    DEFAULT_GPARAMS_NPZ_PATHS, GenreCnnClassifier, NumpyArrayF32, load_npz_archive_bytes,
+    load_npz_archive_file,
+};
+pub use spectral_ensemble::{
+    SpectralEnsembleMode, SpectralEnsembler, combine_complex_spectrogram_frame,
+    combine_complex_spectrogram_frame_weighted,
+};
+pub use uvr5_htdemucs::{CrossTransformerEncoder, DemucsStem, HTDemucs4};
+pub use uvr5_mdx_tfctdf::{Mdx23cSeparator, TfcTdfBlock};
+pub use uvr5_vr_aspp::{AsppModule, CascadedASPPNet, VR_ASPP_DILATIONS};

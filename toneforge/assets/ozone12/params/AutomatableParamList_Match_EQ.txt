@@ -1,0 +1,7 @@
+MATCH EQ: Bypass	Match Equalizer	Bypass
+MATCH EQ: Stereo/Main Amount	Match Equalizer	EQ: Matching Amount
+MATCH EQ: Stereo/Main Smoothing	Match Equalizer	EQ: Smoothing Amount
+MATCH EQ: Stereo/Main Bypass	Match Equalizer	Bypass Main
+MATCH EQ: Aux Amount	Match Equalizer	Aux: EQ: Matching Amount
+MATCH EQ: Aux Smoothing	Match Equalizer	Aux: EQ: Smoothing Amount
+MATCH EQ: Aux Bypass	Match Equalizer	Bypass Aux

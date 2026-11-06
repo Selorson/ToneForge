@@ -1,0 +1,13 @@
+SPSHPR: Bypass	Spectral Shaper	Bypass
+SPSHPR: Stereo/Main Amount	Spectral Shaper	Amount
+SPSHPR: Stereo/Main Compression Mode	Spectral Shaper	COMPRESSION_MODE
+SPSHPR: Stereo/Main Attack	Spectral Shaper	ATTACK_TIME
+SPSHPR: Stereo/Main Release	Spectral Shaper	RELEASE_TIME
+SPSHPR: Stereo/Main Tone	Spectral Shaper	SPECTRAL_TILT
+SPSHPR: Stereo/Main Bypass	Spectral Shaper	BYPASS_MAIN
+SPSHPR: Aux Amount	Spectral Shaper	Aux: Amount
+SPSHPR: Aux Compression Mode	Spectral Shaper	Aux: COMPRESSION_MODE
+SPSHPR: Aux Attack	Spectral Shaper	Aux: ATTACK_TIME
+SPSHPR: Aux Release	Spectral Shaper	Aux: RELEASE_TIME
+SPSHPR: Aux Tone	Spectral Shaper	Aux: SPECTRAL_TILT
+SPSHPR: Aux Bypass	Spectral Shaper	BYPASS_AUX

@@ -1,0 +1,11 @@
+CLA: Bypass	Clarity	Bypass
+CLA: Stereo/Main Amount	Clarity	Amount
+CLA: Stereo/Main Tilt	Clarity	Tilt
+CLA: Stereo/Main Attack	Clarity	Attack
+CLA: Stereo/Main Release	Clarity	Release
+CLA: Stereo/Main Bypass	Clarity	BypassMain
+CLA: Aux Amount	Clarity	Aux: Amount
+CLA: Aux Tilt	Clarity	Aux: Tilt
+CLA: Aux Attack	Clarity	Aux: Attack
+CLA: Aux Release	Clarity	Aux: Release
+CLA: Aux Bypass	Clarity	BypassAux

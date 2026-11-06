@@ -1,0 +1,6 @@
+GAIN: Input L (Locked)	Gain Input	Gain Input Locked
+GAIN: Input L (Unlocked)	Gain Input	Gain Input Left
+GAIN: Input R (Unlocked)	Gain Input	Gain Input Right
+GAIN: Output L (Locked)	Gain Output	Gain Output Locked
+GAIN: Output L (Unlocked)	Gain Output	Gain Output Left
+GAIN: Output R (Unlocked)	Gain Output	Gain Output Right

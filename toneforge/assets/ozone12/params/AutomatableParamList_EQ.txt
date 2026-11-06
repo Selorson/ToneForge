@@ -1,0 +1,100 @@
+EQ: Bypass	Equalizer	Bypass
+EQ: Global Amount	Equalizer	Gain Scaling Amount
+EQ: Stereo/Main Frequency 1	Equalizer	Band 1 Frequency
+EQ: Stereo/Main Frequency 2	Equalizer	Band 2 Frequency
+EQ: Stereo/Main Frequency 3	Equalizer	Band 3 Frequency
+EQ: Stereo/Main Frequency 4	Equalizer	Band 4 Frequency
+EQ: Stereo/Main Frequency 5	Equalizer	Band 5 Frequency
+EQ: Stereo/Main Frequency 6	Equalizer	Band 6 Frequency
+EQ: Stereo/Main Frequency 7	Equalizer	Band 7 Frequency
+EQ: Stereo/Main Frequency 8	Equalizer	Band 8 Frequency
+EQ: Stereo/Main Gain 1	Equalizer	Band 1 Gain
+EQ: Stereo/Main Gain 2	Equalizer	Band 2 Gain
+EQ: Stereo/Main Gain 3	Equalizer	Band 3 Gain
+EQ: Stereo/Main Gain 4	Equalizer	Band 4 Gain
+EQ: Stereo/Main Gain 5	Equalizer	Band 5 Gain
+EQ: Stereo/Main Gain 6	Equalizer	Band 6 Gain
+EQ: Stereo/Main Gain 7	Equalizer	Band 7 Gain
+EQ: Stereo/Main Gain 8	Equalizer	Band 8 Gain
+EQ: Stereo/Main Q 1	Equalizer	Band 1 Q
+EQ: Stereo/Main Q 2	Equalizer	Band 2 Q
+EQ: Stereo/Main Q 3	Equalizer	Band 3 Q
+EQ: Stereo/Main Q 4	Equalizer	Band 4 Q
+EQ: Stereo/Main Q 5	Equalizer	Band 5 Q
+EQ: Stereo/Main Q 6	Equalizer	Band 6 Q
+EQ: Stereo/Main Q 7	Equalizer	Band 7 Q
+EQ: Stereo/Main Q 8	Equalizer	Band 8 Q
+EQ: Stereo/Main Phase 1	Equalizer	Band 1 Phase
+EQ: Stereo/Main Phase 2	Equalizer	Band 2 Phase
+EQ: Stereo/Main Phase 3	Equalizer	Band 3 Phase
+EQ: Stereo/Main Phase 4	Equalizer	Band 4 Phase
+EQ: Stereo/Main Phase 5	Equalizer	Band 5 Phase
+EQ: Stereo/Main Phase 6	Equalizer	Band 6 Phase
+EQ: Stereo/Main Phase 7	Equalizer	Band 7 Phase
+EQ: Stereo/Main Phase 8	Equalizer	Band 8 Phase
+EQ: Stereo/Main Enable 1	Equalizer	Band 1 Enable
+EQ: Stereo/Main Enable 2	Equalizer	Band 2 Enable
+EQ: Stereo/Main Enable 3	Equalizer	Band 3 Enable
+EQ: Stereo/Main Enable 4	Equalizer	Band 4 Enable
+EQ: Stereo/Main Enable 5	Equalizer	Band 5 Enable
+EQ: Stereo/Main Enable 6	Equalizer	Band 6 Enable
+EQ: Stereo/Main Enable 7	Equalizer	Band 7 Enable
+EQ: Stereo/Main Enable 8	Equalizer	Band 8 Enable
+EQ: Stereo/Main Shape 1	Equalizer	Band 1 Shape
+EQ: Stereo/Main Shape 2	Equalizer	Band 2 Shape
+EQ: Stereo/Main Shape 3	Equalizer	Band 3 Shape
+EQ: Stereo/Main Shape 4	Equalizer	Band 4 Shape
+EQ: Stereo/Main Shape 5	Equalizer	Band 5 Shape
+EQ: Stereo/Main Shape 6	Equalizer	Band 6 Shape
+EQ: Stereo/Main Shape 7	Equalizer	Band 7 Shape
+EQ: Stereo/Main Shape 8	Equalizer	Band 8 Shape
+EQ: Stereo/Main Bypass	Equalizer	Bypass Main
+EQ: Aux Frequency 1	Equalizer	Aux: Band 1 Frequency
+EQ: Aux Frequency 2	Equalizer	Aux: Band 2 Frequency
+EQ: Aux Frequency 3	Equalizer	Aux: Band 3 Frequency
+EQ: Aux Frequency 4	Equalizer	Aux: Band 4 Frequency
+EQ: Aux Frequency 5	Equalizer	Aux: Band 5 Frequency
+EQ: Aux Frequency 6	Equalizer	Aux: Band 6 Frequency
+EQ: Aux Frequency 7	Equalizer	Aux: Band 7 Frequency
+EQ: Aux Frequency 8	Equalizer	Aux: Band 8 Frequency
+EQ: Aux Gain 1	Equalizer	Aux: Band 1 Gain
+EQ: Aux Gain 2	Equalizer	Aux: Band 2 Gain
+EQ: Aux Gain 3	Equalizer	Aux: Band 3 Gain
+EQ: Aux Gain 4	Equalizer	Aux: Band 4 Gain
+EQ: Aux Gain 5	Equalizer	Aux: Band 5 Gain
+EQ: Aux Gain 6	Equalizer	Aux: Band 6 Gain
+EQ: Aux Gain 7	Equalizer	Aux: Band 7 Gain
+EQ: Aux Gain 8	Equalizer	Aux: Band 8 Gain
+EQ: Aux Q 1	Equalizer	Aux: Band 1 Q
+EQ: Aux Q 2	Equalizer	Aux: Band 2 Q
+EQ: Aux Q 3	Equalizer	Aux: Band 3 Q
+EQ: Aux Q 4	Equalizer	Aux: Band 4 Q
+EQ: Aux Q 5	Equalizer	Aux: Band 5 Q
+EQ: Aux Q 6	Equalizer	Aux: Band 6 Q
+EQ: Aux Q 7	Equalizer	Aux: Band 7 Q
+EQ: Aux Q 8	Equalizer	Aux: Band 8 Q
+EQ: Aux Phase 1	Equalizer	Aux: Band 1 Phase
+EQ: Aux Phase 2	Equalizer	Aux: Band 2 Phase
+EQ: Aux Phase 3	Equalizer	Aux: Band 3 Phase
+EQ: Aux Phase 4	Equalizer	Aux: Band 4 Phase
+EQ: Aux Phase 5	Equalizer	Aux: Band 5 Phase
+EQ: Aux Phase 6	Equalizer	Aux: Band 6 Phase
+EQ: Aux Phase 7	Equalizer	Aux: Band 7 Phase
+EQ: Aux Phase 8	Equalizer	Aux: Band 8 Phase
+EQ: Aux Enable 1	Equalizer	Aux: Band 1 Enable
+EQ: Aux Enable 2	Equalizer	Aux: Band 2 Enable
+EQ: Aux Enable 3	Equalizer	Aux: Band 3 Enable
+EQ: Aux Enable 4	Equalizer	Aux: Band 4 Enable
+EQ: Aux Enable 5	Equalizer	Aux: Band 5 Enable
+EQ: Aux Enable 6	Equalizer	Aux: Band 6 Enable
+EQ: Aux Enable 7	Equalizer	Aux: Band 7 Enable
+EQ: Aux Enable 8	Equalizer	Aux: Band 8 Enable
+EQ: Aux Shape 1	Equalizer	Aux: Band 1 Shape
+EQ: Aux Shape 2	Equalizer	Aux: Band 2 Shape
+EQ: Aux Shape 3	Equalizer	Aux: Band 3 Shape
+EQ: Aux Shape 4	Equalizer	Aux: Band 4 Shape
+EQ: Aux Shape 5	Equalizer	Aux: Band 5 Shape
+EQ: Aux Shape 6	Equalizer	Aux: Band 6 Shape
+EQ: Aux Shape 7	Equalizer	Aux: Band 7 Shape
+EQ: Aux Shape 8	Equalizer	Aux: Band 8 Shape
+EQ: Aux Bypass	Equalizer	Bypass Aux

@@ -1,0 +1,13 @@
+MAX: Bypass	Maximizer	Bypass
+MAX: Input Gain	Maximizer	Gain
+MAX: Output Level	Maximizer	Margin
+MAX: Link Input Gain and Output Level	Maximizer	Link Threshold and Margin
+MAX: Character	Maximizer	Character
+MAX: Upward Compression Amt	Maximizer	LowLevelBoostWetAmount
+MAX: Soft Clip On/Off	Maximizer	EnableSoftClipping
+MAX: Soft Clip Mix	Maximizer	SoftClipMix
+MAX: Soft Clip Mode	Maximizer	SoftClipMode
+MAX: Transient Shaping Amt	Maximizer	Transient Shaping
+MAX: Stereo Ind. Sustain Amt	Maximizer	Stereo Link
+MAX: Stereo Ind. Transient Amt	Maximizer	Stereo Transient Link Amount
+MAX: Link Stereo Amounts	Maximizer	Stereo Link Amounts Linked

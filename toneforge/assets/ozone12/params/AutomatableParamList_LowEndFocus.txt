@@ -1,0 +1,7 @@
+LEF: Bypass	Low End Focus	Bypass
+LEF: Stereo/Main Contrast	Low End Focus	Strength
+LEF: Stereo/Main Gain	Low End Focus	Gain
+LEF: Stereo/Main Bypass	Low End Focus	BypassMain
+LEF: Aux Contrast	Low End Focus	Aux: Strength
+LEF: Aux Gain	Low End Focus	Aux: Gain
+LEF: Aux Bypass	Low End Focus	BypassAux
