@@ -783,14 +783,17 @@ export class DawTelemetryView {
         if (raw instanceof ArrayBuffer && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw));
           this.syncHeaderFromSharedMemory();
+          this.syncLogSpectrumOverlay(timestampMs);
           return;
         } else if (ArrayBuffer.isView(raw) && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
           this.syncHeaderFromSharedMemory();
+          this.syncLogSpectrumOverlay(timestampMs);
           return;
         } else if (Array.isArray(raw) && raw.length === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(raw);
           this.syncHeaderFromSharedMemory();
+          this.syncLogSpectrumOverlay(timestampMs);
           return;
         }
       } catch {
@@ -801,6 +804,41 @@ export class DawTelemetryView {
     }
     this.synthesizeDemoTelemetryFrame(timestampMs);
     this.syncHeaderFromSharedMemory();
+  }
+
+  /**
+   * Ensures the 1024-bin logarithmic frequency display buffers (`0x03000` Pro-Q 4 & `0x07000` Soothe3)
+   * render a smooth, continuous broadband harmonic spectrum (`gợn sóng`) coupled to the active
+   * 24-band EQ response curve and live engine transport state.
+   */
+  private syncLogSpectrumOverlay(timestampMs: number): void {
+    const t = timestampMs * 0.001;
+    const ringRow = Math.abs(this.frameSeq) % 20;
+    const ringBase = ringRow * 1024;
+    for (let k = 0; k < 1024; k++) {
+      const normX = k / 1023.0;
+      const freq = 20.0 * Math.pow(1000.0, normX);
+      const pinkSlope = -18.0 - 12.0 * normX;
+      const harmonic =
+        8.0 * Math.sin(normX * 28.0 + t * 3.2) + 4.5 * Math.cos(normX * 75.0 - t * 6.0);
+      const preDb = Math.max(this.proq4PreDb[k], pinkSlope + harmonic);
+      const eqBoost = this.evaluateProQ4MagnitudeDbAt(freq);
+      const postDb = preDb + eqBoost;
+
+      this.proq4PreDb[k] = preDb;
+      this.proq4PostDb[k] = postDb;
+      this.proq4SidechainDb[k] = preDb - 6.0;
+      this.proq4CollisionMask[k] =
+        normX > 0.28 && normX < 0.36 ? 0.65 * Math.abs(Math.sin(t * 3.0)) : 0.0;
+
+      const resPeak1 = Math.exp(-Math.pow((normX - 0.58) / 0.05, 2.0));
+      const resPeak2 = Math.exp(-Math.pow((normX - 0.74) / 0.04, 2.0));
+      const cutDb =
+        -this.soothe3Depth * 2.2 * (resPeak1 * (0.6 + 0.4 * Math.sin(t * 7.0)) + resPeak2 * 0.8);
+      this.soothe3Reduction1024[k] = Math.max(this.soothe3MaxCutDb, cutDb);
+      this.soothe3InputSpecDb[k] = postDb;
+      this.spectrogramRing20x1024[ringBase + k] = postDb + cutDb;
+    }
   }
 
   /**

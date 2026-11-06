@@ -288,19 +288,31 @@ fn main() {
                 .expect("Failed to initialize ToneForge Mastering Template");
             let _ = ctrl.add_polyphonic_synth_channel(1, 1, 64);
 
-            // Seed rich harmonic test stem on Track 2 so real-time 120 FPS meters & analyzers are live
+            // Seed rich harmonic test stems on Tracks 1..4 so Track 1 (Pro-Q 4 + Soothe3) and Master are live
             let mut demo_stem = Vec::with_capacity(4096);
+            let mut lfsr: u32 = 0xACE1_u32;
+            let mut pink_state = 0.0f32;
             for n in 0..4096 {
                 let t = (n as f32) / 48_000.0;
-                let bass = 0.28 * (std::f32::consts::TAU * 55.0 * t).sin()
+                lfsr ^= lfsr << 13;
+                lfsr ^= lfsr >> 17;
+                lfsr ^= lfsr << 5;
+                let white = ((lfsr as f32) / (u32::MAX as f32)) * 2.0 - 1.0;
+                pink_state = 0.92 * pink_state + 0.08 * white;
+                let bass = 0.26 * (std::f32::consts::TAU * 55.0 * t).sin()
                     + 0.16 * (std::f32::consts::TAU * 110.0 * t).sin();
                 let lead = 0.22 * (std::f32::consts::TAU * 440.0 * t).sin()
                     + 0.14 * (std::f32::consts::TAU * 880.0 * t).cos();
-                let air = 0.08 * (std::f32::consts::TAU * 3520.0 * t).sin();
+                let air = 0.08 * (std::f32::consts::TAU * 3520.0 * t).sin() + 0.12 * pink_state;
                 demo_stem.push([bass + lead + air, bass + lead * 0.92 - air * 0.85]);
             }
-            let _ = ctrl.bounce_stems_to_mixer_tracks(&[demo_stem], &[2]);
-            let _ = ctrl.route_mixer_track(2, 0, 0.85, false);
+            let _ = ctrl.bounce_stems_to_mixer_tracks(
+                &[demo_stem.clone(), demo_stem.clone(), demo_stem.clone(), demo_stem],
+                &[1, 2, 3, 4],
+            );
+            for trk in 1..=4 {
+                let _ = ctrl.route_mixer_track(trk, 0, 0.85, false);
+            }
             ctrl
         })
         .expect("Failed to spawn ToneForge init thread")
