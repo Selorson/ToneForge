@@ -84,6 +84,7 @@
 <main class="toneforge-shell">
   <header class="transport-bar">
     <div class="brand">
+      <img class="brand-logo" src="/favicon.png" alt="ToneForge" width="34" height="34" />
       <h1>ToneForge DAW</h1>
       <span class="badge">120 FPS WebGPU · 128 KB Zero-Copy SHM</span>
     </div>
@@ -267,6 +268,12 @@
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+  .brand-logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 7px;
+    flex-shrink: 0;
   }
   h1 {
     margin: 0;
