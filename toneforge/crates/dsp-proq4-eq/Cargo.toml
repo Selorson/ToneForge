@@ -10,6 +10,9 @@ description = "ToneForge FabFilter Pro-Q 4 Clean-Room DSP Engine: 24-Band Dynami
 daw-core-graph = { workspace = true }
 rustfft = { workspace = true }
 realfft = { workspace = true }
+num-complex = { workspace = true }
+parking_lot = { workspace = true }
 wide = { workspace = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }

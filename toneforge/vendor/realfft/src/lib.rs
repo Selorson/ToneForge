@@ -9,9 +9,21 @@ pub trait RealToComplex<T: FftNum>: Send + Sync {
     fn complex_len(&self) -> usize {
         self.len() / 2 + 1
     }
+    fn get_scratch_len(&self) -> usize {
+        self.len()
+    }
     fn process(&self, input: &mut [T], output: &mut [Complex<T>]) -> Result<(), &'static str>;
+    fn process_with_scratch(
+        &self,
+        input: &mut [T],
+        output: &mut [Complex<T>],
+        scratch: &mut [Complex<T>],
+    ) -> Result<(), &'static str>;
     fn make_input_vec(&self) -> Vec<T>;
     fn make_output_vec(&self) -> Vec<Complex<T>>;
+    fn make_scratch_vec(&self) -> Vec<Complex<T>> {
+        vec![Complex::new(T::zero(), T::zero()); self.get_scratch_len()]
+    }
 }
 
 pub trait ComplexToReal<T: FftNum>: Send + Sync {
@@ -19,9 +31,21 @@ pub trait ComplexToReal<T: FftNum>: Send + Sync {
     fn complex_len(&self) -> usize {
         self.len() / 2 + 1
     }
+    fn get_scratch_len(&self) -> usize {
+        self.len()
+    }
     fn process(&self, input: &mut [Complex<T>], output: &mut [T]) -> Result<(), &'static str>;
+    fn process_with_scratch(
+        &self,
+        input: &mut [Complex<T>],
+        output: &mut [T],
+        scratch: &mut [Complex<T>],
+    ) -> Result<(), &'static str>;
     fn make_input_vec(&self) -> Vec<Complex<T>>;
     fn make_output_vec(&self) -> Vec<T>;
+    fn make_scratch_vec(&self) -> Vec<Complex<T>> {
+        vec![Complex::new(T::zero(), T::zero()); self.get_scratch_len()]
+    }
 }
 
 struct R2CPlan<T: FftNum> {
@@ -35,14 +59,26 @@ impl<T: FftNum> RealToComplex<T> for R2CPlan<T> {
     }
 
     fn process(&self, input: &mut [T], output: &mut [Complex<T>]) -> Result<(), &'static str> {
-        if input.len() != self.len || output.len() != self.complex_len() {
+        let mut work = vec![Complex::new(T::zero(), T::zero()); self.len];
+        self.process_with_scratch(input, output, &mut work)
+    }
+
+    #[inline]
+    fn process_with_scratch(
+        &self,
+        input: &mut [T],
+        output: &mut [Complex<T>],
+        scratch: &mut [Complex<T>],
+    ) -> Result<(), &'static str> {
+        if input.len() != self.len || output.len() != self.complex_len() || scratch.len() < self.len
+        {
             return Err("invalid buffer length");
         }
-        let mut work = vec![Complex::new(T::zero(), T::zero()); self.len];
+        let work = &mut scratch[..self.len];
         for (dst, &src) in work.iter_mut().zip(input.iter()) {
-            dst.re = src;
+            *dst = Complex::new(src, T::zero());
         }
-        self.fft.process(&mut work);
+        self.fft.process(work);
         output.copy_from_slice(&work[..self.complex_len()]);
         Ok(())
     }
@@ -67,19 +103,31 @@ impl<T: FftNum> ComplexToReal<T> for C2RPlan<T> {
     }
 
     fn process(&self, input: &mut [Complex<T>], output: &mut [T]) -> Result<(), &'static str> {
-        if input.len() != self.complex_len() || output.len() != self.len {
+        let mut work = vec![Complex::new(T::zero(), T::zero()); self.len];
+        self.process_with_scratch(input, output, &mut work)
+    }
+
+    #[inline]
+    fn process_with_scratch(
+        &self,
+        input: &mut [Complex<T>],
+        output: &mut [T],
+        scratch: &mut [Complex<T>],
+    ) -> Result<(), &'static str> {
+        if input.len() != self.complex_len() || output.len() != self.len || scratch.len() < self.len
+        {
             return Err("invalid buffer length");
         }
         let n = self.len;
         let half = n / 2;
-        let mut work = vec![Complex::new(T::zero(), T::zero()); n];
+        let work = &mut scratch[..n];
         for k in 0..=half {
             work[k] = input[k];
             if k > 0 && k < half {
                 work[n - k] = Complex::new(input[k].re, -input[k].im);
             }
         }
-        self.ifft.process(&mut work);
+        self.ifft.process(work);
         for (dst, src) in output.iter_mut().zip(work.iter()) {
             *dst = src.re;
         }

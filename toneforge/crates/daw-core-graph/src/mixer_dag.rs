@@ -1548,11 +1548,21 @@ impl MixerEngine {
         if process_all {
             for i in 0..MAX_MIXER_TRACKS {
                 frame.track_meters[i] = self.tracks[i].meter;
+                for slot in &self.tracks[i].slots {
+                    if slot.enabled {
+                        slot.plugin.export_visual_telemetry(frame);
+                    }
+                }
             }
         } else {
             for lvl in &self.scheduler.active_levels {
                 for &u in lvl {
                     frame.track_meters[u] = self.tracks[u].meter;
+                    for slot in &self.tracks[u].slots {
+                        if slot.enabled {
+                            slot.plugin.export_visual_telemetry(frame);
+                        }
+                    }
                 }
             }
         }

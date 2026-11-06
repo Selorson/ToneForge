@@ -54,6 +54,30 @@ impl f32x4 {
             self.0[3].abs(),
         ])
     }
+
+    #[inline(always)]
+    pub fn sqrt(self) -> Self {
+        Self([
+            self.0[0].sqrt(),
+            self.0[1].sqrt(),
+            self.0[2].sqrt(),
+            self.0[3].sqrt(),
+        ])
+    }
+}
+
+impl From<[f32; 4]> for f32x4 {
+    #[inline(always)]
+    fn from(arr: [f32; 4]) -> Self {
+        Self(arr)
+    }
+}
+
+impl From<f32x4> for [f32; 4] {
+    #[inline(always)]
+    fn from(v: f32x4) -> Self {
+        v.0
+    }
 }
 
 impl Add for f32x4 {

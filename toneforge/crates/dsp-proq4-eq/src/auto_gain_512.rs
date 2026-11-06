@@ -1,0 +1,354 @@
+//! `auto_gain_512`: 512-Bin 8-Knot Perceptual Loudness Auto-Gain (`0x18019BD20` & `0x18019C1B0`),
+//! Cross-Instance Collision Detection (`SharedInstanceCollisionBus` at `0x180230738`), and
+//! 120 FPS `ProQ4SpectrumFrame` (`16 KB`) Telemetry Exporter (`AnalyzerProcessor` at `0x1802216B0`).
+
+use daw_core_graph::ProQ4SpectrumFrame;
+use num_complex::Complex32;
+use parking_lot::Mutex;
+use realfft::{RealFftPlanner, RealToComplex};
+use std::f32::consts::TAU;
+use std::sync::{Arc, OnceLock};
+use wide::f32x4;
+
+pub const AUTO_GAIN_BINS: usize = 512;
+pub const SPECTRUM_FRAME_BINS: usize = 1024;
+pub const ANALYZER_FFT_SIZE: usize = 2048;
+pub const ANALYZER_FFT_BINS: usize = (ANALYZER_FFT_SIZE / 2) + 1; // 1025
+
+/// 512-Bin Perceptual Loudness Auto-Gain Calculator (`0x18019BD20` & `0x18019C1B0`).
+#[derive(Clone, Debug)]
+pub struct PerceptualAutoGain {
+    pub log_freq_octaves: [f32; AUTO_GAIN_BINS],
+    pub freq_hz_table: [f64; AUTO_GAIN_BINS],
+    pub normalized_weights: [f32; AUTO_GAIN_BINS],
+}
+
+impl Default for PerceptualAutoGain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PerceptualAutoGain {
+    /// Exact 8-knot table extracted from `.rdata` `0x180212988` & `0x1802129A8`.
+    pub const KNOT_FREQS_HZ: [f32; 8] = [10.0, 20.0, 30.0, 60.0, 90.0, 6250.0, 18000.0, 20000.0];
+    pub const KNOT_WEIGHTS: [f32; 8] = [0.0, 0.035, 0.20, 0.85, 1.0, 1.0, 0.40, 0.0];
+
+    pub fn new() -> Self {
+        let mut log_freq_octaves = [0.0f32; AUTO_GAIN_BINS];
+        let mut freq_hz_table = [0.0f64; AUTO_GAIN_BINS];
+        let mut weights = [0.0f32; AUTO_GAIN_BINS];
+        let min_oct = 20.0f32.log2(); // 4.321928 (`0x180212984`)
+        let max_oct = 20000.0f32.log2(); // 14.287712 (`0x1802129C8`)
+        let step = (max_oct - min_oct) / ((AUTO_GAIN_BINS - 1) as f32);
+        let mut sum_w = 0.0f32;
+
+        for i in 0..AUTO_GAIN_BINS {
+            let oct = min_oct + (i as f32) * step;
+            let hz = oct.exp2();
+            log_freq_octaves[i] = oct;
+            freq_hz_table[i] = hz as f64;
+            let mut w = 0.0f32;
+            for k in 0..7 {
+                let f0 = Self::KNOT_FREQS_HZ[k];
+                let f1 = Self::KNOT_FREQS_HZ[k + 1];
+                if hz >= f0 && hz <= f1 {
+                    let t = (hz - f0) / (f1 - f0);
+                    w = Self::KNOT_WEIGHTS[k]
+                        + t * (Self::KNOT_WEIGHTS[k + 1] - Self::KNOT_WEIGHTS[k]);
+                    break;
+                }
+            }
+            weights[i] = w;
+            sum_w += w;
+        }
+        let inv_sum = if sum_w > 0.0 { 1.0 / sum_w } else { 1.0 };
+        for w in &mut weights {
+            *w *= inv_sum;
+        }
+        Self {
+            log_freq_octaves,
+            freq_hz_table,
+            normalized_weights: weights,
+        }
+    }
+
+    /// Evaluates `G_AutoGain = 1.0 / max(1e-9, \sum_{i=0}^{511} sqrt(|H_total(f_i)|^2) * W_norm[i])`
+    /// using 4-wide SIMD (`sqrtps`, `mulps`, `addps` at `0x18019BD20`).
+    #[inline]
+    pub fn compute_compensation_linear(&self, combined_mag_sq_512: &[f32; AUTO_GAIN_BINS]) -> f32 {
+        let mut acc_v = f32x4::splat(0.0);
+        for i in (0..AUTO_GAIN_BINS).step_by(4) {
+            let mag_sq = f32x4::from([
+                combined_mag_sq_512[i],
+                combined_mag_sq_512[i + 1],
+                combined_mag_sq_512[i + 2],
+                combined_mag_sq_512[i + 3],
+            ]);
+            let w = f32x4::from([
+                self.normalized_weights[i],
+                self.normalized_weights[i + 1],
+                self.normalized_weights[i + 2],
+                self.normalized_weights[i + 3],
+            ]);
+            acc_v += mag_sq.sqrt() * w;
+        }
+        let lanes: [f32; 4] = acc_v.into();
+        let weighted_sum = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+        1.0 / weighted_sum.max(1e-9)
+    }
+
+    #[inline]
+    pub fn compute_compensation_db(&self, combined_mag_sq_512: &[f32; AUTO_GAIN_BINS]) -> f32 {
+        20.0 * self.compute_compensation_linear(combined_mag_sq_512).log10()
+    }
+}
+
+/// Shared Cross-Instance Spectral Collision Bus (`SharedInstanceState` at `0x180230738`).
+pub struct SharedInstanceCollisionBus {
+    instances: Mutex<Vec<(u32, [f32; SPECTRUM_FRAME_BINS])>>,
+}
+
+impl SharedInstanceCollisionBus {
+    pub fn global() -> &'static Self {
+        static BUS: OnceLock<SharedInstanceCollisionBus> = OnceLock::new();
+        BUS.get_or_init(|| Self {
+            instances: Mutex::new(Vec::with_capacity(16)),
+        })
+    }
+
+    pub fn publish_and_compute_collisions(
+        &self,
+        instance_id: u32,
+        post_db: &[f32; SPECTRUM_FRAME_BINS],
+        out_collision_mask: &mut [f32; SPECTRUM_FRAME_BINS],
+    ) {
+        if let Some(mut guard) = self.instances.try_lock() {
+            let mut found = false;
+            for (id, spec) in guard.iter_mut() {
+                if *id == instance_id {
+                    *spec = *post_db;
+                    found = true;
+                    break;
+                }
+            }
+            if !found && guard.len() < 16 {
+                guard.push((instance_id, *post_db));
+            }
+
+            out_collision_mask.fill(0.0);
+            for (id, other_spec) in guard.iter() {
+                if *id == instance_id {
+                    continue;
+                }
+                for b in 0..SPECTRUM_FRAME_BINS {
+                    // Collision when both instances have prominent energy (> -42 dB) in the same bin
+                    let e_self = (post_db[b] + 48.0).max(0.0);
+                    let e_other = (other_spec[b] + 48.0).max(0.0);
+                    let overlap = ((e_self.min(e_other)) / 24.0).clamp(0.0, 1.0);
+                    if overlap > out_collision_mask[b] {
+                        out_collision_mask[b] = overlap;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Real-Time Zero-Allocation 1024-Bin Spectrum Analyzer (`AnalyzerProcessor` at `0x1802216B0`)
+/// populating `ProQ4SpectrumFrame` (`16 KB`) in `VisualTelemetryFrame`.
+pub struct ProQ4SpectrumAnalyzer {
+    r2c: Arc<dyn RealToComplex<f32>>,
+    r2c_scratch: Vec<Complex32>,
+    window: [f32; ANALYZER_FFT_SIZE],
+    pre_ring: [f32; ANALYZER_FFT_SIZE],
+    post_ring: [f32; ANALYZER_FFT_SIZE],
+    sc_ring: [f32; ANALYZER_FFT_SIZE],
+    ring_cursor: usize,
+    hop_counter: usize,
+    fft_time_buf: [f32; ANALYZER_FFT_SIZE],
+    fft_spec_buf: [Complex32; ANALYZER_FFT_BINS],
+    log_bin_freq_hz: [f32; SPECTRUM_FRAME_BINS],
+    pub latest_frame: ProQ4SpectrumFrame,
+}
+
+impl Default for ProQ4SpectrumAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProQ4SpectrumAnalyzer {
+    pub fn new() -> Self {
+        let mut planner = RealFftPlanner::<f32>::new();
+        let r2c = planner.plan_fft_forward(ANALYZER_FFT_SIZE);
+        let r2c_scratch = vec![Complex32::new(0.0, 0.0); r2c.get_scratch_len()];
+
+        let mut window = [0.0f32; ANALYZER_FFT_SIZE];
+        let inv_n = 1.0 / (ANALYZER_FFT_SIZE as f32);
+        for (i, w) in window.iter_mut().enumerate() {
+            let h = 0.5 * (1.0 - (TAU * (i as f32) * inv_n).cos());
+            *w = h * 2.0 * inv_n;
+        }
+
+        let min_oct = 20.0f32.log2();
+        let max_oct = 20000.0f32.log2();
+        let step = (max_oct - min_oct) / ((SPECTRUM_FRAME_BINS - 1) as f32);
+        let mut log_bin_freq_hz = [0.0f32; SPECTRUM_FRAME_BINS];
+        for (i, f) in log_bin_freq_hz.iter_mut().enumerate() {
+            *f = (min_oct + (i as f32) * step).exp2();
+        }
+
+        let mut latest_frame = ProQ4SpectrumFrame::default();
+        latest_frame.pre_db.fill(-120.0);
+        latest_frame.post_db.fill(-120.0);
+        latest_frame.sc_db.fill(-120.0);
+        latest_frame.collision_mask.fill(0.0);
+
+        Self {
+            r2c,
+            r2c_scratch,
+            window,
+            pre_ring: [0.0; ANALYZER_FFT_SIZE],
+            post_ring: [0.0; ANALYZER_FFT_SIZE],
+            sc_ring: [0.0; ANALYZER_FFT_SIZE],
+            ring_cursor: 0,
+            hop_counter: 0,
+            fft_time_buf: [0.0; ANALYZER_FFT_SIZE],
+            fft_spec_buf: [Complex32::new(0.0, 0.0); ANALYZER_FFT_BINS],
+            log_bin_freq_hz,
+            latest_frame,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.pre_ring.fill(0.0);
+        self.post_ring.fill(0.0);
+        self.sc_ring.fill(0.0);
+        self.ring_cursor = 0;
+        self.hop_counter = 0;
+        self.latest_frame.pre_db.fill(-120.0);
+        self.latest_frame.post_db.fill(-120.0);
+        self.latest_frame.sc_db.fill(-120.0);
+        self.latest_frame.collision_mask.fill(0.0);
+    }
+
+    #[inline(always)]
+    pub fn push_sample(
+        &mut self,
+        pre_mono: f32,
+        post_mono: f32,
+        sc_mono: f32,
+        sample_rate: f64,
+        tilt_db_oct: f32,
+        freeze: bool,
+    ) {
+        let c = self.ring_cursor;
+        self.pre_ring[c] = pre_mono;
+        self.post_ring[c] = post_mono;
+        self.sc_ring[c] = sc_mono;
+        self.ring_cursor = (c + 1) & (ANALYZER_FFT_SIZE - 1);
+
+        self.hop_counter += 1;
+        if self.hop_counter >= 512 {
+            self.hop_counter = 0;
+            if !freeze {
+                self.compute_spectra(sample_rate, tilt_db_oct);
+            }
+        }
+    }
+
+    fn compute_one_ring_db(
+        r2c: &Arc<dyn RealToComplex<f32>>,
+        r2c_scratch: &mut [Complex32],
+        window: &[f32; ANALYZER_FFT_SIZE],
+        ring: &[f32; ANALYZER_FFT_SIZE],
+        ring_cursor: usize,
+        fft_time_buf: &mut [f32; ANALYZER_FFT_SIZE],
+        fft_spec_buf: &mut [Complex32; ANALYZER_FFT_BINS],
+        log_bin_freq_hz: &[f32; SPECTRUM_FRAME_BINS],
+        sample_rate: f32,
+        tilt_db_oct: f32,
+        out_db: &mut [f32; SPECTRUM_FRAME_BINS],
+    ) {
+        let n = ANALYZER_FFT_SIZE;
+        for i in 0..n {
+            let idx = (ring_cursor + i) & (n - 1);
+            fft_time_buf[i] = ring[idx] * window[i];
+        }
+        let _ = r2c.process_with_scratch(fft_time_buf, fft_spec_buf, r2c_scratch);
+
+        let hz_per_bin = sample_rate / (n as f32);
+        let smooth_alpha = 0.65f32;
+
+        for i in 0..SPECTRUM_FRAME_BINS {
+            let f = log_bin_freq_hz[i];
+            let bin_f = (f / hz_per_bin).clamp(1.0, (ANALYZER_FFT_BINS - 2) as f32);
+            let b0 = bin_f.floor() as usize;
+            let frac = bin_f - (b0 as f32);
+            let m0 = fft_spec_buf[b0].norm();
+            let m1 = fft_spec_buf[b0 + 1].norm();
+            let mag = (m0 + frac * (m1 - m0)).max(1e-6);
+
+            // Apply spectral tilt around 1 kHz (`0x180107800`)
+            let oct_from_1k = (f / 1000.0).log2();
+            let raw_db = (20.0 * mag.log10() + oct_from_1k * tilt_db_oct).clamp(-120.0, 24.0);
+            out_db[i] = smooth_alpha * out_db[i] + (1.0 - smooth_alpha) * raw_db;
+        }
+    }
+
+    pub fn compute_spectra(&mut self, sample_rate: f64, tilt_db_oct: f32) {
+        let fs = sample_rate.max(8000.0) as f32;
+        Self::compute_one_ring_db(
+            &self.r2c,
+            &mut self.r2c_scratch,
+            &self.window,
+            &self.pre_ring,
+            self.ring_cursor,
+            &mut self.fft_time_buf,
+            &mut self.fft_spec_buf,
+            &self.log_bin_freq_hz,
+            fs,
+            tilt_db_oct,
+            &mut self.latest_frame.pre_db,
+        );
+        Self::compute_one_ring_db(
+            &self.r2c,
+            &mut self.r2c_scratch,
+            &self.window,
+            &self.post_ring,
+            self.ring_cursor,
+            &mut self.fft_time_buf,
+            &mut self.fft_spec_buf,
+            &self.log_bin_freq_hz,
+            fs,
+            tilt_db_oct,
+            &mut self.latest_frame.post_db,
+        );
+        Self::compute_one_ring_db(
+            &self.r2c,
+            &mut self.r2c_scratch,
+            &self.window,
+            &self.sc_ring,
+            self.ring_cursor,
+            &mut self.fft_time_buf,
+            &mut self.fft_spec_buf,
+            &self.log_bin_freq_hz,
+            fs,
+            tilt_db_oct,
+            &mut self.latest_frame.sc_db,
+        );
+
+        // Self-collision / resonant peak prominence indicator when no other instance is active
+        for i in 0..SPECTRUM_FRAME_BINS {
+            let post = self.latest_frame.post_db[i];
+            let prom = ((post + 30.0) / 30.0).clamp(0.0, 1.0);
+            self.latest_frame.collision_mask[i] = prom;
+        }
+    }
+
+    #[inline]
+    pub fn export_to_frame(&self, dst: &mut ProQ4SpectrumFrame) {
+        *dst = self.latest_frame;
+    }
+}

@@ -10,6 +10,11 @@ description = "ToneForge oeksound Soothe3 Clean-Room DSP Engine: Dynamic Resonan
 daw-core-graph = { workspace = true }
 rustfft = { workspace = true }
 realfft = { workspace = true }
+num-complex = { workspace = true }
 wide = { workspace = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+dsp-proq4-eq = { path = "../dsp-proq4-eq" }

@@ -185,9 +185,12 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "daw-core-graph",
+ "num-complex",
+ "parking_lot",
  "realfft",
  "rustfft",
  "serde",
+ "serde_json",
  "wide",
 ]
 
@@ -197,9 +200,12 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "daw-core-graph",
+ "dsp-proq4-eq",
+ "num-complex",
  "realfft",
  "rustfft",
  "serde",
+ "serde_json",
  "wide",
 ]
 

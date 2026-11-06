@@ -97,6 +97,10 @@ pub trait UnifiedDspNode: Send {
         0.0
     }
 
+    /// Optional hook to export plugin-specific 120 FPS visual telemetry (e.g., `ProQ4SpectrumFrame`
+    /// or `Soothe3ReductionFrame`) directly into `VisualTelemetryFrame` with Zero Heap Allocation.
+    fn export_visual_telemetry(&self, _frame: &mut VisualTelemetryFrame) {}
+
     /// Processes a real-time audio slice (Zero Heap Allocation).
     fn process_slice(
         &mut self,
