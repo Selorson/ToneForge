@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DawTelemetryView } from '../state/daw_master_store.svelte';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -44,6 +45,7 @@
 </script>
 
 <section class="panel ozone12-panel">
+  <Guide id="ozone12" />
   <header class="panel-header">
     <div>
       <h2>iZotope Ozone 12 Mastering Console & 120ms Real-Time BSRNN Stem Rebalance</h2>

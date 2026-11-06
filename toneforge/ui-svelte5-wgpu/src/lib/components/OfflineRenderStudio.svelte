@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DawTelemetryView } from '../state/daw_master_store.svelte';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -7,6 +8,7 @@
 </script>
 
 <section class="panel render-panel">
+  <Guide id="render" />
   <header class="panel-header">
     <div>
       <h2>Offline Bounce & Mastering Render Engine (MBIT+ Dither & ITU-R BS.1770-4 Analysis)</h2>

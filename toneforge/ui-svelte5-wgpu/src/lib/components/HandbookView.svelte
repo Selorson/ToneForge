@@ -1,0 +1,1532 @@
+<script lang="ts">
+  import type { WorkspaceTabKey } from '../state/guides';
+
+  let {
+    initialSectionId = '',
+  }: {
+    initialSectionId?: string;
+  } = $props();
+
+  let searchQuery = $state('');
+  let handbookRoot: HTMLElement | undefined = $state();
+
+  function jumpToTab(tab: WorkspaceTabKey) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('toneforge:navigate', {
+          detail: { tab },
+        })
+      );
+    }
+  }
+
+  function normVi(s: string): string {
+    return s
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .trim();
+  }
+
+  function matchesFilter(text: string | null | undefined, rawQuery: string, normQuery: string): boolean {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    if (lower.includes(rawQuery)) return true;
+    return normVi(lower).includes(normQuery);
+  }
+
+  function scrollToSection(id: string) {
+    if (!handbookRoot) return;
+    if (searchQuery.trim() !== '') {
+      const candidate = handbookRoot.querySelector<HTMLElement>(`#${id}`);
+      if (!candidate || candidate.hidden || candidate.closest('[hidden]')) {
+        searchQuery = '';
+      }
+    }
+    requestAnimationFrame(() => {
+      const target = handbookRoot?.querySelector(`#${id}`);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
+
+  $effect(() => {
+    if (initialSectionId && handbookRoot) {
+      const id = initialSectionId;
+      requestAnimationFrame(() => {
+        const target = handbookRoot?.querySelector(`#${id}`);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    }
+  });
+
+  // Live filter supporting both accented/unaccented Vietnamese and section-heading queries
+  $effect(() => {
+    if (!handbookRoot) return;
+    const rawQuery = searchQuery.trim().toLowerCase();
+    const normQuery = normVi(rawQuery);
+    const allFilterable = handbookRoot.querySelectorAll<HTMLElement>('[data-filter]');
+    allFilterable.forEach((el) => {
+      el.hidden = false;
+    });
+    const allTables = handbookRoot.querySelectorAll<HTMLElement>('table.plain, table.items');
+    allTables.forEach((tbl) => {
+      tbl.hidden = false;
+    });
+    if (!rawQuery) return;
+
+    const leaves = handbookRoot.querySelectorAll<HTMLElement>(
+      'tr[data-filter], .term[data-filter], details.trouble[data-filter], .scenario-card[data-filter]'
+    );
+    leaves.forEach((el) => {
+      const matched = matchesFilter(el.textContent, rawQuery, normQuery);
+      el.hidden = !matched;
+      if (el instanceof HTMLDetailsElement && matched) {
+        el.open = true;
+      }
+    });
+
+    handbookRoot.querySelectorAll<HTMLElement>('section.page[data-filter]').forEach((pageEl) => {
+      const headingText =
+        (pageEl.querySelector('h3')?.textContent ?? '') +
+        ' ' +
+        (pageEl.querySelector('.purpose')?.textContent ?? '');
+      const headerMatches = matchesFilter(headingText, rawQuery, normQuery);
+      const hasVisibleRow = pageEl.querySelector('tr[data-filter]:not([hidden])') !== null;
+
+      if (!hasVisibleRow && headerMatches) {
+        pageEl.querySelectorAll<HTMLElement>('tr[data-filter]').forEach((row) => {
+          row.hidden = false;
+        });
+        pageEl.hidden = false;
+      } else {
+        pageEl.hidden = !hasVisibleRow;
+      }
+    });
+
+    handbookRoot.querySelectorAll<HTMLElement>('section.part[data-filter]').forEach((partEl) => {
+      const hasVisibleChild = partEl.querySelector('[data-filter]:not([hidden])') !== null;
+      const partHeadingText =
+        (partEl.querySelector(':scope > h2')?.textContent ?? '') +
+        ' ' +
+        Array.from(partEl.querySelectorAll(':scope > p, :scope > .figure'))
+          .map((n) => n.textContent ?? '')
+          .join(' ');
+      const partIntroMatches = matchesFilter(partHeadingText, rawQuery, normQuery);
+
+      if (!hasVisibleChild && partIntroMatches) {
+        partEl.hidden = false;
+        const plainTable = partEl.querySelector<HTMLElement>('table.plain');
+        if (plainTable && !plainTable.querySelector('tr[data-filter]:not([hidden])')) {
+          plainTable.hidden = true;
+        }
+        partEl.querySelectorAll<HTMLElement>(':scope > [data-filter], :scope > dl > [data-filter], :scope > .scenarios-grid > [data-filter]').forEach((child) => {
+          child.hidden = false;
+        });
+      } else {
+        partEl.hidden = !hasVisibleChild;
+      }
+    });
+  });
+</script>
+
+<div class="handbook-shell" bind:this={handbookRoot}>
+  <!-- CỘT TRÁI: MỤC LỤC CỐ ĐỊNH & Ô LỌC NHANH (GIỐNG HỆT CO-WRITER) -->
+  <nav id="toc" aria-label="Mục lục Cẩm nang ToneForge">
+    <input
+      id="q"
+      type="search"
+      placeholder="Lọc nhanh (gõ một từ: vocal, karaoke, eq, lufs, preset, xuất file)…"
+      aria-label="Lọc nhanh nội dung cẩm nang"
+      bind:value={searchQuery}
+    />
+    <div class="toc-actions noprint">
+      <button type="button" class="print-btn" onclick={() => window.print()}>
+        🖨️ In / Lưu PDF
+      </button>
+      <button type="button" class="back-btn" onclick={() => jumpToTab('all')}>
+        🎛️ Về Bàn Làm Nhạc
+      </button>
+    </div>
+
+    <div class="grp">Mở đầu cho người mới</div>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('phan-a')}>
+      A · App này là gì & Khác gì FL Studio gốc
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('phan-b')}>
+      B · Từ điển âm thanh cho người mới (18 từ)
+    </button>
+
+    <div class="grp">C · Giải thích từng màn hình & từng nút</div>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('phan-c')}>
+      C · Từng khu vực & Ý nghĩa từng nút/con số
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-topbar')}>
+      1. Thanh điều khiển trên cùng (Top Bar)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-playlist')}>
+      2. Playlist & Piano Roll (Soạn giai điệu)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-proq4')}>
+      3. FabFilter Pro-Q 4 (Lọc 24 dải tần)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-soothe3')}>
+      4. oeksound Soothe3 (Khử chói tự động)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-ozone12')}>
+      5. iZotope Ozone 12 (AI Mastering & Rebalance)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-mixer')}>
+      6. 502-Track Mixer & Patcher (Bàn trộn)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-uvr5')}>
+      7. UVR5 Stem Studio (Tách lời/nhạc bằng AI)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('khu-render')}>
+      8. Offline Render & Bounce (Xuất file WAV)
+    </button>
+
+    <div class="grp">Thực hành & Cứu hộ</div>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('phan-d')}>
+      D · 4 Kịch bản cầm tay chỉ việc (1-2-3 là xong)
+    </button>
+    <button type="button" class="toc-link" onclick={() => scrollToSection('phan-e')}>
+      E · Sự cố & Câu hỏi thường gặp
+    </button>
+  </nav>
+
+  <!-- CỘT PHẢI: NỘI DUNG CẨM NANG CHI TIẾT -->
+  <div class="handbook-main">
+    <section class="cover-wrap">
+      <div class="cover">
+        <h1>📖 Cẩm nang sử dụng ToneForge Studio (Dành cho người mới hoàn toàn)</h1>
+        <p>
+          Phiên bản <b>1.0.0</b> · Kiến trúc <b>120 FPS WebGPU + 128 KB Zero-Copy SHM</b> · Viết riêng cho người <b>chưa từng dùng FL Studio hay bất kỳ plugin phòng thu nào trước đây</b>.
+        </p>
+        <p>
+          Giải thích bằng tiếng Việt đời thường cho từng màn hình, từng nút bấm, từng con số và từng thanh trượt. Không cần biết nhạc lý, không cần tự nối dây âm thanh — làm theo đúng các bước 1-2-3 trong cẩm nang này là ra sản phẩm.
+        </p>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PHẦN A: APP NÀY LÀ GÌ & KHÁC GÌ VỚI FL STUDIO + 4 PLUGIN GỐC?       -->
+    <!-- =================================================================== -->
+    <section class="part" id="phan-a" data-filter>
+      <h2>A · ToneForge Studio là gì & Khác gì với cách vận hành FL Studio + các Plugin gốc?</h2>
+      <p>
+        Nếu anh tải 5 phần mềm gốc rời rạc về máy (<b>FL Studio 26</b> để soạn nhạc, <b>Ultimate Vocal Remover 5</b> để tách lời, <b>FabFilter Pro-Q 4</b> để lọc âm, <b>oeksound Soothe3</b> để khử chói, và <b>iZotope Ozone 12</b> để làm chủ âm lượng), một người mới sẽ ngay lập tức bị "ngợp" vì phải mở hàng chục cửa sổ chồng chéo, tự cài đặt đường dẫn VST3, tự nối dây từng kênh và đứng trước những màn hình trống trơn không biết bấm vào đâu để phát ra tiếng.
+      </p>
+      <p>
+        <b>ToneForge Studio giải quyết triệt để rào cản đó:</b> Toàn bộ 5 công cụ đỉnh cao trên đã được <b>hợp nhất vào một cửa sổ duy nhất</b>, nối sẵn đường truyền âm thanh ngầm tốc độ cao (Zero-Copy Shared Memory 120 FPS) và <b>nạp sẵn hàng trăm cấu hình mẫu (Factory Presets) của các kỹ sư đạt giải Grammy</b>. Anh chỉ việc chọn mẫu có sẵn và bấm nút nghe thử!
+      </p>
+
+      <!-- SƠ ĐỒ VÒNG LẶP 5 BƯỚC (SVG CHUẨN CO-WRITER) -->
+      <div class="figure">
+        <svg viewBox="0 0 940 235" role="img" aria-label="Quy trình 5 bước làm nhạc trong ToneForge Studio" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="currentColor" />
+            </marker>
+          </defs>
+          <g font-size="13.5" text-anchor="middle" fill="currentColor">
+            <g class="node">
+              <rect x="12" y="24" width="168" height="62" rx="10" />
+              <text x="96" y="49" font-weight="700">1 · UVR5 Stem Studio</text>
+              <text x="96" y="69" class="sub">Tách bài hát ra 4 nhánh AI</text>
+            </g>
+            <g class="node">
+              <rect x="204" y="24" width="168" height="62" rx="10" />
+              <text x="288" y="49" font-weight="700">2 · Playlist & Piano Roll</text>
+              <text x="288" y="69" class="sub">Chọn bộ trống & giai điệu</text>
+            </g>
+            <g class="node">
+              <rect x="396" y="24" width="168" height="62" rx="10" />
+              <text x="480" y="49" font-weight="700">3 · Pro-Q 4 & Soothe3</text>
+              <text x="480" y="69" class="sub">Gọt đục & Khử chói tự động</text>
+            </g>
+            <g class="node">
+              <rect x="588" y="24" width="168" height="62" rx="10" />
+              <text x="672" y="49" font-weight="700">4 · 502-Track Mixer</text>
+              <text x="672" y="69" class="sub">Trộn kênh & Bù trễ 5-Point</text>
+            </g>
+            <g class="node hot">
+              <rect x="776" y="24" width="152" height="62" rx="10" />
+              <text x="852" y="49" font-weight="700">5 · Ozone 12 AI</text>
+              <text x="852" y="69" class="sub">Auto-Match & Rebalance</text>
+            </g>
+            <g class="node hot">
+              <rect x="280" y="138" width="440" height="64" rx="10" />
+              <text x="500" y="164" font-weight="700">Đầu ra: Offline Render & Kiểm định chuẩn Spotify / YouTube</text>
+              <text x="500" y="185" class="sub">Xuất file .WAV 24-Bit MBIT+ Dither / 32-Bit Float + Báo cáo PASS (-14 LUFS)</text>
+            </g>
+          </g>
+          <g stroke="currentColor" stroke-width="2" fill="none" marker-end="url(#ar)">
+            <path d="M180 55H200" />
+            <path d="M372 55H392" />
+            <path d="M564 55H584" />
+            <path d="M756 55H772" />
+            <path d="M852 88V170H724" />
+          </g>
+        </svg>
+        <p class="cap">
+          Sơ đồ vận hành 5 bước khép kín trong ToneForge Studio: Anh có thể bắt đầu từ Bước 1 (nếu muốn tách nhạc/lời từ bài hát có sẵn) hoặc bắt đầu từ Bước 2 (nếu muốn làm nhạc mới từ kho giai điệu FL26), thậm chí nhảy thẳng tới Bước 5 (nếu chỉ muốn tăng giọng hát / nâng âm lượng cho một bản thu có sẵn).
+        </p>
+      </div>
+
+      <h3>Bảng so sánh: Khác biệt giữa dùng phần mềm rời và dùng ToneForge Studio</h3>
+      <table class="plain">
+        <thead>
+          <tr>
+            <th>Công việc cần làm</th>
+            <th>Cách vận hành cũ (Mở 5 phần mềm rời rạc)</th>
+            <th>Cách vận hành trong ToneForge Studio (Tích hợp 1 cửa sổ)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-filter>
+            <td><b>Tách lời và nhạc nền (Stems)</b></td>
+            <td>Phải mở phần mềm UVR5 riêng ở ngoài, tải từng model, chờ xuất 4 file ra ổ cứng rồi mở FL Studio kéo thả từng file vào.</td>
+            <td>Bấm 1 nút <b>Run Ensemble & Bounce to Mixer 1..4</b> ngay trong tab <b>UVR5 Stem Studio</b> — 3 AI cùng chạy và tự nạp thẳng 4 nhánh vào Kênh 1..4 của bàn trộn.</td>
+          </tr>
+          <tr data-filter>
+            <td><b>Soạn trống và giai điệu</b></td>
+            <td>Màn hình trắng trơn; người mới phải tự tìm file tiếng trống (.wav), tự xếp từng nốt nhạc mới kêu được.</td>
+            <td>Chọn sẵn bộ tiếng <b>808 / 909 / Strings</b> và chọn bản nhạc mẫu <b>Trance / Oxygene / 4-Steps (.fsc)</b> ở <b>Playlist & Piano Roll</b> là máy tự chơi ngay.</td>
+          </tr>
+          <tr data-filter>
+            <td><b>Làm trong giọng hát & Khử chói</b></td>
+            <td>Phải tự chèn VST3 Pro-Q 4 và Soothe3 vào từng rãnh, tự dò từng tần số Hz bị hú hoặc ồm.</td>
+            <td>Mở ô <b>Factory Preset</b> chọn <b>Vocals / Lead Vocal</b> (Pro-Q 4) và <b>SM7 Vocals</b> hoặc <b>That Grammy balance preset</b> (Soothe3) là xong.</td>
+          </tr>
+          <tr data-filter>
+            <td><b>Sửa bài nhạc đã ghép sẵn (Giọng hát bị nhỏ hơn nhạc)</b></td>
+            <td>Bó tay nếu không có file gốc, hoặc phải tách ra làm lại từ đầu rất lâu.</td>
+            <td>Vào <b>Ozone 12 Console</b> → Kéo thanh <b>Vocals</b> trong mục <b>120ms Real-Time BSRNN Master Rebalance</b> lên +2 dB là giọng hát to rõ ngay lập tức!</td>
+          </tr>
+          <tr data-filter>
+            <td><b>Canh âm lượng chuẩn đăng YouTube / Spotify</b></td>
+            <td>Phải tự đọc đồng hồ đo phức tạp; nếu xuất file quá to sẽ bị YouTube/Spotify phạt giảm âm lượng hoặc bị rè vỡ tiếng.</td>
+            <td>Bấm <b>✨ AI Master Assistant (Auto-Match)</b> để AI tự canh chuẩn, rồi sang <b>Offline Render</b> xem bảng báo cáo xanh lá <b>PASS (-14 LUFS / -1.0 dBTP)</b>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PHẦN B: TỪ ĐIỂN ÂM THANH BÌNH DÂN (18 THUẬT NGỮ)                     -->
+    <!-- =================================================================== -->
+    <section class="part" id="phan-b" data-filter>
+      <h2>B · Từ điển âm thanh bình dân (Giải thích không dùng thuật ngữ khó hiểu)</h2>
+      <p class="purpose">
+        Mọi chữ viết tắt tiếng Anh anh nhìn thấy trên màn hình ToneForge đều được giải thích ngắn gọn bằng ví dụ đời thường dưới đây. Anh có thể gõ từ cần tìm vào ô <b>Lọc nhanh</b> bên trái.
+      </p>
+      <dl>
+        <div class="term" id="tu-bpm" data-filter>
+          <dt>BPM (Beats Per Minute)</dt>
+          <dd>
+            <b>Nhịp đập mỗi phút — Tốc độ nhanh hay chậm của bài hát.</b> Giống như nhịp tim: số nhỏ (70–90 BPM) là nhạc Ballad/LoFi thong thả; số vừa (110–128 BPM) là nhạc Pop/House vừa vặn; số lớn (140–174 BPM) là nhạc Trap/EDM/Drum&Bass dồn dập. Đổi ở ô <code>BPM</code> trên thanh trên cùng.
+          </dd>
+        </div>
+        <div class="term" id="tu-ppq" data-filter>
+          <dt>PPQ (96–960 Pulses Per Quarter)</dt>
+          <dd>
+            <b>Độ mịn của thước đo thời gian.</b> Tưởng tượng 1 nhịp đập của bài nhạc được chia nhỏ thành bao nhiêu vạch: <code>96 PPQ</code> là chuẩn mặc định nhẹ máy của FL Studio; còn <code>960 PPQ</code> chia nhỏ gấp 10 lần để cắt ghép âm thanh và vẽ đường cong mượt tuyệt đối tới từng phần nghìn giây.
+          </dd>
+        </div>
+        <div class="term" id="tu-slide" data-filter>
+          <dt>Slide / Portamento (⊿)</dt>
+          <dd>
+            <b>Kỹ thuật luyến nốt (Trượt cao độ).</b> Thay vì nhảy bậc cứng nhắc từ nốt Đồ sang nốt Sol như đàn piano, khi bật <code>⊿ Slide</code> âm thanh sẽ trượt mượt mà từ nốt thấp lên nốt cao giống như tiếng gảy đàn bầu hoặc tiếng bass 808 luyến trong nhạc HipHop/Trap hiện đại.
+          </dd>
+        </div>
+        <div class="term" id="tu-tensionspline" data-filter>
+          <dt>TensionSpline (Automation 30-Bit)</dt>
+          <dd>
+            <b>Bàn tay vô hình tự động vặn nút theo thời gian.</b> Thay vì anh phải ngồi canh đến giây thứ 30 để tự kéo âm lượng to lên, anh vẽ một đường cong <code>TensionSpline</code>: máy sẽ tự động vặn nút theo đúng đường cong đó với độ mịn 1 tỷ mức (30-bit Fixed-Point <code>0x40000000</code>) không bao giờ bị khựng.
+          </dd>
+        </div>
+        <div class="term" id="tu-eq" data-filter>
+          <dt>EQ (Equalizer) · Hz · dB · Q</dt>
+          <dd>
+            <b>Bộ điêu khắc âm sắc (trong Pro-Q 4).</b> <code>Hz</code> (Tần số) cho biết vị trí âm Trầm (20–250 Hz), âm Trung (300–4000 Hz) hay âm Cao/Sáng (5000–20000 Hz). <code>dB</code> (Biên độ) là kéo lên để Tăng to hay kéo xuống để Cắt nhỏ vùng đó đi. <code>Q</code> (Độ rộng) quyết định anh đang nâng/cắt một vùng rộng thoải mái (Q nhỏ) hay nhổ đúng một cái gai chói thật hẹp (Q lớn).
+          </dd>
+        </div>
+        <div class="term" id="tu-phasemode" data-filter>
+          <dt>ZeroLatency · NaturalPhase · LinearPhase</dt>
+          <dd>
+            <b>Ba chế độ xử lý của Pro-Q 4:</b> <code>ZeroLatency</code> xử lý tức thì không trễ một phần nghìn giây nào (dùng khi đang gõ đàn/soạn nhạc); <code>NaturalPhase</code> mô phỏng mạch phần cứng analog tự nhiên nhất cho giọng hát; <code>LinearPhase</code> giữ nguyên pha tuyệt đối không làm nhòe tiếng trống (chuyên dùng khi chỉnh kênh tổng Master).
+          </dd>
+        </div>
+        <div class="term" id="tu-resonance" data-filter>
+          <dt>Resonance (Cộng hưởng) & Delta Solo</dt>
+          <dd>
+            <b>Những tần số bị ồm, hú hoặc chói gắt gây đau tai.</b> Trong <b>Soothe3</b>, máy tự động phát hiện và dìm các điểm cộng hưởng xấu này xuống. Khi bấm nút <code>Delta Solo</code>, máy sẽ tắt nhạc chính và chỉ phát riêng "phần rác chói tai" đang bị cắt bỏ để anh kiểm tra xem máy cắt đã chuẩn chưa.
+          </dd>
+        </div>
+        <div class="term" id="tu-stem" data-filter>
+          <dt>Stem (Vocals · Drums · Bass · Other)</dt>
+          <dd>
+            <b>4 thành phần cốt lõi tạo nên một bài nhạc:</b> <code>Vocals</code> (Giọng hát chính & bè), <code>Drums</code> (Bộ trống & gõ nhịp), <code>Bass</code> (Tiếng trầm nền tảng), và <code>Other</code> (Đàn piano, guitar, dây, synth...). Tách bài nhạc thành 4 Stem giúp anh làm nhạc Karaoke hoặc chỉnh sửa từng phần dễ dàng.
+          </dd>
+        </div>
+        <div class="term" id="tu-ensemble" data-filter>
+          <dt>Ensemble (Gộp 3 AI trong UVR5)</dt>
+          <dd>
+            <b>Hội đồng 3 trí tuệ nhân tạo cùng làm việc.</b> Một mô hình AI tách nhạc đơn lẻ thường có điểm yếu (hoặc sạch lời nhưng mất đuôi âm, hoặc giữ đuôi âm nhưng dính tiếng trống). Chế độ <code>Ensemble</code> của ToneForge kết hợp cả 3 kiến trúc <code>MDX23C</code> + <code>HTDemucs v4</code> + <code>VR CascadedASPPNet</code> để bù trừ cho nhau, cho ra bản tách sạch nhất.
+          </dd>
+        </div>
+        <div class="term" id="tu-lufs" data-filter>
+          <dt>LUFS-I (Integrated Loudness)</dt>
+          <dd>
+            <b>Độ to thực tế của bài nhạc theo cảm nhận tai người (Chuẩn quốc tế ITU-R BS.1770-4).</b> Các số luôn mang dấu âm: <code>-24 LUFS</code> là khá nhỏ; <code>-14.0 LUFS</code> là chuẩn vàng của Spotify và YouTube; <code>-9 LUFS</code> đến <code>-7 LUFS</code> là cực kỳ to (thường dùng cho nhạc EDM/Club sôi động).
+          </dd>
+        </div>
+        <div class="term" id="tu-truepeak" data-filter>
+          <dt>True Peak (dBTP)</dt>
+          <dd>
+            <b>Đỉnh âm lượng cực đại thực tế (đo phóng đại 4 lần).</b> Nếu con số <code>dBTP</code> vượt quá <code>0.0 dBTP</code>, âm thanh khi xuất ra file hoặc chuyển sang MP3 sẽ bị vỡ và rè lẹt xẹt. Chuẩn an toàn tuyệt đối cho mọi nền tảng phát nhạc là giữ Trần (Ceiling) ở mức <code>-1.0 dBTP</code> trở xuống.
+          </dd>
+        </div>
+        <div class="term" id="tu-12ax7" data-filter>
+          <dt>12AX7 DK-Triode Exciter</dt>
+          <dd>
+            <b>Mạch làm ấm âm thanh bằng bóng đèn chân không cổ điển (trong Ozone 12).</b> Âm thanh kỹ thuật số đôi khi nghe lạnh và mỏng; kéo nhẹ thanh <code>12AX7 Exciter</code> sẽ bổ sung các hài âm ấm áp, giúp giọng hát dày dặn và tiếng trống có lực "đầm" hơn.
+          </dd>
+        </div>
+        <div class="term" id="tu-irc5" data-filter>
+          <dt>IRC V Maximizer (Intelligent Release Control)</dt>
+          <dd>
+            <b>Bộ nâng âm lượng thông minh thế hệ thứ 5 của Ozone 12.</b> Nó chia âm thanh thành nhiều dải để đẩy tổng âm lượng bài nhạc lên to rực rỡ mà vẫn khóa chặt đỉnh không vượt quá ngưỡng <code>Ceiling (-1.0 dBTP)</code>, không làm bẹp tiếng trống.
+          </dd>
+        </div>
+        <div class="term" id="tu-bsrnn" data-filter>
+          <dt>BSRNN 120ms Master Rebalance</dt>
+          <dd>
+            <b>Cân chỉnh lại Giọng hát / Trống ngay trên bản nhạc đã trộn xong.</b> Nhờ mạng nơ-ron BSRNN độ trễ thấp 120ms trong <b>Ozone 12</b>, dù anh chỉ có trong tay 1 file nhạc duy nhất đã ghép sẵn, anh vẫn có thể kéo thanh <code>Vocals</code> lên để giọng ca sĩ to rõ hơn mà không làm nhạc nền bị vống theo.
+          </dd>
+        </div>
+        <div class="term" id="tu-apdc" data-filter>
+          <dt>5-Point APDC (Automatic Plugin Delay Compensation)</dt>
+          <dd>
+            <b>Hệ thống tự động bù độ trễ tại 5 điểm nút.</b> Khi anh gắn các hiệu ứng nặng vào một kênh, kênh đó sẽ xử lý chậm hơn kênh khác vài phần nghìn giây làm tiếng trống bị lệch nhịp. Hệ thống <code>5-Point APDC</code> tự động tính toán và căn chỉnh mọi kênh khớp nhau tuyệt đối tới từng mẫu âm thanh (<code>0 smp</code> lệch).
+          </dd>
+        </div>
+        <div class="term" id="tu-sidechain" data-filter>
+          <dt>Insert Slot & Sidechain Ducking</dt>
+          <dd>
+            <b>Khay gắn hiệu ứng & Kỹ thuật "Nhạc tự cúi đầu nhường Giọng hát".</b> Mỗi kênh trên Mixer có 10 khay (<code>Insert Slots</code>) để gắn hiệu ứng. Khi dùng <code>Sidechain</code> (ví dụ chọn preset <i>Fruity Limiter: Ducking music behind voice.fst</i>), mỗi khi ca sĩ cất giọng hát thì nhạc nền tự động nhỏ xuống một chút, lúc ca sĩ nghỉ lấy hơi thì nhạc nền tự đầy lên lại.
+          </dd>
+        </div>
+        <div class="term" id="tu-mbit" data-filter>
+          <dt>Ozone 12 MBIT+ Dither</dt>
+          <dd>
+            <b>Lớp phủ mịn âm thanh khi xuất file 16-Bit hoặc 24-Bit.</b> Máy tính bên trong ToneForge xử lý âm thanh ở độ chính xác rất cao; khi đóng gói xuống file chuẩn 16-bit hoặc 24-bit để phát hành, thuật toán <code>MBIT+ Dither</code> giúp giữ lại trọn vẹn những chi tiết nhỏ nhất lúc nhạc ngân nhỏ dần (fade-out) mà không bị sạn.
+          </dd>
+        </div>
+        <div class="term" id="tu-crest" data-filter>
+          <dt>Crest Factor & Phase Correlation</dt>
+          <dd>
+            <b>Hai chỉ số kiểm định độ khỏe của bản nhạc (trong Offline Render):</b> <code>Crest Factor (dB)</code> đo độ nảy giữa tiếng to nhất và độ to trung bình (khoảng <code>6 dB – 12 dB</code> là nhạc vừa khỏe vừa thoáng). <code>Phase Correlation</code> đo độ đồng điệu giữa loa Trái và Phải (từ <code>+0.3 đến +1.0</code> là chuẩn đẹp; nếu tụt xuống số âm <code>-0.5</code> là hai loa đang triệt tiêu nhau).
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PHẦN C: GIẢI THÍCH TỪNG KHU VỰC, TỪNG NÚT BẤM & TỪNG CON SỐ        -->
+    <!-- =================================================================== -->
+    <section class="part" id="phan-c" data-filter>
+      <h2>C · Giải thích chi tiết từng khu vực, từng nút bấm & từng con số trên màn hình</h2>
+      <p class="purpose">
+        Mỗi bảng dưới đây giải thích toàn bộ các nút và con số của từng khu vực theo đúng cấu trúc 6 cột: <b>#</b> · <b>Nhãn trên màn hình</b> · <b>Là gì & Bấm/Kéo thì sao</b> · <b>Giá trị bình thường</b> · <b>Khi nào phải lo</b> · <b>Lùi lại được không</b>.
+      </p>
+
+      <!-- 1. THANH ĐIỀU KHIỂN TRÊN CÙNG -->
+      <section class="page" id="khu-topbar" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">1</span> Thanh điều khiển trên cùng (Top Transport & Telemetry Bar)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('all')}>
+            Mở màn hình tổng (Unified Master View) →
+          </button>
+        </div>
+        <p class="purpose">
+          Luôn nằm cố định ở trên cùng của ứng dụng: dùng để Phát/Dừng nhạc, chỉnh tốc độ BPM, theo dõi sức khỏe máy tính (CPU, độ to LUFS, đỉnh True Peak) và chuyển đổi giữa các màn hình làm việc.
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>▶ Play / ⏸ Pause</b><br /><span class="ty">nút bấm</span></td>
+              <td><b>Bấm thì:</b> Bắt đầu phát nhạc hoặc tạm dừng. Khi đang phát, nút chuyển sang màu xanh lá cây (<code>⏸ Pause</code>) và đồng hồ thời gian chạy liên tục ở 120 khung hình/giây.</td>
+              <td>Đứng yên khi mở app; xanh lá khi đang phát.</td>
+              <td><span class="none">—</span></td>
+              <td>Bấm lại lần nữa để dừng ngay.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>⏮ Reset</b><br /><span class="ty">nút bấm</span></td>
+              <td><b>Bấm thì:</b> Đưa kim phát nhạc (Playhead) quay về đúng vạch xuất phát đầu bài (Sample 0, PPQ 0).</td>
+              <td><span class="none">—</span></td>
+              <td><span class="none">—</span></td>
+              <td>Bấm lúc nào cũng được, không làm mất nốt nhạc.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>BPM</b><br /><span class="ty">ô nhập số (10–999)</span></td>
+              <td><b>Đổi số thì:</b> Tăng hoặc giảm tốc độ chạy nhạc của toàn bộ bài hát ngay lập tức mà không làm méo giọng.</td>
+              <td><code>120</code> – <code>140</code> BPM (mặc định <code>128</code>).</td>
+              <td>Nhập quá thấp (&lt;40) nhạc bò rất chậm; quá cao (&gt;220) trống dồn dập.</td>
+              <td>Gõ lại số <code>128</code> hoặc số cũ bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>Seq / Sample / PPQ</b><br /><span class="ty">đồng hồ số</span></td>
+              <td>Cho biết thứ tự khung hình đồ họa 120Hz (<code>Seq</code>), vị trí mẫu âm thanh (<code>Sample</code>) và vị trí vạch nhịp hiện tại (<code>PPQ</code>).</td>
+              <td>Tăng đều đặn khi đang bật Play.</td>
+              <td><span class="none">—</span></td>
+              <td>Bấm <code>⏮ Reset</code> để về 0.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-label"><b>CPU</b><br /><span class="ty">con số %</span></td>
+              <td>Mức tải bộ vi xử lý âm thanh. Nhờ chạy bằng Rust + SIMD nên rất nhẹ.</td>
+              <td><code>3.0%</code> – <code>25.0%</code>.</td>
+              <td>Nếu vượt quá <code>85%</code> trên máy yếu thì âm thanh có thể bị khựng nhẹ.</td>
+              <td><span class="none">—</span></td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">6</span></td>
+              <td class="c-label"><b>LUFS-I & TP (dBTP)</b><br /><span class="ty">đồng hồ đo độ to</span></td>
+              <td>Hiển thị trực tiếp độ to tích hợp (<code>LUFS-I</code>) và đỉnh âm lượng thực tế (<code>TP dBTP</code>) của bài nhạc đang phát.</td>
+              <td>LUFS-I khoảng <code>-14.0</code> đến <code>-9.0</code>; TP từ <code>-1.00 dBTP</code> trở xuống.</td>
+              <td>Khi <code>TP</code> hiện số dương (<code>+0.5 dBTP</code>): âm thanh đang chạm trần, nên giảm nhẹ Gain ở Ozone 12.</td>
+              <td><span class="none">—</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 2. PLAYLIST & PIANO ROLL -->
+      <section class="page" id="khu-playlist" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">2</span> Playlist & Piano Roll (Soạn giai điệu, Chọn bộ tiếng FL26 & Đường cong tự động)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('playlist')}>
+            Mở thẳng Playlist & Piano Roll →
+          </button>
+        </div>
+        <p class="purpose">
+          Nơi chọn nhạc cụ, nạp các bản nhạc mẫu có sẵn của FL Studio 26, chấm nốt nhạc bằng chuột và vẽ đường cong điều khiển tự động (TensionSpline).
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>FL26 Sample & Synth Kit</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><b>Chọn thì:</b> Đổi bộ nhạc cụ phát tiếng (Trống <code>808 Studio Kit</code>, Trống <code>909 Analog Kit</code>, <code>MA Skipper Snare Kit</code>, Dàn dây <code>Symphonic Strings</code> hoặc <code>Sytrus / Harmor Lead</code>).</td>
+              <td><code>808 Studio Kit (Real .wav)</code></td>
+              <td><span class="none">—</span></td>
+              <td>Đổi qua lại thoải mái giữa 5 bộ tiếng bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>FL26 Piano Roll Score (.fsc)</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><b>Chọn thì:</b> Nạp ngay một bản giai điệu mẫu chuẩn của FL Studio 26 (<code>ToneForge Lead Hook</code>, <code>FL26 Trance Arp</code>, <code>FL26 Oxygene Progression</code>, <code>4-Steps Groove</code>, <code>DrumRoll</code>) vào bảng nốt nhạc bên phải.</td>
+              <td><code>ToneForge Lead Hook (Slide)</code></td>
+              <td>Khi chọn bản mẫu mới, các nốt anh vừa tự chấm ở Pattern hiện tại sẽ được thay bằng bản mẫu đó.</td>
+              <td>Chọn lại bản mẫu cũ hoặc chuyển sang tab <code>Pattern 2</code> để soạn riêng.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>PPQ Resolution</b><br /><span class="ty">danh sách chọn</span></td>
+              <td>Đổi độ phân giải lưới thời gian từ <code>96 PPQ</code> lên tới <code>960 PPQ</code>. Khi đổi, vị trí các nốt nhạc tự động quy đổi theo tỷ lệ nên bài nhạc không bị lệch nhịp.</td>
+              <td><code>96 PPQ</code> hoặc <code>384 PPQ</code></td>
+              <td><span class="none">—</span></td>
+              <td>Chọn lại mức PPQ bất kỳ, toàn bộ nốt được giữ nguyên vị trí tương đối.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>⊿ Slide / Portamento (ON/OFF)</b><br /><span class="ty">nút bật/tắt</span></td>
+              <td>Khi bật <code>ON</code> (màu vàng), mọi nốt mới anh bấm thêm vào bảng Piano Roll sẽ mang ký hiệu <code>⊿ Slide</code> (nốt luyến trượt cao độ).</td>
+              <td><code>OFF</code> khi chấm nốt thường; <code>ON</code> khi muốn viết nốt luyến.</td>
+              <td>Nếu tất cả các nốt trong bài đều là nốt Slide mà không có nốt gốc đi trước thì sẽ không có nốt khởi đầu để trượt.</td>
+              <td>Bấm vào nốt đó rồi bỏ tích ô <code>⊿ Slide Note</code> ở thanh dưới cùng.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-label"><b>TensionSpline Canvas (Đồ thị đường cong)</b><br /><span class="ty">khung vẽ tương tác</span></td>
+              <td><b>Nhấp đúp chuột trái:</b> Thêm một điểm nút mới. <b>Kéo điểm tròn:</b> Đổi vị trí và độ cao. <b>Thanh trượt Tension (-0.95..+0.95):</b> Uốn cong đường nối giữa 2 điểm.</td>
+              <td>3–5 điểm uốn; Tension quanh <code>0.00</code> (đường thẳng) đến <code>±0.50</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Bấm nút đỏ <code>×</code> cạnh tên điểm (P1, P2...) để xóa điểm thừa ngay lập tức.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">6</span></td>
+              <td class="c-label"><b>Bảng lưới Piano Roll & Thanh chỉnh nốt (Velocity / Pan / Fine Pitch)</b><br /><span class="ty">bảng tương tác</span></td>
+              <td><b>Bấm ô trống:</b> Thêm nốt. <b>Kéo giữa nốt:</b> Dời nốt. <b>Kéo mép phải:</b> Kéo dài nốt. <b>Chuột phải (hoặc nút Delete Note):</b> Xóa nốt. Thanh dưới cùng chỉnh lực đánh (<code>Velocity</code>), loa Trái/Phải (<code>Pan</code>) và tinh chỉnh cao độ (<code>Fine Pitch</code>).</td>
+              <td>Velocity <code>80%–90%</code>; Pan <code>0.00</code> (chính giữa); Fine Pitch <code>0 ct</code>.</td>
+              <td>Nếu kéo <code>Fine Pitch</code> lệch quá xa (ví dụ +150 ct) tiếng đàn sẽ nghe bị phô/lạc tông so với bài.</td>
+              <td>Kéo <code>Fine Pitch</code> về <code>0 ct</code> hoặc chọn lại <code>FL26 Piano Roll Score (.fsc)</code> để khôi phục.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 3. FABFILTER PRO-Q 4 -->
+      <section class="page" id="khu-proq4" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">3</span> FabFilter Pro-Q 4 (Bộ lọc điêu khắc âm sắc 24 dải tần & 171 Preset .ffp)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('proq4')}>
+            Mở thẳng FabFilter Pro-Q 4 →
+          </button>
+        </div>
+        <p class="purpose">
+          Giúp gọt sạch phần âm trầm bị đục/ù và nâng phần âm cao cho giọng hát/nhạc cụ trong trẻo, sắc nét. Hiển thị sóng phổ âm thanh thời gian thực ở tốc độ 120 FPS.
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>Factory Preset (171 Real .ffp)</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><b>Chọn thì:</b> Nạp ngay cấu hình lọc âm chuẩn phòng thu cho từng mục đích: <code>Vocals / Lead Vocal</code> (giọng nam/chính), <code>Vocals / Female Vocal</code> (giọng nữ), <code>Drums / Kick Punch</code>, <code>Mixbus / Dynamic Smiley Curve ST</code>...</td>
+              <td>Chọn đúng tên nhạc cụ hoặc <code>Vocals / Lead Vocal</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Chọn <code>Default Setting</code> để đưa đường EQ về phẳng như ban đầu.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>ZeroLatency / NaturalPhase / LinearPhase</b><br /><span class="ty">3 nút chế độ</span></td>
+              <td>Chọn thuật toán pha của bộ lọc: <code>ZeroLatency</code> (0 độ trễ), <code>NaturalPhase</code> (ấm tự nhiên như phần cứng), <code>LinearPhase</code> (chuẩn pha tuyệt đối cho kênh tổng).</td>
+              <td><code>ZeroLatency</code> hoặc <code>NaturalPhase</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Bấm đổi qua lại giữa 3 nút bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>Các nút tròn đánh số 1..24 trên màn hình đen</b><br /><span class="ty">nút kéo thả</span></td>
+              <td><b>Kéo Trái/Phải:</b> Đổi tần số <code>Hz</code> (Trầm/Cao). <b>Kéo Lên/Xuống:</b> Tăng hoặc Giảm <code>dB</code>. <b>Nhấp đúp vào chỗ trống:</b> Bật thêm một điểm EQ mới.</td>
+              <td>Nâng/cắt trong khoảng <code>-6 dB</code> đến <code>+6 dB</code>.</td>
+              <td>Kéo lên kịch trần <code>+20 dB</code> đến <code>+30 dB</code> sẽ làm âm thanh bị hú chói và vỡ tiếng.</td>
+              <td>Kéo thanh <code>Gain</code> về <code>0.0 dB</code> hoặc chọn lại Preset mẫu.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>Shape / Freq / Gain / Q / Slope</b><br /><span class="ty">thanh chỉnh chi tiết</span></td>
+              <td>Chỉnh chính xác cho điểm đang chọn: <code>Shape</code> (kiểu cắt Bell, Low Cut cắt trầm, High Shelf nâng sáng...), <code>Freq (Hz)</code>, <code>Gain (dB)</code>, <code>Q</code> (độ rộng hẹp), <code>Slope (dB/oct)</code> (độ dốc cắt).</td>
+              <td>Q từ <code>0.70</code> đến <code>2.50</code>; Slope <code>12</code> hoặc <code>24 dB/oct</code>.</td>
+              <td>Nếu chọn Shape là <code>Low Cut</code> mà kéo <code>Freq</code> lên quá cao (&gt;500 Hz) sẽ làm mất sạch tiếng trầm/ấm của bài nhạc.</td>
+              <td>Đổi Shape về <code>Bell</code> hoặc kéo Freq của Low Cut về dưới <code>80 Hz</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-label"><b>Dyn Range & Spectral Dynamics</b><br /><span class="ty">thanh trượt & hộp kiểm</span></td>
+              <td>Khi bật <code>Spectral Dynamics</code>, điểm EQ chuyển sang màu xanh ngọc và chỉ tự động nén xuống khi tần số đó vượt ngưỡng chói thay vì cắt cố định.</td>
+              <td>Dyn Range từ <code>-3.0 dB</code> đến <code>-6.0 dB</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Bỏ tích <code>Spectral Dynamics</code> để quay về EQ thông thường.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 4. OEKSOUND SOOTHE3 -->
+      <section class="page" id="khu-soothe3" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">4</span> oeksound Soothe3 (Bộ khử cộng hưởng chói tai & âm ồm tự động — 68 Preset .preset)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('soothe3')}>
+            Mở thẳng oeksound Soothe3 →
+          </button>
+        </div>
+        <p class="purpose">
+          Tự động dò tìm và làm dịu các tiếng chói gắt (tiếng xì "s/x", tiếng hú mic, tiếng cymbal chói, tiếng bass ồm) theo thời gian thực mà không làm giọng hát bị tối đi.
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>Factory Preset (68 Real .preset)</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><b>Chọn thì:</b> Nạp cấu hình khử chói chuẩn của hãng oeksound: <code>That Grammy balance preset</code> (mượt cả bài), <code>SM7 Vocals</code>, <code>Lead Vox Bright</code>, <code>General de-ess</code>, <code>De-ess normal</code>, <code>Clean up muddy bass</code>...</td>
+              <td><code>That Grammy balance preset</code> hoặc <code>SM7 Vocals</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Chọn <code>Default Setting</code> hoặc đổi sang Preset khác bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>Soft Mode / Hard Mode</b><br /><span class="ty">2 nút chế độ</span></td>
+              <td><code>Soft Mode</code> (mặc định): khử chói nhẹ nhàng, tự nhiên và giữ nguyên chất giọng. <code>Hard Mode</code> (màu đỏ): ra tay mạnh và sâu hơn cho những bản thu bị hú/chói nặng.</td>
+              <td><code>Soft Mode</code> cho 90% trường hợp.</td>
+              <td>Bật <code>Hard Mode</code> kèm <code>Depth</code> quá cao có thể làm giọng hát hơi nghẹt.</td>
+              <td>Bấm lại nút <code>Soft Mode</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>Delta Solo</b><br /><span class="ty">nút kiểm tra (màu vàng)</span></td>
+              <td><b>Bấm bật thì:</b> Tắt phần nhạc tốt đi, <b>chỉ phát riêng phần âm thanh chói/rác đang bị cắt bỏ</b> để tai anh nghe rõ Soothe3 đang lọc cái gì.</td>
+              <td>Tắt (màu xám) khi nghe nhạc bình thường.</td>
+              <td><b>Rất hay quên:</b> Bật <code>Delta Solo</code> xong quên tắt sẽ thấy nhạc nghe mỏng quẹt như loa hỏng!</td>
+              <td>Bấm vào nút <code>Delta Solo</code> một lần nữa để tắt đi là nhạc bình thường trở lại.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>Depth / Detail / Attack / Release / Max Cut / Mix</b><br /><span class="ty">6 thanh trượt</span></td>
+              <td><code>Depth</code>: mức độ cắt nhiều hay ít. <code>Detail</code>: độ sắc nét khi nhổ gai chói. <code>Attack/Release</code>: tốc độ phản ứng nhanh/chậm. <code>Max Cut</code>: giới hạn cắt tối đa. <code>Mix (%)</code>: tỷ lệ pha trộn.</td>
+              <td>Depth <code>2.5 – 5.5</code>; Detail <code>4.0 – 6.5</code>; Mix <code>100%</code>.</td>
+              <td>Kéo <code>Depth</code> lên kịch <code>10.0</code> sẽ cắt quá sâu làm âm thanh mất sức sống.</td>
+              <td>Kéo <code>Depth</code> về quanh <code>3.5</code> hoặc kéo <code>Mix</code> về <code>0%</code> để bỏ qua hiệu ứng.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 5. IZOTOPE OZONE 12 CONSOLE -->
+      <section class="page" id="khu-ozone12" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">5</span> iZotope Ozone 12 Console (Bàn Mastering AI & Cân chỉnh Giọng hát / Trống BSRNN 120ms)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('ozone12')}>
+            Mở thẳng iZotope Ozone 12 →
+          </button>
+        </div>
+        <p class="purpose">
+          Khâu hoàn thiện cuối cùng: dùng AI để tự động nâng âm lượng, làm ấm bằng bóng đèn 12AX7, mở rộng không gian Stereo và đặc biệt là tăng/giảm riêng Giọng hát hoặc Tiếng trống ngay trên bản nhạc tổng.
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>✨ AI Master Assistant (Auto-Match)</b><br /><span class="ty">nút bấm AI</span></td>
+              <td><b>Bấm thì:</b> Trí tuệ nhân tạo phân tích toàn bộ tín hiệu âm thanh hiện tại và tự động chỉnh mọi thông số của Ozone 12 về mức cân bằng hoàn hảo nhất cho phát hành nhạc số.</td>
+              <td>Bấm 1 lần sau khi đã chọn thể loại nhạc.</td>
+              <td><span class="none">—</span></td>
+              <td>Có thể bấm lại hoặc chọn lại Preset bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>Genre Target Curve (36 Real IZRESEMBED) & Global Mastering Preset (82 Real XML)</b><br /><span class="ty">2 danh sách chọn</span></td>
+              <td>Chọn đường cong âm sắc mục tiêu theo đúng thể loại nhạc (<code>Pop</code>, <code>EDM</code>, <code>HipHop</code>, <code>Trap</code>, <code>LoFi</code>, <code>KPopJPop</code>...) hoặc chọn cấu hình tổng thể (<code>Streaming Master (-14 LUFS)</code>, <code>Modern Clarity</code>...).</td>
+              <td><code>Pop</code> / <code>AllPurpose</code> + <code>Streaming Master (-14 LUFS)</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Đổi sang thể loại khác bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>IRC V Maximizer & Soft Clipper (IRC Mode, Gain, Ceiling, Upward Comp, Soft Clip)</b><br /><span class="ty">khung số 1</span></td>
+              <td>Khu vực nâng độ to của bài nhạc: kéo <code>Gain (+dB)</code> để bài nhạc to hơn; giữ <code>Ceiling (dBTP)</code> để khóa trần chống vỡ tiếng; kéo nhẹ <code>Upward Comp</code> để nâng các chi tiết nhỏ lên mà không làm nổ tiếng lớn.</td>
+              <td>IRC Mode: <code>IRC V</code>; Gain: <code>+3.5 đến +7.0 dB</code>; Ceiling: <code>-1.00 dBTP</code>.</td>
+              <td>Nếu đẩy <code>Gain</code> lên quá <code>+14 dB</code> kèm <code>Soft Clip</code> cao, tiếng nhạc sẽ bị bẹp và rè kiểu loa quá tải.</td>
+              <td>Kéo <code>Gain</code> về <code>+4.0 dB</code> và đặt <code>Ceiling</code> ở <code>-1.00 dBTP</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>12AX7 DK-Triode 4-Band Exciter</b><br /><span class="ty">khung số 2</span></td>
+              <td>Làm ấm và dày âm thanh cho 4 dải tần (<code>Low</code>, <code>Low-Mid</code>, <code>High-Mid</code>, <code>High</code>) bằng mô phỏng bóng đèn 12AX7, băng từ Tape hoặc mạch Analog.</td>
+              <td>Mỗi dải từ <code>10%</code> đến <code>35%</code>.</td>
+              <td>Kéo cả 4 dải lên <code>90%–100%</code> sẽ tạo độ méo hài (distortion) rất gắt.</td>
+              <td>Kéo các thanh trượt về mức <code>15%–25%</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-label"><b>Multiband Imager & Stabilizer</b><br /><span class="ty">khung số 3</span></td>
+              <td><code>Width (-100%..+100%)</code>: Mở rộng không gian hai bên tai cho từng dải. <code>Stabilizer Adaptive Amount</code>: Tự động giữ cân bằng âm sắc không bị vống.</td>
+              <td>Sub Width nên để <code>0%</code> hoặc âm nhẹ (để tiếng trầm chắc gọn ở giữa); Presence/Air Width <code>+15% đến +35%</code>.</td>
+              <td>Kéo <code>Sub Width</code> lên <code>+100%</code> sẽ làm tiếng trầm bị loãng và lệch pha giữa 2 loa.</td>
+              <td>Đặt <code>Sub Width</code> về <code>0%</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">6</span></td>
+              <td class="c-label"><b>120ms Real-Time BSRNN Master Rebalance (Vocals, Drums, Bass, Other)</b><br /><span class="ty">khung số 4 (Đặc biệt)</span></td>
+              <td><b>Kéo thanh trượt (-12 dB đến +12 dB):</b> Tăng hoặc giảm trực tiếp âm lượng của riêng <code>Vocals</code> (Giọng hát), <code>Drums</code> (Trống), <code>Bass</code> hoặc <code>Other</code> ngay trong bản nhạc tổng đang chạy!</td>
+              <td><code>0.0 dB</code> (mặc định); chỉnh từ <code>-3.0 dB</code> đến <code>+3.5 dB</code> là đẹp và tự nhiên nhất.</td>
+              <td><span class="none">—</span></td>
+              <td>Kéo thanh trượt về <code>0.0 dB</code> là trở lại nguyên bản.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 6. 502-TRACK MIXER & PATCHER -->
+      <section class="page" id="khu-mixer" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">6</span> 502-Track Mixer & Modular Patcher (Bàn trộn 502 kênh & 32 Hiệu ứng FL26 .fst)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('mixer')}>
+            Mở thẳng 502-Track Mixer & Patcher →
+          </button>
+        </div>
+        <p class="purpose">
+          Quản lý âm lượng của 502 kênh độc lập (Kênh 0 Master, Kênh 1..500 Inserts, Kênh 501 Preview), gắn các hiệu ứng gốc của FL Studio 26 (<code>.fst</code>) và quan sát sơ đồ bù trễ tự động (Patcher Sub-DAG).
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>Tracks 0..31 / 32..63 / 128..159 / 470..501</b><br /><span class="ty">nút chuyển cụm kênh</span></td>
+              <td><b>Bấm thì:</b> Chuyển danh sách 32 kênh đang hiển thị trên màn hình để xem các vùng kênh khác nhau trong tổng số 502 kênh.</td>
+              <td><code>Tracks 0..31</code> (chứa Master #0 và các kênh chính #1..#8).</td>
+              <td><span class="none">—</span></td>
+              <td>Bấm lại <code>Tracks 0..31</code> để về cụm kênh đầu.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>Ô kênh (Strip #0..#501) & Thanh trượt Gain</b><br /><span class="ty">ô chọn & thanh trượt</span></td>
+              <td><b>Bấm vào ô:</b> Chọn kênh đó để xem chi tiết 10 khay hiệu ứng bên dưới. <b>Kéo thanh trượt:</b> Tăng/giảm âm lượng của kênh đó (từ <code>0.0</code> tắt tiếng đến <code>1.5</code> tăng gấp rưỡi).</td>
+              <td>Gain quanh mức <code>0.80 – 1.00</code>; chỉ số Peak màu xanh lá dưới <code>0.0 dB</code>.</td>
+              <td>Nếu kéo thanh trượt về <code>0.0</code> trên kênh <code>#0 Master</code> thì toàn bộ phần mềm sẽ tắt tiếng!</td>
+              <td>Kéo thanh trượt của kênh đó về lại mức <code>1.0</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>FL26 Native FX Preset (.fst)</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><b>Chọn thì:</b> Nạp ngay hiệu ứng trứ danh của FL Studio 26 vào kênh đang chọn: <code>Maximus: Clear Master.fst</code>, <code>Maximus: Soundgoodizer A.fst</code>, <code>Emphasis: Pop (heavy).fst</code>, <code>Fruity Soft Clipper.fst</code>, <code>Fruity Limiter: Ducking music behind voice.fst</code>, <code>LuxeVerb: Shimmer Cathedral.fst</code>...</td>
+              <td>Chọn theo nhu cầu của từng kênh.</td>
+              <td><span class="none">—</span></td>
+              <td>Đổi sang preset <code>.fst</code> khác bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>Send to Track / Gain / Sidechain Only / Apply Route</b><br /><span class="ty">cụm nối dây kênh</span></td>
+              <td>Dùng để gửi âm thanh từ kênh đang chọn sang một kênh khác (ví dụ gửi Kênh 1 sang Kênh 0). Hệ thống tự động kiểm tra chống lặp vòng (Cycle-Free Topological Sort).</td>
+              <td>Các kênh 1..4 đã được nối sẵn về Kênh 0 (Master).</td>
+              <td>Nếu tự nối Kênh A sang Kênh B rồi lại nối Kênh B ngược về Kênh A (vòng lặp hú), hệ thống sẽ tự động chặn để bảo vệ loa của anh.</td>
+              <td>Chỉnh lại <code>Send to Track: 0</code> rồi bấm <code>Apply Route</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 7. UVR5 STEM STUDIO -->
+      <section class="page" id="khu-uvr5" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">7</span> UVR5 Stem Studio (Phòng tách lời & nhạc nền bằng 3 AI kết hợp — 143 Model Profiles)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('uvr5')}>
+            Mở thẳng UVR5 Stem Studio →
+          </button>
+        </div>
+        <p class="purpose">
+          Tách một bài hát bất kỳ thành 4 nhánh riêng biệt (<code>Vocals</code>, <code>Drums</code>, <code>Bass</code>, <code>Other</code>) bằng cách kết hợp 3 kiến trúc AI mạnh nhất của Ultimate Vocal Remover 5, sau đó tự động đưa thẳng vào Kênh 1..4 của bàn trộn.
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>UVR5 Model Profile (143 Real Configs)</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><b>Chọn thì:</b> Chọn mô hình AI tách nhạc: <code>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</code> (mạnh nhất, kết hợp cả 3 AI), <code>Kim_Vocal_2</code> (chuyên lấy giọng hát sạch), <code>UVR-MDX-NET Karaoke / Vocals</code> (chuyên làm nhạc beat Karaoke)...</td>
+              <td><code>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</code></td>
+              <td><span class="none">—</span></td>
+              <td>Đổi cấu hình và bấm chạy lại bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>Run Ensemble & Bounce to Mixer 1..4</b><br /><span class="ty">nút hành động chính</span></td>
+              <td><b>Bấm thì:</b> Chạy quy trình tách 4 nhánh âm thanh và tự động nạp 4 nhánh vừa tách vào Insert Track 1 (Vocals), Track 2 (Drums), Track 3 (Bass) và Track 4 (Other).</td>
+              <td><span class="none">—</span></td>
+              <td><span class="none">—</span></td>
+              <td>Không làm hỏng file nhạc gốc; chỉ tạo ra 4 nhánh mới trên bàn trộn.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>Ensemble Algorithm & 3 hộp kiểm khử nhiễu</b><br /><span class="ty">khung bên trái</span></td>
+              <td>Chọn cách gộp phổ của 3 AI (<code>WEIGHTED</code>, <code>MAX_SPEC</code>, <code>MIN_SPEC</code>, <code>AVERAGE</code>, <code>MEDIAN</code>) và bật khử nhiễu 2 lượt (<code>2-Pass Denoising</code>) + đảo pha triệt tiêu phần dư (<code>Phase-Inverted Residual</code>).</td>
+              <td><code>WEIGHTED</code> + bật cả 3 hộp kiểm.</td>
+              <td><span class="none">—</span></td>
+              <td>Tích hoặc bỏ tích lại bất kỳ lúc nào.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>Multi-Model Weights (MDX23C / HTDemucs v4 / VR ASPP)</b><br /><span class="ty">khung ở giữa</span></td>
+              <td>Chỉnh tỷ lệ đóng góp của từng mô hình AI: tăng <code>MDX23C</code> nếu ưu tiên độ sạch giọng hát; tăng <code>HTDemucs v4</code> nếu ưu tiên tiếng trống và bass chắc khỏe.</td>
+              <td>MDX23C <code>0.45</code> · HTDemucs <code>0.35</code> · VR ASPP <code>0.20</code>.</td>
+              <td>Đừng kéo cả 3 thanh trọng số về <code>0.00</code> cùng lúc.</td>
+              <td>Chọn lại một dòng trong <code>UVR5 Model Profile</code> để tự đặt lại trọng số chuẩn.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 8. OFFLINE RENDER & BOUNCE -->
+      <section class="page" id="khu-render" data-filter>
+        <div class="section-head-row">
+          <h3><span class="num">8</span> Offline Render & Bounce (Xuất file WAV phòng thu & Kiểm định chuẩn Spotify / YouTube)</h3>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('render')}>
+            Mở thẳng Offline Render & Bounce →
+          </button>
+        </div>
+        <p class="purpose">
+          Đóng gói bài nhạc thành file <code>.wav</code> chất lượng phòng thu lưu ra ổ đĩa và tự động kiểm tra xem file xuất ra đã đạt chuẩn phát sóng của Spotify (-14 LUFS), Apple Music (-16 LUFS) và YouTube (-14 LUFS) hay chưa.
+        </p>
+        <table class="items">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nhãn / Nút trên màn hình</th>
+              <th>Là gì · Bấm/Kéo thì sao</th>
+              <th>Giá trị bình thường</th>
+              <th>Khi nào phải lo</th>
+              <th>Lùi lại được không</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-filter>
+              <td class="c-n"><span class="n">1</span></td>
+              <td class="c-label"><b>Export Studio WAV & Analyze LUFS/dBTP</b><br /><span class="ty">nút xuất file chính</span></td>
+              <td><b>Bấm thì:</b> Chạy kết xuất âm thanh chất lượng tối đa (Offline Bounce), áp lớp mịn MBIT+ Dither, cắt bỏ phần trễ đầu file (APDC Trim) và cập nhật bảng báo cáo kiểm định ngay bên dưới.</td>
+              <td><span class="none">—</span></td>
+              <td><span class="none">—</span></td>
+              <td>Bấm xuất lại bao nhiêu lần tùy thích sau mỗi lần tinh chỉnh.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>Render Mode</b><br /><span class="ty">danh sách chọn</span></td>
+              <td><code>Render Master</code>: Xuất 1 file bài nhạc hoàn chỉnh. <code>Split Mixer Tracks</code>: Xuất rời từng kênh trên bàn trộn thành từng file riêng. <code>UVR5 4-Stem Mastering</code>: Xuất bộ 4 file Stems đã qua xử lý sạch đẹp.</td>
+              <td><code>Render Master (502-Track Sum + Ozone 12)</code></td>
+              <td><span class="none">—</span></td>
+              <td>Đổi chế độ rồi bấm xuất lại.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>Bit Depth & Dither / Sample Rate</b><br /><span class="ty">2 danh sách chọn</span></td>
+              <td>Chọn chuẩn file xuất: <code>24-Bit PCM + Ozone 12 MBIT+</code> (chuẩn vàng cho phát hành nhạc số và video), <code>16-Bit PCM</code> (chuẩn đĩa CD), hoặc <code>32-Bit IEEE Float</code> (dành cho lưu trữ gốc phòng thu). Tần số lấy mẫu <code>48.0 kHz</code> hoặc <code>44.1 kHz</code>.</td>
+              <td><code>24-Bit PCM + MBIT+</code> ở <code>48.0 kHz</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Đổi tùy chọn rồi bấm xuất lại.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-label"><b>Streaming Broadcast Compliance (Spotify / Apple Music / YouTube)</b><br /><span class="ty">3 thẻ kiểm định</span></td>
+              <td>Hiển thị nhãn <b>PASS</b> (màu xanh lá) nếu bài nhạc nằm đúng chuẩn độ to và không vượt trần <code>-1.0 dBTP</code>; hoặc hiện <b>TRIM</b> (màu vàng kèm số dB bị giảm) nếu bài nhạc hơi to hơn chuẩn của nền tảng đó.</td>
+              <td>Hiện chữ <code>PASS</code> màu xanh lá.</td>
+              <td>Nếu hiện <code>TRIM (-2.5 dB)</code>: bài nhạc vẫn nghe tốt nhưng khi đăng lên YouTube/Spotify sẽ bị họ tự vặn nhỏ đi 2.5 dB.</td>
+              <td>Quay lại tab <b>Ozone 12 Console</b>, giảm nhẹ thanh <code>Gain</code> đi một chút rồi bấm Xuất lại là đạt <code>PASS</code> ngay!</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PHẦN D: 4 KỊCH BẢN "CẦM TAY CHỈ VIỆC" CHO NGƯỜI MỚI                 -->
+    <!-- =================================================================== -->
+    <section class="part" id="phan-d" data-filter>
+      <h2>D · 4 Kịch bản "Cầm tay chỉ việc" cho người mới (Làm theo đúng 3 bước là ra sản phẩm)</h2>
+      <p class="purpose">
+        Anh không cần học hết mọi nút trong phần mềm. Hãy chọn đúng nhu cầu thực tế của anh dưới đây và làm theo đúng 3 bước:
+      </p>
+
+      <div class="scenarios-grid">
+        <!-- KỊCH BẢN 1 -->
+        <div class="scenario-card" data-filter>
+          <h3>🎤 Kịch bản 1: Muốn tách lời bài hát để lấy nhạc Beat hát Karaoke (hoặc lấy riêng giọng hát)</h3>
+          <ol class="steps">
+            <li>
+              <b>Bước 1:</b> Bấm vào tab <b>UVR5 Stem Studio</b> trên thanh điều khiển. Ở ô <code>UVR5 Model Profile</code>, chọn <b>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</b> (hoặc chọn <b>UVR-MDX-NET Karaoke / Vocals</b>).
+            </li>
+            <li>
+              <b>Bước 2:</b> Nhập đường dẫn bài hát vào ô <code>Input File</code> rồi bấm nút màu xanh <b>Run Ensemble & Bounce to Mixer 1..4</b>. Máy sẽ tách bài hát thành 4 nhánh riêng biệt và đưa thẳng vào Kênh 1..4.
+            </li>
+            <li>
+              <b>Bước 3:</b> Nếu muốn xuất riêng 4 nhánh đó ra file <code>.wav</code>: chuyển sang tab <b>Offline Render & Bounce</b>, chọn <code>Render Mode: UVR5 4-Stem Mastering</code> rồi bấm <b>Export Studio WAV</b>! (Hoặc vào <b>502-Track Mixer</b> kéo thanh trượt của Kênh #1 Vocals xuống <code>0</code> để có ngay bản nhạc Beat Karaoke sạch lời).
+            </li>
+          </ol>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('uvr5')}>
+            Thực hành ngay Kịch bản 1 tại UVR5 Stem Studio →
+          </button>
+        </div>
+
+        <!-- KỊCH BẢN 2 -->
+        <div class="scenario-card" data-filter>
+          <h3>🎚️ Kịch bản 2: Có một bài nhạc đã ghép sẵn nhưng tiếng Hát hơi nhỏ (hoặc tiếng Trống quá to), muốn chỉnh lại ngay</h3>
+          <ol class="steps">
+            <li>
+              <b>Bước 1:</b> Bấm vào tab <b>Ozone 12 Console</b> trên thanh điều khiển.
+            </li>
+            <li>
+              <b>Bước 2:</b> Nhìn vào khung thứ 4 bên tay phải có tên <b>120ms Real-Time BSRNN Master Rebalance</b> (gồm 4 thanh trượt: <code>Vocals</code>, <code>Drums</code>, <code>Bass</code>, <code>Other</code>).
+            </li>
+            <li>
+              <b>Bước 3:</b> Kéo thanh <b>Vocals</b> lên khoảng <code>+2.0 dB</code> đến <code>+3.5 dB</code> để giọng hát nổi bật hẳn lên trên nền nhạc (hoặc kéo thanh <b>Drums</b> xuống <code>-2.0 dB</code> nếu tiếng trống quá chát), sau đó qua tab <b>Offline Render & Bounce</b> bấm xuất file!
+            </li>
+          </ol>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('ozone12')}>
+            Thực hành ngay Kịch bản 2 tại Ozone 12 Console →
+          </button>
+        </div>
+
+        <!-- KỊCH BẢN 3 -->
+        <div class="scenario-card" data-filter>
+          <h3>✨ Kịch bản 3: Giọng thu âm bị đục ngầu hoặc chói gắt ("xì/hú"), muốn làm trong trẻo tức thì như phòng thu</h3>
+          <ol class="steps">
+            <li>
+              <b>Bước 1 (Làm sáng và cắt đục):</b> Mở tab <b>Pro-Q 4 (24-Band)</b> → Ở ô <code>Factory Preset (171 Real .ffp)</code> góc phải trên, chọn <b>Vocals / Lead Vocal</b> (hoặc <b>Vocals / Female Vocal</b>). Đường EQ sẽ tự động cắt bỏ phần ù nền và nâng độ sáng cho giọng.
+            </li>
+            <li>
+              <b>Bước 2 (Khử tiếng chói và tiếng xì):</b> Mở tiếp tab <b>Soothe3 Spectral</b> → Ở ô <code>Factory Preset (68 Real .preset)</code>, chọn <b>SM7 Vocals</b> hoặc <b>That Grammy balance preset</b>. Kéo thanh <code>Depth</code> để ở mức vừa phải (khoảng <code>3.5 – 4.5</code>).
+            </li>
+            <li>
+              <b>Bước 3 (Thêm không gian lung linh):</b> Mở tab <b>502-Track Mixer & Patcher</b> → Ở ô <code>FL26 Native FX Preset (.fst)</code>, chọn <b>Fruity Parametric EQ 2: Vocal presence.fst</b> hoặc <b>LuxeVerb: Shimmer Cathedral.fst</b>.
+            </li>
+          </ol>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('proq4')}>
+            Thực hành ngay Kịch bản 3 tại Pro-Q 4 →
+          </button>
+        </div>
+
+        <!-- KỊCH BẢN 4 -->
+        <div class="scenario-card" data-filter>
+          <h3>🚀 Kịch bản 4: Muốn hoàn thiện bài nhạc tự động bằng AI và xuất file .WAV đăng YouTube / Spotify chuẩn quốc tế</h3>
+          <ol class="steps">
+            <li>
+              <b>Bước 1:</b> Mở tab <b>Ozone 12 Console</b> → Chọn thể loại nhạc ở ô <code>Genre Target Curve</code> (ví dụ <code>Pop</code>, <code>EDM</code>, <code>LoFi</code>) rồi bấm nút màu xanh <b>✨ AI Master Assistant (Auto-Match)</b>.
+            </li>
+            <li>
+              <b>Bước 2:</b> Mở tab <b>Offline Render & Bounce</b> → Chọn <code>Bit Depth: 24-Bit PCM + Ozone 12 MBIT+ Noise-Shaping Dither</code> và giữ nguyên 2 dấu tích khử nhiễu/bù trễ.
+            </li>
+            <li>
+              <b>Bước 3:</b> Bấm nút <b>Export Studio WAV & Analyze LUFS/dBTP</b>. Nhìn sang khung bên phải: thấy 3 thẻ <b>Spotify</b>, <b>Apple Music</b>, <b>YouTube</b> hiện chữ <b>PASS</b> màu xanh lá cây là file <code>.wav</code> của anh đã sẵn sàng đăng tải!
+            </li>
+          </ol>
+          <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('render')}>
+            Thực hành ngay Kịch bản 4 tại Offline Render →
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PHẦN E: CÁC CÂU HỎI & SỰ CỐ THƯỜNG GẶP (TROUBLESHOOTING)            -->
+    <!-- =================================================================== -->
+    <section class="part" id="phan-e" data-filter>
+      <h2>E · Các câu hỏi & Sự cố thường gặp (Bấm vào từng câu để xem cách xử lý)</h2>
+
+      <details class="trouble" data-filter>
+        <summary>1. Tôi chưa từng học nhạc lý, lỡ bấm kéo lung tung làm tiếng nhạc nghe kỳ quá thì làm sao quay lại như cũ?</summary>
+        <p>
+          <b>Vì sao:</b> Khi mới thử nghiệm, việc kéo các nút EQ lên +20 dB hoặc kéo Depth của Soothe3 lên tối đa sẽ làm âm thanh bị biến dạng mạnh.
+        </p>
+        <p>
+          <b>Cách xử lý trong 3 giây:</b> Ở bất kỳ khu vực nào (Playlist, Pro-Q 4, Soothe3, Ozone 12, Mixer), anh chỉ cần mở lại ô danh sách <b>Factory Preset</b> ở góc trên bên phải của khu vực đó và chọn lại cấu hình mẫu ban đầu (ví dụ <code>Default Setting</code> hoặc <code>That Grammy balance preset</code>). Mọi thanh trượt sẽ lập tức trở về vị trí chuẩn của nhà sản xuất!
+        </p>
+      </details>
+
+      <details class="trouble" data-filter>
+        <summary>2. Sao tự nhiên bài nhạc nghe mỏng dính, toàn tiếng xì xào chói tai như đài radio bị hỏng?</summary>
+        <p>
+          <b>Vì sao:</b> Anh đang bật nút <b>Delta Solo</b> (màu vàng) trong khu vực <b>oeksound Soothe3</b>. Chế độ này cố ý tắt nhạc chính và chỉ phát riêng "phần tần số xấu đang bị cắt bỏ" để kiểm tra.
+        </p>
+        <p>
+          <b>Cách xử lý:</b> Mở khu vực <b>Soothe3 Spectral</b> → bấm vào nút <b>Delta Solo</b> ở góc phải trên để tắt màu vàng đi. Âm thanh đầy đặn sẽ lập tức quay trở lại.
+        </p>
+      </details>
+
+      <details class="trouble" data-filter>
+        <summary>3. Khi xuất file ở Offline Render, thẻ Spotify / YouTube hiện chữ "TRIM" màu vàng nghĩa là file bị lỗi phải không?</summary>
+        <p>
+          <b>Vì sao:</b> Hoàn toàn KHÔNG phải lỗi! Chữ <b>TRIM</b> (ví dụ <code>TRIM (-1.6 dB)</code>) chỉ báo cho anh biết rằng bài nhạc của anh đang có độ to cao hơn mức chuẩn <code>-14.0 LUFS</code> của Spotify/YouTube một chút (nhiều bài nhạc EDM/Pop thương mại cố tình làm to như vậy), nên khi đăng lên mạng, hệ thống của họ sẽ tự động giảm âm lượng phát xuống 1.6 dB.
+        </p>
+        <p>
+          <b>Cách xử lý (nếu muốn đạt chữ PASS màu xanh lá tuyệt đối):</b> Mở tab <b>Ozone 12 Console</b> → bấm nút <b>✨ AI Master Assistant (Auto-Match)</b> hoặc chọn Preset <code>Streaming Master (-14 LUFS)</code>, sau đó quay lại <b>Offline Render</b> bấm xuất lại là cả 3 nền tảng sẽ báo <b>PASS</b> xanh lá!
+        </p>
+      </details>
+
+      <details class="trouble" data-filter>
+        <summary>4. Tôi bật nút "⊿ Slide / Portamento" và chấm 1 nốt nhạc lẻ loi nhưng không nghe thấy tiếng trượt cao độ?</summary>
+        <p>
+          <b>Vì sao:</b> Theo đúng cơ chế Piano Roll của FL Studio, nốt <code>⊿ Slide</code> đóng vai trò là "điểm đích" để kéo trượt cao độ của một nốt bình thường đang ngân vang ngay trước nó. Nếu nốt Slide đứng một mình mà không có nốt thường nào kêu trước đó thì không có âm thanh nào để trượt.
+        </p>
+        <p>
+          <b>Cách xử lý:</b> Hãy tắt <code>⊿ Slide</code> đi để chấm 1 nốt bình thường trước (ví dụ ở nốt C4), sau đó bật <code>⊿ Slide (ON)</code> và chấm 1 nốt cao hơn (ví dụ G4 hoặc C5) nằm ngay sát hoặc gối lên phần đuôi của nốt đầu tiên — anh sẽ nghe thấy tiếng luyến trượt mượt mà ngay lập tức.
+        </p>
+      </details>
+
+      <details class="trouble" data-filter>
+        <summary>5. Tôi muốn in toàn bộ cuốn Cẩm nang này ra giấy hoặc lưu thành file PDF để đọc trên điện thoại được không?</summary>
+        <p>
+          <b>Cách làm:</b> Bấm ngay nút <b>🖨️ In / Lưu PDF</b> ở đầu cột mục lục bên trái (hoặc mở file <code>huong-dan-toneforge.html</code> trong thư mục phần mềm bằng bất kỳ trình duyệt nào rồi nhấn <code>Ctrl + P</code>). Giao diện đã được thiết kế sẵn chế độ in chuyên dụng: tự động chuyển sang nền trắng chữ đen sắc nét, ẩn các nút điều khiển thừa và căn chỉnh bảng biểu không bị cắt đôi trang giấy.
+        </p>
+      </details>
+    </section>
+  </div>
+</div>
+
+<style>
+  .handbook-shell {
+    display: grid;
+    grid-template-columns: 285px minmax(0, 1fr);
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    font-size: 0.9rem;
+    line-height: 1.62;
+  }
+
+  nav#toc {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: calc(100vh - 110px);
+    overflow-y: auto;
+    padding: 1rem;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 0.82rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  nav#toc input {
+    width: 100%;
+    padding: 0.45rem 0.65rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--sub-surface);
+    color: var(--text);
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  nav#toc input:focus {
+    outline: 1px solid var(--accent);
+    border-color: var(--accent);
+  }
+
+  .toc-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 0.5rem;
+  }
+
+  .print-btn,
+  .back-btn {
+    padding: 0.38rem 0.5rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .print-btn:hover,
+  .back-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  nav#toc .grp {
+    margin: 0.65rem 0 0.2rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .toc-link {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 0.28rem 0.45rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+
+  .toc-link:hover {
+    background: var(--surface-2);
+    color: var(--accent);
+  }
+
+  .handbook-main {
+    padding: 1.5rem clamp(1rem, 3vw, 2.4rem);
+    max-width: 1180px;
+  }
+
+  .cover {
+    padding: 1.5rem 1.8rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--sidebar-bg), var(--surface));
+    margin-bottom: 1.5rem;
+  }
+
+  .cover h1 {
+    font-size: 1.55rem;
+    margin: 0 0 0.45rem 0;
+    color: var(--text);
+  }
+
+  .cover p {
+    margin: 0.3rem 0;
+    color: rgba(247, 246, 229, 0.82);
+    font-size: 0.88rem;
+  }
+
+  h2 {
+    font-size: 1.28rem;
+    margin: 2rem 0 0.6rem;
+    border-bottom: 2px solid var(--border-strong);
+    padding-bottom: 0.35rem;
+    color: var(--accent);
+  }
+
+  h3 {
+    font-size: 1.02rem;
+    margin: 1.2rem 0 0.4rem;
+    color: var(--text);
+  }
+
+  .section-head-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 1.4rem;
+  }
+
+  .section-head-row h3 {
+    margin: 0;
+  }
+
+  .open-rack-btn {
+    background: var(--surface-2);
+    color: var(--accent);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 5px 11px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .open-rack-btn:hover {
+    background: var(--accent);
+    color: #0b2b1e;
+  }
+
+  .num {
+    display: inline-grid;
+    place-items: center;
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #0b2b1e;
+    font-size: 0.82rem;
+    font-weight: 800;
+    margin-right: 0.35rem;
+  }
+
+  .purpose {
+    color: rgba(247, 246, 229, 0.82);
+    font-size: 0.86rem;
+    margin: 0.35rem 0 0.75rem;
+  }
+
+  .cap {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin: 0.35rem 0 1rem;
+  }
+
+  .figure {
+    background: var(--sub-surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin: 1rem 0;
+  }
+
+  .figure svg {
+    width: 100%;
+    height: auto;
+    color: var(--text);
+  }
+
+  .figure .node rect {
+    fill: var(--surface-2);
+    stroke: var(--border-strong);
+    stroke-width: 2;
+  }
+
+  .figure .node.hot rect {
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    fill: var(--sidebar-bg);
+  }
+
+  .figure .sub {
+    font-size: 11px;
+    fill: rgba(247, 246, 229, 0.65);
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  table.items,
+  table.plain {
+    font-size: 0.82rem;
+    margin: 0.5rem 0 1.2rem;
+    background: var(--sub-surface-2);
+  }
+
+  th,
+  td {
+    border: 1px solid var(--border);
+    padding: 0.48rem 0.6rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  thead th {
+    background: var(--surface-2);
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  td.c-n {
+    width: 2.5rem;
+    text-align: center;
+  }
+
+  td.c-label {
+    min-width: 11rem;
+  }
+
+  .n {
+    display: inline-grid;
+    place-items: center;
+    width: 1.45rem;
+    height: 1.45rem;
+    border-radius: 50%;
+    background: var(--warn);
+    color: #0b2b1e;
+    font-weight: 800;
+    font-size: 0.75rem;
+  }
+
+  .ty {
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .none {
+    color: var(--muted);
+  }
+
+  dl {
+    margin: 0;
+  }
+
+  .term {
+    border-top: 1px solid var(--border);
+    padding: 0.6rem 0;
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    gap: 1rem;
+    font-size: 0.84rem;
+  }
+
+  .term dt {
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .term dd {
+    margin: 0;
+    color: rgba(247, 246, 229, 0.88);
+  }
+
+  .scenarios-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-top: 0.8rem;
+  }
+
+  .scenario-card {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-left: 4px solid var(--ok);
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+
+  .scenario-card h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--ok);
+  }
+
+  ol.steps {
+    margin: 0.2rem 0;
+    padding-left: 1.2rem;
+    font-size: 0.83rem;
+  }
+
+  ol.steps li {
+    margin: 0.4rem 0;
+  }
+
+  details.trouble {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    background: var(--surface);
+    font-size: 0.85rem;
+  }
+
+  details.trouble summary {
+    cursor: pointer;
+    padding: 0.6rem 0.9rem;
+    font-weight: 600;
+    color: var(--warn);
+  }
+
+  details.trouble p {
+    margin: 0.35rem 0 0.7rem;
+    padding: 0 0.9rem;
+  }
+
+  @media (max-width: 960px) {
+    .handbook-shell {
+      grid-template-columns: 1fr;
+    }
+    nav#toc {
+      position: static;
+      max-height: none;
+    }
+    .term {
+      grid-template-columns: 1fr;
+    }
+    .scenarios-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media print {
+    .handbook-shell {
+      display: block;
+      background: #fff;
+      color: #000;
+      border: none;
+    }
+    nav#toc,
+    .noprint {
+      display: none !important;
+    }
+    .handbook-main {
+      padding: 0;
+      max-width: none;
+    }
+    .cover,
+    .figure,
+    .scenario-card,
+    details.trouble,
+    table.items,
+    table.plain {
+      background: #fff !important;
+      color: #000 !important;
+      border-color: #999 !important;
+    }
+    h1,
+    h2,
+    h3,
+    .term dt,
+    thead th,
+    details.trouble summary {
+      color: #000 !important;
+    }
+    details.trouble:not([open]) > *:not(summary) {
+      display: block;
+    }
+  }
+</style>

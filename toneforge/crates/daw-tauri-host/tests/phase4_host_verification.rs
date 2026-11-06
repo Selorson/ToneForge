@@ -978,5 +978,165 @@ fn test_blueprint_section_5_5_wgsl_shaders_and_csg_compositor() {
     }
 }
 
+#[test]
+fn test_cowriter_two_layer_integrated_guidance_system_and_handbook_parity() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+
+    let ui_a = workspace_root.join("ui-svelte-webgpu");
+    let ui_b = workspace_root.join("ui-svelte5-wgpu");
+
+    // 1. Verify byte-for-byte parity of all key files across ui-svelte-webgpu and ui-svelte5-wgpu
+    for rel_path in [
+        "src/App.svelte",
+        "src/app.css",
+        "src/lib/state/guides.ts",
+        "src/lib/components/Guide.svelte",
+        "src/lib/components/HandbookView.svelte",
+        "src/lib/components/PlaylistPianoRollEditor.svelte",
+        "src/lib/components/ProQ4InteractiveAnalyzer.svelte",
+        "src/lib/components/Soothe3ResonanceView.svelte",
+        "src/lib/components/Ozone12MasterChain.svelte",
+        "src/lib/components/MixerRack502.svelte",
+        "src/lib/components/Uvr5EnsembleStudio.svelte",
+        "src/lib/components/OfflineRenderStudio.svelte",
+        "public/cam-nang-toneforge.html",
+    ] {
+        let bytes_a = std::fs::read(ui_a.join(rel_path))
+            .unwrap_or_else(|e| panic!("failed to read ui-svelte-webgpu/{rel_path}: {e}"));
+        let bytes_b = std::fs::read(ui_b.join(rel_path))
+            .unwrap_or_else(|e| panic!("failed to read ui-svelte5-wgpu/{rel_path}: {e}"));
+        assert_eq!(
+            bytes_a, bytes_b,
+            "byte-for-byte parity mismatch for {rel_path}"
+        );
+    }
+
+    let standalone_bytes = std::fs::read(workspace_root.join("huong-dan-toneforge.html"))
+        .expect("read huong-dan-toneforge.html");
+    let public_bytes = std::fs::read(ui_a.join("public/cam-nang-toneforge.html"))
+        .expect("read public/cam-nang-toneforge.html");
+    assert_eq!(
+        standalone_bytes, public_bytes,
+        "huong-dan-toneforge.html and public/cam-nang-toneforge.html must be byte-for-byte identical"
+    );
+
+    // 2. Verify Guide.svelte and guides.ts cover all 8 rack IDs with what/steps/gotcha/next
+    //    and include all required preset names and beginner explanations
+    let guides_ts =
+        std::fs::read_to_string(ui_a.join("src/lib/state/guides.ts")).expect("read guides.ts");
+    for id in [
+        "unified:",
+        "playlist:",
+        "proq4:",
+        "soothe3:",
+        "mixer:",
+        "ozone12:",
+        "uvr5:",
+        "render:",
+        "người dọn dẹp tự động các tần số chói tai, ồm, hú mà không làm mất chất giọng",
+        "General de-ess",
+        "Fruity Soft Clipper",
+        "808 Studio Kit",
+        "909 Analog Kit",
+        "Strings",
+        "Trance",
+        "Oxygene",
+        "4 Steps",
+    ] {
+        assert!(guides_ts.contains(id), "guides.ts missing required content: {id}");
+    }
+    let guide_svelte =
+        std::fs::read_to_string(ui_a.join("src/lib/components/Guide.svelte")).expect("read Guide.svelte");
+    assert!(guide_svelte.contains("<details class=\"guide\""));
+    assert!(guide_svelte.contains("Hướng dẫn sử dụng nhanh"));
+    assert!(guide_svelte.contains("Dễ sai:"));
+
+    // 3. Verify every rack component renders its contextual <Guide id="..." /> pill
+    for (comp_file, expected_tag) in [
+        ("src/App.svelte", "<Guide id=\"unified\""),
+        ("src/lib/components/PlaylistPianoRollEditor.svelte", "<Guide id=\"playlist\" />"),
+        ("src/lib/components/ProQ4InteractiveAnalyzer.svelte", "<Guide id=\"proq4\" />"),
+        ("src/lib/components/Soothe3ResonanceView.svelte", "<Guide id=\"soothe3\" />"),
+        ("src/lib/components/Ozone12MasterChain.svelte", "<Guide id=\"ozone12\" />"),
+        ("src/lib/components/MixerRack502.svelte", "<Guide id=\"mixer\" />"),
+        ("src/lib/components/Uvr5EnsembleStudio.svelte", "<Guide id=\"uvr5\" />"),
+        ("src/lib/components/OfflineRenderStudio.svelte", "<Guide id=\"render\" />"),
+    ] {
+        let src = std::fs::read_to_string(ui_a.join(comp_file)).expect("read component");
+        assert!(
+            src.contains(expected_tag),
+            "{comp_file} must render {expected_tag}"
+        );
+    }
+
+    // 4. Verify HandbookView.svelte and standalone huong-dan-toneforge.html both contain
+    //    all 5 parts, all 8 area tables (39 rows in Phần C + 5 comparison rows in Phần A = 44 tr[data-filter]),
+    //    all 18 glossary terms, all 4 scenarios, all 5 troubleshooting accordions, and normVi filter logic.
+    let handbook_svelte =
+        std::fs::read_to_string(ui_a.join("src/lib/components/HandbookView.svelte"))
+            .expect("read HandbookView.svelte");
+    let standalone_html =
+        std::fs::read_to_string(workspace_root.join("huong-dan-toneforge.html"))
+            .expect("read huong-dan-toneforge.html");
+
+    for (name, doc) in [
+        ("HandbookView.svelte", &handbook_svelte),
+        ("huong-dan-toneforge.html", &standalone_html),
+    ] {
+        for required_id in [
+            "Lọc nhanh (gõ một từ: vocal, karaoke, eq, lufs, preset, xuất file)…",
+            "function normVi(",
+            "function matchesFilter(",
+            "id=\"phan-a\"",
+            "id=\"phan-b\"",
+            "id=\"phan-c\"",
+            "id=\"phan-d\"",
+            "id=\"phan-e\"",
+            "id=\"khu-topbar\"",
+            "id=\"khu-playlist\"",
+            "id=\"khu-proq4\"",
+            "id=\"khu-soothe3\"",
+            "id=\"khu-ozone12\"",
+            "id=\"khu-mixer\"",
+            "id=\"khu-uvr5\"",
+            "id=\"khu-render\"",
+            "Kịch bản 1",
+            "Kịch bản 2",
+            "Kịch bản 3",
+            "Kịch bản 4",
+            "General de-ess",
+            "Fruity Soft Clipper.fst",
+            "5. Tôi muốn in toàn bộ cuốn Cẩm nang này ra giấy",
+        ] {
+            assert!(
+                doc.contains(required_id),
+                "{name} missing required section/feature: {required_id}"
+            );
+        }
+
+        let tr_count = doc.matches("<tr data-filter>").count();
+        assert_eq!(
+            tr_count, 44,
+            "{name} must contain all 44 filterable table rows (5 in Phần A + 39 across the 8 sections of Phần C), got {tr_count}"
+        );
+        let term_count = doc.matches("class=\"term\"").count();
+        assert_eq!(
+            term_count, 18,
+            "{name} must contain all 18 glossary terms in Phần B, got {term_count}"
+        );
+        let trouble_count = doc.matches("<details class=\"trouble\" data-filter>").count();
+        assert_eq!(
+            trouble_count, 5,
+            "{name} must contain all 5 troubleshooting accordions in Phần E, got {trouble_count}"
+        );
+    }
+}
+
+
+
 
 

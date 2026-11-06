@@ -1,5 +1,8 @@
 <script lang="ts">
   import { DawTelemetryView, VISUAL_TELEMETRY_FRAME_BYTES } from './lib/state/daw_master_store.svelte';
+  import type { WorkspaceTabKey } from './lib/state/guides';
+  import Guide from './lib/components/Guide.svelte';
+  import HandbookView from './lib/components/HandbookView.svelte';
   import MixerRack502 from './lib/components/MixerRack502.svelte';
   import PatcherNodeCanvas from './lib/components/PatcherNodeCanvas.svelte';
   import ProQ4InteractiveAnalyzer from './lib/components/ProQ4InteractiveAnalyzer.svelte';
@@ -12,7 +15,28 @@
   const sharedBuffer = new ArrayBuffer(VISUAL_TELEMETRY_FRAME_BYTES);
   const telemetry = new DawTelemetryView(sharedBuffer);
 
-  let activeTab = $state<'all' | 'playlist' | 'mixer' | 'proq4' | 'soothe3' | 'ozone12' | 'uvr5' | 'render'>('all');
+  const initialParams =
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const initialTabParam = initialParams?.get('tab') as WorkspaceTabKey | null;
+  const openGuideByDefault = initialParams?.get('guide') === 'open';
+
+  let activeTab = $state<WorkspaceTabKey>(initialTabParam ?? 'all');
+  let handbookSectionId = $state(initialParams?.get('sec') ?? '');
+
+  $effect(() => {
+    const onNavigate = (e: Event) => {
+      const custom = e as CustomEvent<{ tab: WorkspaceTabKey; sectionId?: string }>;
+      if (custom.detail?.tab) {
+        activeTab = custom.detail.tab;
+        handbookSectionId = custom.detail.sectionId ?? '';
+        if (!custom.detail.sectionId) {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
+    };
+    window.addEventListener('toneforge:navigate', onNavigate);
+    return () => window.removeEventListener('toneforge:navigate', onNavigate);
+  });
 
   $effect(() => {
     let rafId = 0;
@@ -83,10 +107,14 @@
         ['ozone12', 'Ozone 12 Console'],
         ['uvr5', 'UVR5 Stem Studio'],
         ['render', 'Offline Render & Bounce'],
+        ['handbook', '📖 Cẩm nang (Hướng dẫn người mới)'],
       ] as [tabKey, label]}
         <button
-          class={activeTab === tabKey ? 'active' : ''}
-          onclick={() => (activeTab = tabKey as any)}
+          class="{activeTab === tabKey ? 'active' : ''} {tabKey === 'handbook' ? 'handbook-tab' : ''}"
+          onclick={() => {
+            activeTab = tabKey as WorkspaceTabKey;
+            if (tabKey !== 'handbook') handbookSectionId = '';
+          }}
         >
           {label}
         </button>
@@ -95,6 +123,14 @@
   </header>
 
   <div class="workspace-grid">
+    {#if activeTab === 'all'}
+      <Guide id="unified" openByDefault={openGuideByDefault} />
+    {/if}
+
+    {#if activeTab === 'handbook'}
+      <HandbookView initialSectionId={handbookSectionId} />
+    {/if}
+
     {#if activeTab === 'all' || activeTab === 'playlist'}
       <PlaylistPianoRollEditor {telemetry} />
     {/if}
@@ -253,6 +289,11 @@
   .workspace-tabs button:hover {
     color: var(--text);
     border-color: var(--accent);
+  }
+  .workspace-tabs button.handbook-tab {
+    border-color: var(--warn);
+    color: var(--warn);
+    font-weight: 600;
   }
   .workspace-tabs button.active {
     background: var(--accent);

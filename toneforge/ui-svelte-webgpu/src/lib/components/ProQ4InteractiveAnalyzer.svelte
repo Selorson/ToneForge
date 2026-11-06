@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DawTelemetryView } from '../state/daw_master_store.svelte';
   import { WebGpu120FpsRenderer } from '../wgpu/renderer_120fps';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -90,6 +91,7 @@
 </script>
 
 <section class="panel proq4-panel">
+  <Guide id="proq4" />
   <header class="panel-header">
     <div>
       <h2>FabFilter Pro-Q 4 — 24-Band Dynamic & Spectral EQ (601 Params · 120 FPS WGSL)</h2>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DawTelemetryView, FIXED_POINT_30BIT_MAX, MAX_MIXER_TRACKS } from '../state/daw_master_store.svelte';
   import { WebGpu120FpsRenderer } from '../wgpu/renderer_120fps';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -36,6 +37,7 @@
 </script>
 
 <section class="panel mixer-panel">
+  <Guide id="mixer" />
   <header class="panel-header">
     <div>
       <h2>502-Track Topological Mixer & 30-Bit TensionSpline Bus</h2>

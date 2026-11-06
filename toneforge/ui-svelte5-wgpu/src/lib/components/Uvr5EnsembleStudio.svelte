@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DawTelemetryView } from '../state/daw_master_store.svelte';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -16,6 +17,7 @@
 </script>
 
 <section class="panel uvr5-panel">
+  <Guide id="uvr5" />
   <header class="panel-header">
     <div>
       <h2>UVR5 Multi-Architecture Offline Stem Separation & Spectral Ensemble Studio</h2>

@@ -4,6 +4,7 @@
     FIXED_POINT_30BIT_MAX,
     type PianoRollNoteUiState,
   } from '../state/daw_master_store.svelte';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -149,6 +150,7 @@
 </script>
 
 <section class="panel sequencer-panel">
+  <Guide id="playlist" />
   <header class="panel-header">
     <div>
       <h2>Hybrid PPQ (96–960) Playlist Arrangement, TensionSpline Automation & FL26 Piano Roll</h2>

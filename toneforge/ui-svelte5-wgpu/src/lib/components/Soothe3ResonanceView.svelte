@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DawTelemetryView } from '../state/daw_master_store.svelte';
   import { WebGpu120FpsRenderer } from '../wgpu/renderer_120fps';
+  import Guide from './Guide.svelte';
 
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
@@ -30,6 +31,7 @@
     'General purpose de-harsher',
     'SM7 Vocals',
     'Lead Vox Bright',
+    'General de-ess',
     'De-ess normal',
     'Harsh Cymbals',
     'Dampen ringy snare',
@@ -44,6 +46,7 @@
 </script>
 
 <section class="panel soothe3-panel">
+  <Guide id="soothe3" />
   <header class="panel-header">
     <div>
       <h2>oeksound Soothe3 — Dynamic Resonance Suppressor (143 Params · 4096-Pt STFT)</h2>
