@@ -36,16 +36,16 @@ pub const BSRNN_HOP_SIZE: usize = 512;
 /// Number of separated stems (`[Vocals, Drums, Bass, Other]`).
 pub const BSRNN_STEM_COUNT: usize = 4;
 
-/// 13 psychoacoustic subband widths in FFT bins (summing to `1025`).
+/// Exact 13 subband widths in FFT bins from `/band_split_module/Split` (`onnx::Split_335`, sum = `1025`).
 pub const BSRNN_SUBBAND_BINS: [usize; 13] = [
-    24, 24, 24, 32, 32, 48, 48, 64, 96, 128, 160, 192, 153,
+    5, 6, 9, 12, 16, 22, 30, 41, 55, 74, 100, 135, 520,
 ];
 
-/// Recurrent state tensor shape `[num_layers=2, bi=2, gru_states=2, batch=1, subbands=13, hidden=128]`.
+/// Recurrent state tensor shape `[batch_lr=2, num_time_blocks=2, hc=2, dir=1, subbands=13, hidden=128]`.
 pub const BSRNN_HIDDEN_STATE_SHAPE: [usize; 6] = [2, 2, 2, 1, 13, 128];
 pub const BSRNN_HIDDEN_STATE_LEN: usize = 2 * 2 * 2 * 1 * 13 * 128; // 13,312 floats
 
-/// Candidate paths for `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` (`6,869,803` bytes).
+/// Candidate paths for `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` (`7,230,143` bytes).
 pub const DEFAULT_BSRNN_ONNX_PATHS: [&str; 4] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
     r"f:\FL studio\toneforge\assets\models\ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
@@ -53,7 +53,7 @@ pub const DEFAULT_BSRNN_ONNX_PATHS: [&str; 4] = [
     r"assets/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
 ];
 
-/// Candidate paths for `delimit_exp009_ep080_fixed2.onnx` (`149,540` bytes).
+/// Candidate paths for `delimit_exp009_ep080_fixed2.onnx` (`5,580,442` bytes).
 pub const DEFAULT_DELIMIT_ONNX_PATHS: [&str; 4] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\delimit_exp009_ep080_fixed2.onnx",
     r"f:\FL studio\toneforge\assets\models\delimit_exp009_ep080_fixed2.onnx",
@@ -136,12 +136,16 @@ impl OnnxModelDescriptor {
 /// from the Real-Time Audio Thread to the BSRNN worker.
 #[derive(Clone, Copy)]
 pub struct BsrnnInputHop {
+    pub epoch: u64,
+    pub seq: u64,
     pub frames: [StereoFrame; BSRNN_HOP_SIZE],
 }
 
 impl Default for BsrnnInputHop {
     fn default() -> Self {
         Self {
+            epoch: 0,
+            seq: 0,
             frames: [[0.0; 2]; BSRNN_HOP_SIZE],
         }
     }
@@ -151,12 +155,16 @@ impl Default for BsrnnInputHop {
 /// `rtrb::RingBuffer` from the BSRNN worker to the Real-Time Audio Thread.
 #[derive(Clone, Copy)]
 pub struct BsrnnOutputHop {
+    pub epoch: u64,
+    pub seq: u64,
     pub stems: [[StereoFrame; BSRNN_HOP_SIZE]; BSRNN_STEM_COUNT],
 }
 
 impl Default for BsrnnOutputHop {
     fn default() -> Self {
         Self {
+            epoch: 0,
+            seq: 0,
             stems: [[[0.0; 2]; BSRNN_HOP_SIZE]; BSRNN_STEM_COUNT],
         }
     }
@@ -222,14 +230,20 @@ impl BsrnnStreamingWorker {
             synthesis_window[n] = root_h * 0.5 * inv_n;
         }
 
-        // Load calibration fingerprint from `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` if present
+        // Load calibration fingerprint prioritizing `current_exe()` parent first
         let mut weight_calibration = [1.0f32; 13];
-        for cand in DEFAULT_BSRNN_ONNX_PATHS {
-            let p = Path::new(cand);
-            if p.exists() {
-                if let Ok(desc) = OnnxModelDescriptor::from_onnx_file(p) {
-                    weight_calibration = desc.weight_fingerprint_f32;
-                    break;
+        if let Some(exe_rel) = crate::onnx_gpu_runtime::resolve_ozone_bsrnn_onnx_path() {
+            if let Ok(desc) = OnnxModelDescriptor::from_onnx_file(&exe_rel) {
+                weight_calibration = desc.weight_fingerprint_f32;
+            }
+        } else {
+            for cand in DEFAULT_BSRNN_ONNX_PATHS {
+                let p = Path::new(cand);
+                if p.exists() {
+                    if let Ok(desc) = OnnxModelDescriptor::from_onnx_file(p) {
+                        weight_calibration = desc.weight_fingerprint_f32;
+                        break;
+                    }
                 }
             }
         }
@@ -338,20 +352,17 @@ impl BsrnnStreamingWorker {
                 (self.subband_fast_env[sb] / (self.subband_slow_env[sb] + 1e-6)).clamp(0.5, 4.0);
             let mid_ratio = mid_energy / (mid_energy + side_energy + 1e-9);
 
-            // Partition subband energy across [Vocals, Drums, Bass, Other] via softmax-normalized priors:
-            // - Subbands 0..=1 (0 .. 1.1 kHz): Bass-dominant on sustained Mid energy
-            // - Subbands 2..=8 (1.1 .. 6.5 kHz): Vocal-dominant on harmonic Mid energy
-            // - High transient crest across all subbands: Drums-dominant
-            // - Side-dominant / ambient energy: Other-dominant
-            let raw_bass = if sb == 0 {
+            // Subbands 0..=2 (~0..460 Hz): Bass-dominant on sustained Mid energy
+            // Subbands 3..=10 (~460 Hz..6.8 kHz): Vocal-dominant on harmonic Mid energy
+            let raw_bass = if sb <= 1 {
                 3.5 * mid_ratio * (2.0 / transient_ratio)
-            } else if sb == 1 {
+            } else if sb == 2 {
                 1.4 * mid_ratio
             } else {
                 0.05
             };
             let raw_drums = (transient_ratio - 0.85).max(0.05) * 1.8;
-            let raw_vocals = if (1..=9).contains(&sb) {
+            let raw_vocals = if (3..=10).contains(&sb) {
                 mid_ratio * 2.2 * self.weight_calibration[sb]
             } else {
                 0.25 * mid_ratio
@@ -419,11 +430,33 @@ impl BsrnnStreamingWorker {
     }
 }
 
+/// Number of pre-seeded hops (`2 * 512 = 1,024` samples = `21.3 ms` @ 48 kHz) cushioning the
+/// asynchronous ONNX GPU worker thread inside the `5,760`-sample (`120 ms`) APDC latency budget.
+const ASYNC_GPU_CUSHION_HOPS: usize = 2;
+
+struct AsyncOnnxWorkerHandle {
+    stop_flag: Arc<std::sync::atomic::AtomicBool>,
+    worker_epoch: Arc<std::sync::atomic::AtomicU64>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
+    tier: crate::onnx_gpu_runtime::GpuExecutionTier,
+}
+
+impl Drop for AsyncOnnxWorkerHandle {
+    fn drop(&mut self) {
+        self.stop_flag
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(jh) = self.join_handle.take() {
+            let _ = jh.join();
+        }
+    }
+}
+
 /// Real-Time `120 ms` (`5,760` samples @ 48 kHz) Unity-Identity Additive 4-Stem BSRNN Node
 /// (`RealTimeBsrnnStemNode` / `RealtimeBsrnnStemNode`, `DSP::OzoneStemEQ` at `0x1857397B0`).
 ///
 /// Uses lock-free `rtrb::RingBuffer` SPSC queues to decouple hop framing from sample-by-sample
-/// audio processing, guaranteeing **0 heap allocations** on the real-time audio thread.
+/// audio processing, guaranteeing **0 heap allocations** on the real-time audio thread in both
+/// `DeterministicLockstep` mode and `AsyncOnnxGpuWorker` mode (`enable_onnx_gpu_worker()`).
 pub struct RealTimeBsrnnStemNode {
     /// Per-stem gain in dB (`[-24.0, +12.0]` dB) for `[Vocals, Drums, Bass, Other]`.
     pub stem_gains_db: [f32; BSRNN_STEM_COUNT],
@@ -438,14 +471,13 @@ pub struct RealTimeBsrnnStemNode {
     latency_samples: usize,
     /// Exact `5,760`-sample (`120 ms` @ 48 kHz) dry reference delay line for Unity-Identity mixing.
     delay_line: ApdcDelayLine,
-    /// Sample-accurate alignment delay lines (`latency_samples - BSRNN_N_FFT` = `3,712` samples @ 48 kHz)
-    /// aligning the `2,048`-sample STFT/OLA stem output to the exact `5,760`-sample dry reference.
+    /// Sample-accurate alignment delay lines aligning separated stems to `latency_samples`.
     stem_delay_lines: [ApdcDelayLine; BSRNN_STEM_COUNT],
 
     /// Lock-free SPSC ring buffers (`rtrb`) for input hops (`Audio -> Worker`) and output hops (`Worker -> Audio`).
     in_tx: Producer<BsrnnInputHop>,
-    in_rx: Consumer<BsrnnInputHop>,
-    out_tx: Producer<BsrnnOutputHop>,
+    in_rx: Option<Consumer<BsrnnInputHop>>,
+    out_tx: Option<Producer<BsrnnOutputHop>>,
     out_rx: Consumer<BsrnnOutputHop>,
 
     /// Pre-allocated staging hop on the audio side (`512` frames).
@@ -453,9 +485,18 @@ pub struct RealTimeBsrnnStemNode {
     staging_in_pos: usize,
     current_out_hop: BsrnnOutputHop,
     current_out_pos: usize,
+    pending_out_hop: Option<BsrnnOutputHop>,
 
-    /// Pre-allocated BSRNN separation engine.
-    worker: BsrnnStreamingWorker,
+    /// Monotonic reset epoch & hop sequence counters preserving exact phase lock across resets and underflows.
+    active_epoch: u64,
+    next_in_seq: u64,
+    expected_out_seq: u64,
+    cushion_hops_remaining: usize,
+
+    /// Pre-allocated deterministic fallback worker (used when `async_gpu_worker` is `None`).
+    worker: Box<BsrnnStreamingWorker>,
+    /// Optional dedicated ONNX Runtime GPU worker thread spawned strictly outside `process_slice()`.
+    async_gpu_worker: Option<AsyncOnnxWorkerHandle>,
 }
 
 /// Alias preserving backwards compatibility with Phase 1/2 naming.
@@ -495,15 +536,160 @@ impl RealTimeBsrnnStemNode {
             delay_line,
             stem_delay_lines,
             in_tx,
-            in_rx,
-            out_tx,
+            in_rx: Some(in_rx),
+            out_tx: Some(out_tx),
             out_rx,
             staging_in_hop: BsrnnInputHop::default(),
             staging_in_pos: 0,
             current_out_hop: BsrnnOutputHop::default(),
             current_out_pos: 0,
-            worker: BsrnnStreamingWorker::new(),
+            pending_out_hop: None,
+            active_epoch: 1,
+            next_in_seq: 0,
+            expected_out_seq: 0,
+            cushion_hops_remaining: 0,
+            worker: Box::new(BsrnnStreamingWorker::new()),
+            async_gpu_worker: None,
         }
+    }
+
+    /// Constructs a `RealTimeBsrnnStemNode` and immediately activates the dedicated ONNX GPU
+    /// background worker thread (`ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx`) outside the RT thread.
+    pub fn new_with_onnx_gpu(sample_rate: f64) -> Result<Self, String> {
+        let mut node = Self::new(sample_rate);
+        node.enable_onnx_gpu_worker()?;
+        Ok(node)
+    }
+
+    /// Spawns a dedicated background worker thread running `OzoneBsrnnOnnxSeparator` on RTX 4080
+    /// (`CUDAExecutionProvider` -> `DirectML` -> `CPU`), communicating with `process_slice()`
+    /// exclusively over lock-free `rtrb::RingBuffer` queues (**0 allocations on the RT thread**).
+    ///
+    /// MUST ONLY be called outside the Real-Time audio callback thread!
+    pub fn enable_onnx_gpu_worker(
+        &mut self,
+    ) -> Result<crate::onnx_gpu_runtime::GpuExecutionTier, String> {
+        if let Some(existing) = &self.async_gpu_worker {
+            return Ok(existing.tier);
+        }
+
+        let mut onnx_sep = crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator::from_default_assets()?;
+        let tier = onnx_sep.active_tier();
+
+        let mut in_rx = self
+            .in_rx
+            .take()
+            .ok_or_else(|| "Input SPSC consumer already taken".to_string())?;
+        let mut out_tx = self
+            .out_tx
+            .take()
+            .ok_or_else(|| "Output SPSC producer already taken".to_string())?;
+
+        while in_rx.pop().is_ok() {}
+        while self.out_rx.pop().is_ok() {}
+        self.pending_out_hop = None;
+        self.active_epoch = self.active_epoch.wrapping_add(1);
+        self.next_in_seq = 0;
+        self.expected_out_seq = 0;
+        self.staging_in_pos = 0;
+        self.current_out_hop = BsrnnOutputHop::default();
+        self.current_out_pos = 0;
+        self.cushion_hops_remaining = ASYNC_GPU_CUSHION_HOPS;
+        self.delay_line.reset();
+
+        // Update stem alignment delay to account for 2-hop ONNX lookahead + async cushion:
+        // Total pre-stem delay = 2048 (STFT) + 1024 (2-hop lookahead) + 1024 (2-hop cushion) = 4,096 samples.
+        let pre_delay = BSRNN_N_FFT
+            + crate::bsrnn_onnx_gpu::OZONE_BSRNN_LOOKAHEAD_SAMPLES
+            + ASYNC_GPU_CUSHION_HOPS * BSRNN_HOP_SIZE;
+        let stem_align_delay = self.latency_samples.saturating_sub(pre_delay);
+        for dl in &mut self.stem_delay_lines {
+            dl.set_delay_samples(stem_align_delay);
+            dl.reset();
+        }
+
+        let initial_epoch = self.active_epoch;
+        let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_epoch = Arc::new(std::sync::atomic::AtomicU64::new(initial_epoch));
+        let ready_barrier = Arc::new(std::sync::Barrier::new(2));
+        let stop_clone = Arc::clone(&stop_flag);
+        let epoch_clone = Arc::clone(&worker_epoch);
+        let ready_clone = Arc::clone(&ready_barrier);
+
+        let join_handle = std::thread::Builder::new()
+            .name("toneforge-bsrnn-onnx-gpu".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                let mut out_hop = BsrnnOutputHop::default();
+                // Pre-warm thread-local CUDA context & cuDNN handles on this OS worker thread
+                // outside real-time playback so hop #0 never suffers a cold-start kernel stall.
+                let warm_in = BsrnnInputHop::default();
+                let _ = onnx_sep.process_hop(&warm_in, &mut out_hop);
+                onnx_sep.reset();
+                out_hop = BsrnnOutputHop::default();
+                ready_clone.wait();
+
+                let mut local_epoch = initial_epoch;
+                let mut idle_spins = 0u32;
+                while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
+                    let target_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
+                    if target_epoch != local_epoch {
+                        onnx_sep.reset();
+                        local_epoch = target_epoch;
+                    }
+                    if let Ok(in_hop) = in_rx.pop() {
+                        idle_spins = 0;
+                        // Discard stale input hops queued prior to the latest `reset_state()` epoch
+                        let latest_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
+                        if latest_epoch != local_epoch {
+                            onnx_sep.reset();
+                            local_epoch = latest_epoch;
+                        }
+                        if in_hop.epoch != local_epoch {
+                            continue;
+                        }
+                        if onnx_sep.process_hop(&in_hop, &mut out_hop).is_ok() {
+                            out_hop.epoch = in_hop.epoch;
+                            out_hop.seq = in_hop.seq;
+                            let _ = out_tx.push(out_hop);
+                        } else {
+                            let mut zero_hop = BsrnnOutputHop::default();
+                            zero_hop.epoch = in_hop.epoch;
+                            zero_hop.seq = in_hop.seq;
+                            let _ = out_tx.push(zero_hop);
+                        }
+                    } else {
+                        idle_spins = idle_spins.saturating_add(1);
+                        if idle_spins < 64 {
+                            std::hint::spin_loop();
+                        } else {
+                            std::thread::sleep(std::time::Duration::from_micros(250));
+                        }
+                    }
+                }
+            })
+            .map_err(|e| format!("Failed to spawn ONNX GPU worker thread: {}", e))?;
+
+        ready_barrier.wait();
+
+        self.async_gpu_worker = Some(AsyncOnnxWorkerHandle {
+            stop_flag,
+            worker_epoch,
+            join_handle: Some(join_handle),
+            tier,
+        });
+
+        Ok(tier)
+    }
+
+    #[inline]
+    pub fn is_onnx_gpu_worker_active(&self) -> bool {
+        self.async_gpu_worker.is_some()
+    }
+
+    #[inline]
+    pub fn active_onnx_tier(&self) -> Option<crate::onnx_gpu_runtime::GpuExecutionTier> {
+        self.async_gpu_worker.as_ref().map(|w| w.tier)
     }
 
     /// Returns `true` when all stems are at `0.0 dB` with no mute/solo active.
@@ -516,15 +702,68 @@ impl RealTimeBsrnnStemNode {
             && self.stem_gains_db.iter().all(|g| g.abs() < 1e-5)
     }
 
-    /// Drains pending input hops from the lock-free `in_rx` queue, executes `BsrnnStreamingWorker`,
-    /// and pushes separated stem hops into `out_tx`. Zero Heap Allocation.
+    /// Drains pending input hops from the lock-free `in_rx` queue when in lockstep mode,
+    /// executes `BsrnnStreamingWorker`, and pushes separated stem hops into `out_tx`.
+    /// When `async_gpu_worker` is active, this is a zero-cost no-op because the dedicated
+    /// background GPU thread services `in_rx -> out_tx` concurrently. Zero Heap Allocation.
     #[inline]
     pub fn service_worker_queue(&mut self) {
-        let mut out_hop = BsrnnOutputHop::default();
-        while let Ok(in_hop) = self.in_rx.pop() {
-            self.worker.process_hop(&in_hop, &mut out_hop);
-            let _ = self.out_tx.push(out_hop);
+        if let (Some(in_rx), Some(out_tx)) = (&mut self.in_rx, &mut self.out_tx) {
+            let mut out_hop = BsrnnOutputHop::default();
+            while let Ok(in_hop) = in_rx.pop() {
+                if in_hop.epoch != self.active_epoch {
+                    continue;
+                }
+                self.worker.process_hop(&in_hop, &mut out_hop);
+                out_hop.epoch = in_hop.epoch;
+                out_hop.seq = in_hop.seq;
+                let _ = out_tx.push(out_hop);
+            }
         }
+    }
+
+    fn current_pre_stem_delay(&self) -> usize {
+        if self.async_gpu_worker.is_some() {
+            BSRNN_N_FFT
+                + crate::bsrnn_onnx_gpu::OZONE_BSRNN_LOOKAHEAD_SAMPLES
+                + ASYNC_GPU_CUSHION_HOPS * BSRNN_HOP_SIZE
+        } else {
+            BSRNN_N_FFT
+        }
+    }
+
+    /// Pops the exact output hop matching `(self.active_epoch, target_seq)` without heap allocations,
+    /// discarding any stale epoch/late underflow hops and buffering at most 1 future hop.
+    #[inline]
+    fn pop_aligned_output_hop(&mut self, target_seq: u64) -> BsrnnOutputHop {
+        if let Some(pending) = self.pending_out_hop {
+            if pending.epoch < self.active_epoch
+                || (pending.epoch == self.active_epoch && pending.seq < target_seq)
+            {
+                self.pending_out_hop = None;
+            } else if pending.epoch == self.active_epoch && pending.seq == target_seq {
+                self.pending_out_hop = None;
+                return pending;
+            } else {
+                return BsrnnOutputHop::default();
+            }
+        }
+
+        while let Ok(hop) = self.out_rx.pop() {
+            if hop.epoch < self.active_epoch
+                || (hop.epoch == self.active_epoch && hop.seq < target_seq)
+            {
+                continue;
+            }
+            if hop.epoch == self.active_epoch && hop.seq == target_seq {
+                return hop;
+            }
+            // Future hop (`hop.seq > target_seq` or newer epoch): preserve it for its exact sequence slot
+            self.pending_out_hop = Some(hop);
+            break;
+        }
+
+        BsrnnOutputHop::default()
     }
 }
 
@@ -544,7 +783,7 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
         self.delay_line.ensure_capacity(cap);
         self.delay_line.set_delay_samples(self.latency_samples);
 
-        let stem_align_delay = self.latency_samples.saturating_sub(BSRNN_N_FFT);
+        let stem_align_delay = self.latency_samples.saturating_sub(self.current_pre_stem_delay());
         for dl in &mut self.stem_delay_lines {
             dl.ensure_capacity(cap);
             dl.set_delay_samples(stem_align_delay);
@@ -557,8 +796,21 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
             dl.reset();
         }
         self.worker.reset();
-        while self.in_rx.pop().is_ok() {}
+        self.active_epoch = self.active_epoch.wrapping_add(1);
+        self.next_in_seq = 0;
+        self.expected_out_seq = 0;
+        if let Some(in_rx) = &mut self.in_rx {
+            while in_rx.pop().is_ok() {}
+        }
         while self.out_rx.pop().is_ok() {}
+        self.pending_out_hop = None;
+        if let Some(bg) = &self.async_gpu_worker {
+            bg.worker_epoch
+                .store(self.active_epoch, std::sync::atomic::Ordering::Release);
+            self.cushion_hops_remaining = ASYNC_GPU_CUSHION_HOPS;
+        } else {
+            self.cushion_hops_remaining = 0;
+        }
         self.staging_in_hop = BsrnnInputHop::default();
         self.staging_in_pos = 0;
         self.current_out_hop = BsrnnOutputHop::default();
@@ -622,12 +874,14 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
         for frame in main_io.iter_mut() {
             let raw_in = *frame;
 
-            // 1. Feed lock-free input hop staging buffer & always service worker so mid-stream
-            //    gain automation is warm, phase-locked, and click-free.
+            // 1. Feed lock-free input hop staging buffer & service worker (lockstep or async SPSC)
             self.staging_in_hop.frames[self.staging_in_pos] = raw_in;
             self.staging_in_pos += 1;
             if self.staging_in_pos >= BSRNN_HOP_SIZE {
                 self.staging_in_pos = 0;
+                self.staging_in_hop.epoch = self.active_epoch;
+                self.staging_in_hop.seq = self.next_in_seq;
+                self.next_in_seq = self.next_in_seq.wrapping_add(1);
                 let _ = self.in_tx.push(self.staging_in_hop);
                 self.service_worker_queue();
             }
@@ -639,10 +893,13 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
 
             // 3. Pop next separated stem hop from lock-free `out_rx` when needed
             if self.current_out_pos >= BSRNN_HOP_SIZE {
-                if let Ok(hop) = self.out_rx.pop() {
-                    self.current_out_hop = hop;
-                } else {
+                if self.cushion_hops_remaining > 0 {
+                    self.cushion_hops_remaining -= 1;
                     self.current_out_hop = BsrnnOutputHop::default();
+                } else {
+                    let target_seq = self.expected_out_seq;
+                    self.expected_out_seq = self.expected_out_seq.wrapping_add(1);
+                    self.current_out_hop = self.pop_aligned_output_hop(target_seq);
                 }
                 self.current_out_pos = 0;
             }
@@ -668,8 +925,6 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
             }
 
             if unity_fast_path {
-                // Unity-Identity Law: when all stem gains == 0.0 dB, `Delta_s == 0`,
-                // so `Y[n] === X_delayed[n]` is strictly bit-transparent!
                 *frame = x_delayed;
             } else {
                 *frame = [out_l, out_r];

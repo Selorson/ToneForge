@@ -533,8 +533,17 @@ impl OzoneNpzGruEngine {
         })
     }
 
-    /// Attempts to load `vocals-small_sanitized.npz` from standard asset locations.
+    /// Attempts to load `vocals-small_sanitized.npz` prioritizing `current_exe()` parent first.
     pub fn load_default_vocals() -> Option<Self> {
+        if let Some(p) = crate::onnx_gpu_runtime::resolve_asset_file(&[
+            "assets/ozone12/models/vocals-small_sanitized.npz",
+            "assets/models/npz_gru_stems/vocals-small_sanitized.npz",
+            "assets/models/vocals-small_sanitized.npz",
+        ]) {
+            if let Ok(eng) = Self::from_npz_file(&p) {
+                return Some(eng);
+            }
+        }
         for cand in DEFAULT_VOCALS_GRU_NPZ_PATHS {
             let p = Path::new(cand);
             if p.exists() {
@@ -599,6 +608,15 @@ impl GenreCnnClassifier {
     }
 
     pub fn load_default() -> Option<Self> {
+        if let Some(p) = crate::onnx_gpu_runtime::resolve_asset_file(&[
+            "assets/ozone12/models/gparamsBN8.0.npz",
+            "assets/models/assistant_cnn/gparamsBN8.0.npz",
+            "assets/models/gparamsBN8.0.npz",
+        ]) {
+            if let Ok(c) = Self::from_npz_file(&p) {
+                return Some(c);
+            }
+        }
         for cand in DEFAULT_GPARAMS_NPZ_PATHS {
             let p = Path::new(cand);
             if p.exists() {
@@ -783,6 +801,15 @@ impl InstrumentCnnClassifier {
     }
 
     pub fn load_default() -> Option<Self> {
+        if let Some(p) = crate::onnx_gpu_runtime::resolve_asset_file(&[
+            "assets/ozone12/models/instrument_classifier_params.npz",
+            "assets/models/assistant_cnn/instrument_classifier_params.npz",
+            "assets/models/instrument_classifier_params.npz",
+        ]) {
+            if let Ok(c) = Self::from_npz_file(&p) {
+                return Some(c);
+            }
+        }
         for cand in DEFAULT_INSTRUMENT_NPZ_PATHS {
             let p = Path::new(cand);
             if p.exists() {

@@ -706,14 +706,25 @@ export class RealtimeSpeakerEngine {
    * Decodes a user-selected audio file (`.wav`, `.mp3`, `.flac`, `.ogg`) and plays it through the live DSP chain.
    */
   async loadCustomAudioFile(file: File, telemetry: DawTelemetryView): Promise<boolean> {
+    const arrayBuf = await file.arrayBuffer();
+    return this.loadCustomAudioArrayBuffer(arrayBuf, telemetry);
+  }
+
+  /**
+   * Decodes a raw binary WAV/audio `ArrayBuffer` (e.g. fetched directly from Rust `symphonia`
+   * native decoder without JSON serialization) and plays it through the live DSP chain.
+   */
+  async loadCustomAudioArrayBuffer(
+    audioBytes: ArrayBuffer,
+    telemetry: DawTelemetryView
+  ): Promise<boolean> {
     const ctx = this.ensureAudioGraph(telemetry);
     if (!ctx) return false;
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
     }
     try {
-      const arrayBuf = await file.arrayBuffer();
-      const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+      const decoded = await ctx.decodeAudioData(audioBytes.slice(0));
       this.customAudioBuffer = decoded;
       this.uvr5StemBuffers = [null, null, null, null];
       this.customPausedOffsetSec = 0;

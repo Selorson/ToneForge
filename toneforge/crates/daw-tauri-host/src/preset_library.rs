@@ -65,31 +65,19 @@ const INSTRUMENT_CLASSES: [&str; 10] = [
     "Full Mix",
 ];
 
-/// Resolves the `toneforge/assets` root directory across dev, workspace test, and standalone `.exe` environments.
+/// Resolves the `toneforge/assets` root directory prioritizing `std::env::current_exe()` parent/ancestors
+/// FIRST (for standalone `ToneForge_Studio.exe` launched from any working directory), then falling back
+/// to `CARGO_MANIFEST_DIR` and `current_dir()`.
 pub fn resolve_assets_root() -> PathBuf {
-    let candidates = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets"),
-        PathBuf::from(r"f:\FL studio\toneforge\assets"),
-        PathBuf::from("assets"),
-        PathBuf::from("../assets"),
-        PathBuf::from("../../assets"),
-    ];
-    for c in &candidates {
-        if c.exists() && c.is_dir() {
-            return c.clone();
-        }
+    if let Some(dir) = ai_uvr5_stem_engine::resolve_assets_dir() {
+        return dir;
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for rel in ["assets", "../assets", "../../assets", "../../../assets"] {
-                let p = dir.join(rel);
-                if p.exists() && p.is_dir() {
-                    return p;
-                }
-            }
-        }
-    }
-    PathBuf::from(r"f:\FL studio\toneforge\assets")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+}
+
+/// Resolves the `toneforge/gpu_runtime` root directory prioritizing `std::env::current_exe()` parent/ancestors FIRST.
+pub fn resolve_gpu_runtime_root() -> Option<PathBuf> {
+    ai_uvr5_stem_engine::resolve_gpu_runtime_dir()
 }
 
 // ============================================================================
@@ -2439,19 +2427,72 @@ pub fn load_uvr5_model_profile(profile_query: &str) -> Result<Uvr5ModelProfileDt
         });
     }
 
-    // Look up in MDX_Net_Models/model_data/model_data.json
-    let target_hash = if q.contains("Kim_Vocal_2") {
-        "43c78e12d31f2d9b8f9c603f8c26b9f5"
-    } else if q.contains("Inst_HQ_3") {
-        "2f2e2c8a0d018f79f2822f4fb62a2a8f"
-    } else if q.contains("Karaoke") {
+    // Look up in MDX_Net_Models/model_data/model_data.json using exact official `model_name_mapper.json` hashes
+    let q_lower = q.to_ascii_lowercase();
+    let target_hash = if q_lower.contains("kim_vocal_2") {
+        "970b3f9492014d18fefeedfe4773cb42"
+    } else if q_lower.contains("inst_hq_3") {
+        "55657dd70583b0fedfba5f67df11d711"
+    } else if q_lower.contains("karaoke") {
         "2f5501189a2f6db6349916fabe8c90de"
     } else {
         q
     };
 
     if let Some(obj) = mdx_map.as_object() {
-        // Match by hash or by matching n_fft/dim_f/is_karaoke
+        // 1. Exact hash lookup first so `compensate` (1.009 / 1.022) matches `model_data.json` 100%
+        if let Some(val) = obj.get(target_hash) {
+            let n_fft = val
+                .get("mdx_n_fft_scale_set")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(6144) as usize;
+            let dim_f = val
+                .get("mdx_dim_f_set")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3072) as usize;
+            let dim_t = val
+                .get("mdx_dim_t_set")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8) as usize;
+            let comp = val
+                .get("compensate")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.009) as f32;
+            let primary = val
+                .get("primary_stem")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Vocals")
+                .to_string();
+            return Ok(Uvr5ModelProfileDto {
+                profile_id: q.to_string(),
+                model_name: if q_lower.contains("kim_vocal_2")
+                    || target_hash == "970b3f9492014d18fefeedfe4773cb42"
+                {
+                    "Kim_Vocal_2 (MDX-Net Lead Vocal)".to_string()
+                } else if q_lower.contains("inst_hq_3")
+                    || target_hash == "55657dd70583b0fedfba5f67df11d711"
+                {
+                    "UVR-MDX-NET-Inst_HQ_3".to_string()
+                } else if q_lower.contains("karaoke") {
+                    "UVR-MDX-NET Karaoke / Vocals".to_string()
+                } else {
+                    format!("MDX-Net ({target_hash})")
+                },
+                model_hash: target_hash.to_string(),
+                architecture: "MDX-Net".to_string(),
+                primary_stem: primary,
+                n_fft,
+                dim_f,
+                dim_t,
+                hop_length: 1024,
+                compensate: (comp * 1000.0).round() / 1000.0,
+                ensemble_algorithm: "MDX-Net TFC-TDF v3 ONNX GPU".to_string(),
+                ensemble_weights: [0.75, 0.15, 0.10],
+                config_source_file: "models/MDX_Net_Models/model_data/model_data.json".to_string(),
+            });
+        }
+
+        // 2. Fallback scan by geometry / karaoke flag
         for (hash, val) in obj {
             let n_fft = val
                 .get("mdx_n_fft_scale_set")
@@ -2479,22 +2520,13 @@ pub fn load_uvr5_model_profile(profile_query: &str) -> Result<Uvr5ModelProfileDt
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            if hash == target_hash
-                || (q.contains("Kim_Vocal_2") && n_fft == 7680 && dim_f == 3072)
-                || (q.contains("Inst_HQ_3") && n_fft == 6144 && dim_f == 3072)
-                || (q.contains("Karaoke") && is_karaoke)
+            if (q_lower.contains("kim_vocal_2") && n_fft == 7680 && dim_f == 3072)
+                || (q_lower.contains("inst_hq_3") && n_fft == 6144 && dim_f == 3072)
+                || (q_lower.contains("karaoke") && is_karaoke)
             {
                 return Ok(Uvr5ModelProfileDto {
                     profile_id: q.to_string(),
-                    model_name: if q.contains("Kim_Vocal_2") {
-                        "Kim_Vocal_2 (MDX-Net Lead Vocal)".to_string()
-                    } else if q.contains("Inst_HQ_3") {
-                        "UVR-MDX-Net-Inst_HQ_3".to_string()
-                    } else if q.contains("Karaoke") {
-                        "UVR-MDX-NET Karaoke / Vocals".to_string()
-                    } else {
-                        format!("MDX-Net ({hash})")
-                    },
+                    model_name: format!("MDX-Net ({hash})"),
                     model_hash: hash.clone(),
                     architecture: "MDX-Net".to_string(),
                     primary_stem: primary,

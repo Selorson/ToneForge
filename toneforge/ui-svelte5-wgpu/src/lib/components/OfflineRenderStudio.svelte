@@ -76,7 +76,16 @@
 
       <label>
         Output Directory:
-        <input type="text" bind:value={telemetry.renderOutputDir} />
+        <div class="path-row">
+          <input type="text" bind:value={telemetry.renderOutputDir} />
+          <button
+            type="button"
+            class="folder-btn"
+            onclick={() => telemetry.pickRenderOutputDirectory()}
+          >
+            📁 Chọn thư mục
+          </button>
+        </div>
       </label>
     </div>
 
@@ -157,6 +166,12 @@
   .render-card { background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-size: 0.75rem; display: flex; flex-direction: column; gap: 6px; }
   h3 { margin: 0 0 4px 0; font-size: 0.82rem; color: var(--accent); font-weight: 600; }
   .render-card select, .render-card input[type="text"] { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%; box-sizing: border-box; margin-top: 2px; }
+  .path-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  .path-row input[type="text"] { margin-top: 0; flex: 1; min-width: 0; }
+  .folder-btn {
+    background: var(--surface-2); color: var(--accent); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.72rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .folder-btn:hover { border-color: var(--accent); }
   .metrics-table { display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   .metric-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(118, 210, 219, 0.1); }
   .metric-row strong { color: var(--accent); }
@@ -164,6 +179,6 @@
   .platform-badge { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 0.72rem; }
   .platform-badge.pass { background: rgba(74, 222, 128, 0.12); border: 1px solid var(--ok); color: var(--ok); }
   .platform-badge.warn { background: rgba(251, 191, 36, 0.12); border: 1px solid var(--warn); color: var(--warn); }
-  .rendered-files { margin: 4px 0 0 0; padding-left: 16px; font-size: 0.7rem; color: var(--text); display: flex; flex-direction: column; gap: 4px; }
+  .rendered-files { margin: 4px 0 0 0; padding-left: 16px; font-size: 0.7rem; color: var(--text); display: flex; flex-direction: column; gap: 4px; word-break: break-all; }
 </style>
 

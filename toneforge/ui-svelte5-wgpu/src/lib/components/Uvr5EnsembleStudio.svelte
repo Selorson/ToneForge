@@ -24,6 +24,14 @@
     await telemetry.loadUserAudioFile(file);
     input.value = '';
   }
+
+  async function handleOpenUvr5AudioClick(): Promise<void> {
+    if (telemetry.isDesktopTauri) {
+      await telemetry.openNativeAudioFilePicker();
+    } else {
+      uvr5FileInputEl?.click();
+    }
+  }
 </script>
 
 <section class="panel uvr5-panel">
@@ -36,18 +44,21 @@
       </span>
     </div>
     <div class="uvr5-header-actions">
+      <span class="gpu-badge" title={telemetry.gpuAcceleratorDetail}>
+        {telemetry.gpuAcceleratorBadge}
+      </span>
       <input
         bind:this={uvr5FileInputEl}
         type="file"
-        accept="audio/*,.wav,.mp3,.flac,.ogg"
+        accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff"
         style="display: none;"
         onchange={handleUvr5FileSelected}
       />
       <button
         class="pick-file-btn"
-        onclick={() => uvr5FileInputEl?.click()}
+        onclick={handleOpenUvr5AudioClick}
       >
-        📂 Mở nhạc từ máy (.wav/.mp3)
+        📂 Mở nhạc từ máy (.wav/.mp3/.flac)
       </button>
       <label class="profile-select">
         UVR5 Model Profile (143 Real Configs):
@@ -76,7 +87,29 @@
       <h3>Source Audio & Spectral Ensemble Mode</h3>
       <label>
         Input File:
-        <input type="text" bind:value={telemetry.uvr5AudioPath} />
+        <div class="path-row">
+          <input type="text" bind:value={telemetry.uvr5AudioPath} />
+          <button type="button" class="folder-btn" onclick={handleOpenUvr5AudioClick}>
+            📂 Chọn file
+          </button>
+        </div>
+      </label>
+      <label>
+        Output Folder (Thư mục xuất 4 Stem .wav):
+        <div class="path-row">
+          <input
+            type="text"
+            placeholder="Mặc định: xuất ngay tại thư mục bài hát gốc"
+            bind:value={telemetry.uvr5OutputDir}
+          />
+          <button
+            type="button"
+            class="folder-btn"
+            onclick={() => telemetry.pickUvr5OutputDirectory()}
+          >
+            📁 Chọn thư mục
+          </button>
+        </div>
       </label>
       <label>
         Ensemble Algorithm:
@@ -124,7 +157,7 @@
       <h3>Separated Stems Output (Bounced to Tracks 1..4)</h3>
       {#if telemetry.uvr5SeparatedStems.length === 0}
         <p class="empty-stems-hint">
-          Đã nạp file gốc <code>{telemetry.uvr5AudioPath}</code>. Bấm <strong>Run Ensemble &amp; Bounce to Mixer 1..4</strong> để tách 4 file stem <code>.wav</code> thật.
+          Đã nạp file gốc <code>{telemetry.uvr5AudioPath}</code>. Bấm <strong>Run Ensemble &amp; Bounce to Mixer 1..4</strong> để tách 4 file stem <code>.wav</code> thật ngay tại thư mục đích.
         </p>
       {:else}
         <ul class="stem-list">
@@ -141,10 +174,13 @@
 
 <style>
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
-  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; flex-wrap: wrap; }
   h2 { margin: 0; font-size: 1rem; color: var(--accent); font-weight: 600; }
   .subtitle { font-size: 0.75rem; color: var(--muted); }
   .uvr5-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .gpu-badge {
+    background: rgba(74, 222, 128, 0.12); color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 4px 10px; font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+  }
   .profile-select { font-size: 0.75rem; color: var(--muted); }
   .profile-select select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-left: 4px; font-size: 0.74rem; }
   .pick-file-btn {
@@ -155,9 +191,15 @@
   }
   .uvr5-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .uvr5-card { background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-size: 0.76rem; display: flex; flex-direction: column; gap: 6px; }
-  .uvr5-card input[type="text"], .uvr5-card select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%; margin-top: 2px; }
+  .uvr5-card input[type="text"], .uvr5-card select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%; box-sizing: border-box; margin-top: 2px; }
+  .path-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  .path-row input[type="text"] { margin-top: 0; flex: 1; min-width: 0; }
+  .folder-btn {
+    background: var(--surface-2); color: var(--accent); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.72rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .folder-btn:hover { border-color: var(--accent); }
   h3 { margin: 0 0 4px 0; font-size: 0.82rem; color: var(--accent); font-weight: 600; }
-  .stem-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .stem-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; word-break: break-all; }
   .empty-stems-hint { margin: 4px 0 0 0; color: var(--muted); line-height: 1.45; }
 </style>
 

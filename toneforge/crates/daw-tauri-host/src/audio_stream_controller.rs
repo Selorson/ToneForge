@@ -1028,6 +1028,34 @@ impl AudioStreamController {
             };
         }
 
+        let w_arr = match weights {
+            Some(ws) if ws.len() >= 3 => [ws[0], ws[1], ws[2]],
+            _ => [0.45, 0.35, 0.20],
+        };
+        let gpu_cfg = ai_uvr5_stem_engine::GpuStemEnsembleConfig {
+            model_selection: ai_uvr5_stem_engine::GpuStemModelSelection::Ensemble3Model,
+            ensemble_mode: mode,
+            weights: w_arr,
+            enable_denoise_2pass: self.mdx23c_separator.enable_denoise_2pass,
+            vr_aggressiveness: self.vr_aspp_separator.aggressiveness,
+            phase_denoise_strength: phase_denoise_strength.clamp(0.0, 1.0),
+            invert_instrumental: true,
+        };
+
+        if let Ok(gpu_out) = ai_uvr5_stem_engine::run_global_gpu_stem_ensemble(
+            mix,
+            (self.sample_rate.round() as u32).clamp(8_000, 384_000),
+            &gpu_cfg,
+        ) {
+            return Uvr5EnsembleStudioOutput {
+                vocals: gpu_out.vocals,
+                drums: gpu_out.drums,
+                bass: gpu_out.bass,
+                other: gpu_out.other,
+                inverted_instrumental: gpu_out.inv_instrumental,
+            };
+        }
+
         let (mdx_vocals, _mdx_inst) = self.mdx23c_separator.separate_offline(mix);
         let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
             self.htdemucs4_separator.separate_4stems(mix);
@@ -1484,4 +1512,41 @@ impl AudioStreamController {
             config,
         )
     }
+
+    /// Upgrades Master Track 0 Slot 0 (`RealTimeBsrnnStemNode`) to run its real-time 120ms 4-stem
+    /// separation on a dedicated background ONNX Runtime GPU worker thread (`CUDA 12 -> DirectML -> CPU`),
+    /// communicating with the real-time audio thread exclusively via pre-allocated wait-free `rtrb` SPSC rings.
+    ///
+    /// Must be called during startup / outside the real-time audio callback thread.
+    pub fn enable_realtime_onnx_gpu_bsrnn_on_master(
+        &mut self,
+    ) -> Result<ai_uvr5_stem_engine::GpuExecutionTier, String> {
+        if self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots.is_empty() {
+            return Err("Master Track 0 has no Slot 0 for RealTimeBsrnnStemNode".to_string());
+        }
+        let mut gpu_node = RealTimeBsrnnStemNode::new_with_onnx_gpu(self.sample_rate)?;
+        gpu_node.prepare(self.sample_rate, self.max_block_size);
+        if let Some(PluginSlotStateDto {
+            plugin: PluginConfigDto::RealTimeBsrnnStem(bsrnn_dto),
+            ..
+        }) = self.project_state.mixer_tracks[MASTER_TRACK_INDEX]
+            .slots
+            .first()
+        {
+            gpu_node.stem_gains_db = bsrnn_dto.stem_gains_db;
+            gpu_node.stem_solo = bsrnn_dto.stem_solo;
+            gpu_node.stem_mute = bsrnn_dto.stem_mute;
+        }
+        let tier = gpu_node
+            .active_onnx_tier()
+            .unwrap_or(ai_uvr5_stem_engine::GpuExecutionTier::PureRustFallback);
+        self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots[0].plugin = Box::new(gpu_node);
+        self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots[0]
+            .prepare(self.sample_rate, self.max_block_size);
+        self.mixer_engine
+            .rebuild_graph()
+            .map_err(|e| e.to_string())?;
+        Ok(tier)
+    }
 }
+

@@ -37,6 +37,18 @@
     input.value = '';
   }
 
+  async function handleOpenAudioClick(): Promise<void> {
+    if (telemetry.isDesktopTauri) {
+      await telemetry.openNativeAudioFilePicker();
+    } else {
+      fileInputEl?.click();
+    }
+  }
+
+  $effect(() => {
+    telemetry.refreshGpuAcceleratorStatus();
+  });
+
   $effect(() => {
     const unlockSpeakerAudio = () => {
       telemetry.syncDspToSpeakerEngine();
@@ -87,6 +99,7 @@
       <img class="brand-logo" src="/favicon.png" alt="ToneForge" width="34" height="34" />
       <h1>ToneForge DAW</h1>
       <span class="badge">120 FPS WebGPU · 128 KB Zero-Copy SHM</span>
+      <span class="badge" title={telemetry.gpuAcceleratorDetail}>{telemetry.gpuAcceleratorBadge}</span>
     </div>
 
     <div class="transport-buttons">
@@ -104,20 +117,23 @@
       <input
         bind:this={fileInputEl}
         type="file"
-        accept="audio/*,.wav,.mp3,.flac,.ogg"
+        accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff"
         style="display: none;"
         onchange={handleUserFileSelected}
       />
       <button
         class="open-audio-btn"
-        onclick={() => fileInputEl?.click()}
-        title="Chọn bài hát (.wav, .mp3, .flac, .ogg) từ máy tính để nghe qua Loa & tinh chỉnh EQ/Soothe3/Ozone trực tiếp"
+        onclick={handleOpenAudioClick}
+        title="Mở bài hát (.wav, .mp3, .flac, .ogg) từ đường dẫn gốc ổ cứng để nghe qua Loa, tinh chỉnh EQ/Soothe3/Ozone & tách Stem trực tiếp"
       >
-        📂 Mở nhạc từ máy (.wav/.mp3)
+        📂 Mở nhạc từ máy (.wav/.mp3/.flac)
       </button>
 
       {#if telemetry.loadedAudioFileName}
-        <span class="loaded-audio-badge" title={telemetry.loadedAudioFileName}>
+        <span
+          class="loaded-audio-badge"
+          title={telemetry.loadedAudioFullPath ?? telemetry.loadedAudioFileName}
+        >
           🎵 Đang nạp: {telemetry.loadedAudioFileName}
         </span>
       {/if}

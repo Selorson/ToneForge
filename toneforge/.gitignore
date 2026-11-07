@@ -1,0 +1,23 @@
+# ToneForge Studio sub-project ignore rules
+/target/
+/gpu_runtime/
+/scripts/.staging/
+/.staging*/
+*.whl
+*.ort
+
+# Node / Frontend build artifacts
+**/node_modules/
+**/dist/
+**/.svelte-kit/
+/ui-svelte5-wgpu/package-lock.json
+
+# Large downloaded UVR5 model binaries (> 50 MB)
+/assets/uvr5/models/**/*.onnx
+/assets/uvr5/models/**/*.ckpt
+/assets/uvr5/models/**/*.pth
+/assets/uvr5/models/**/*.th
+
+# Keep compact Ozone 12 ONNX models (< 7 MB) tracked
+!/assets/ozone12/models/*.onnx
+!/assets/models/bsrnn_realtime/*.onnx

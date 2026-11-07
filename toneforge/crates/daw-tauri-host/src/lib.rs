@@ -15,12 +15,16 @@
 
 pub mod audio_stream_controller;
 pub mod ipc_commands;
+pub mod native_audio_decoder;
 pub mod offline_render_engine;
 pub mod preset_library;
 pub mod project_state;
 pub mod shm_telemetry_server;
 pub mod wgpu_compositor;
 
+pub use ai_uvr5_stem_engine::{
+    GpuAcceleratorStatus, GpuExecutionTier, GpuRuntimeManager, resample_stereo_frames,
+};
 pub use audio_stream_controller::{
     AudioStreamController, StemPlaybackGeneratorNode, Uvr5EnsembleStudioOutput,
 };
@@ -31,20 +35,24 @@ pub use ipc_commands::{
     cmd_apply_soothe3_factory_preset, cmd_execute_offline_render, cmd_load_fl26_fx_preset,
     cmd_load_fl26_sample_kit, cmd_load_fl26_score, cmd_load_ozone12_genre_or_xml_preset,
     cmd_load_proq4_preset, cmd_load_soothe3_preset_json, cmd_load_uvr5_model_profile,
-    cmd_poll_binary_telemetry_frame, cmd_route_mixer_track, cmd_route_mixer_track_on_engine,
-    cmd_run_ozone12_ai_master_assistant, cmd_run_uvr5_separation, cmd_seek_transport,
-    cmd_set_internal_controller_norm, cmd_set_ppq_resolution, cmd_set_track_gain, cmd_set_transport,
-    cmd_trigger_piano_roll_note, cmd_update_automation_spline, cmd_update_bsrnn_stem_gains,
-    cmd_update_bsrnn_stem_state, cmd_update_ozone12_master, cmd_update_patcher_graph,
-    cmd_update_proq4_band, cmd_update_proq4_global, cmd_update_soothe3_params,
-    cmd_update_soothe3_sc_band, cmd_upsert_piano_roll_pattern, cmd_upsert_playlist_clip,
-    execute_uvr5_separation_dsp,
+    cmd_poll_binary_telemetry_frame, cmd_query_gpu_accelerator_status, cmd_route_mixer_track,
+    cmd_route_mixer_track_on_engine, cmd_run_ozone12_ai_master_assistant, cmd_run_uvr5_separation,
+    cmd_seek_transport, cmd_set_internal_controller_norm, cmd_set_ppq_resolution,
+    cmd_set_track_gain, cmd_set_transport, cmd_trigger_piano_roll_note,
+    cmd_update_automation_spline, cmd_update_bsrnn_stem_gains, cmd_update_bsrnn_stem_state,
+    cmd_update_ozone12_master, cmd_update_patcher_graph, cmd_update_proq4_band,
+    cmd_update_proq4_global, cmd_update_soothe3_params, cmd_update_soothe3_sc_band,
+    cmd_upsert_piano_roll_pattern, cmd_upsert_playlist_clip, execute_uvr5_separation_dsp,
+};
+pub use native_audio_decoder::{
+    NativeDecodedAudio, NativeLoadedAudioDto, decode_audio_file_native,
+    encode_exact_sr_pcm16_wav_bytes, pick_audio_file_dialog_native, pick_directory_dialog_native,
 };
 pub use offline_render_engine::{
     DecodedWavFile, ExportedTrackWav, OfflineRenderConfig, OfflineRenderEngine,
     OfflineRenderResult, PostRenderAnalysisReport, RenderMode, RenderSampleRate,
     StreamingLoudnessCompliance, WavBitDepth, analyze_rendered_audio, decode_wav_bytes,
-    encode_wav_bytes, read_wav_file, write_wav_file,
+    encode_wav_bytes, encode_wav_bytes_exact_sr, read_wav_file, write_wav_file,
 };
 pub use preset_library::{
     Fl26FxPresetDto, Fl26SampleKitDto, Fl26SampleVoiceDto, Ozone12AssistantPresetDto,
@@ -53,8 +61,8 @@ pub use preset_library::{
     apply_proq4_preset, apply_soothe3_preset, load_fl26_fx_preset, load_fl26_sample_kit,
     load_fl26_score_preset, load_ozone12_genre_preset, load_ozone12_global_xml_preset,
     load_uvr5_model_profile, parse_fl26_fsc_bytes, parse_proq4_ffp, parse_soothe3_preset,
-    read_fl26_sample_kit_wav_bytes, resolve_assets_root, resolve_proq4_ffp_path,
-    resolve_soothe3_preset_path, run_ozone12_master_assistant,
+    read_fl26_sample_kit_wav_bytes, resolve_assets_root, resolve_gpu_runtime_root,
+    resolve_proq4_ffp_path, resolve_soothe3_preset_path, run_ozone12_master_assistant,
 };
 pub use project_state::{
     AutomationClipStateDto, BsrnnStemStateDto, ControllerLinkStateDto, LfoModulatorDto,

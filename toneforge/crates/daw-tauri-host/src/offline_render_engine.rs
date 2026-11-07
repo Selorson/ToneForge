@@ -246,8 +246,21 @@ pub fn encode_wav_bytes(
     bit_depth: WavBitDepth,
     enable_noise_shaping: bool,
 ) -> Vec<u8> {
+    encode_wav_bytes_exact_sr(frames, sample_rate.as_u32(), bit_depth, enable_noise_shaping)
+}
+
+/// Encodes stereo floating-point frames into a standard RIFF/WAVE byte buffer at an exact
+/// arbitrary integer `sample_rate_hz` (`8,000..=384,000 Hz`) and `bit_depth`, preserving native
+/// sample rates (`22,050 Hz`, `32,000 Hz`, `44,100 Hz`, `48,000 Hz`, `96,000 Hz`, etc.) without
+/// pitch-shifting or duration distortion.
+pub fn encode_wav_bytes_exact_sr(
+    frames: &[StereoFrame],
+    sample_rate_hz: u32,
+    bit_depth: WavBitDepth,
+    enable_noise_shaping: bool,
+) -> Vec<u8> {
     let num_channels: u16 = 2;
-    let sr = sample_rate.as_u32();
+    let sr = sample_rate_hz.clamp(8_000, 384_000);
     let bits_per_sample = bit_depth.bits_per_sample();
     let bytes_per_sample = bit_depth.bytes_per_sample();
     let block_align = num_channels * (bytes_per_sample as u16);
@@ -826,9 +839,9 @@ impl OfflineRenderEngine {
         let pre_res = Self::render_master(source_engine, &pre_cfg)?;
         let mix_frames = &pre_res.master_wav.frames;
 
-        // Step 2: Separate into 4 Stems via UVR5 Ensemble (HTDemucs4 + Mdx23cSeparator + CascadedASPPNet)
+        // Step 2: Separate into 4 Stems via RTX 4080 ONNX GPU Ensemble (Kim_Vocal_2 + Inst_HQ_3 + Ozone 12 BSRNN)
         let [vocals_stem, drums_stem, bass_stem, other_stem] =
-            Self::separate_4stems_uvr5_ensemble(mix_frames);
+            Self::separate_4stems_uvr5_ensemble_with_sr(mix_frames, config.sample_rate.as_u32());
 
         // Step 3: Build the 502-Track Stem Mastering MixerEngine
         let target_sr = config.sample_rate.as_f64();
@@ -922,12 +935,32 @@ impl OfflineRenderEngine {
         Ok(res)
     }
 
-    /// Separates a stereo mix into `[Vocals, Drums, Bass, Other]` using the UVR5 3-Model Spectral
-    /// Ensemble (`HTDemucs4 + Mdx23cSeparator + CascadedASPPNet` combined via `SpectralEnsembler`).
+    /// Separates a stereo mix into `[Vocals, Drums, Bass, Other]` using the RTX 4080 ONNX GPU
+    /// 3-Model Studio Ensemble (`Kim_Vocal_2` + `UVR-MDX-NET-Inst_HQ_3` + `Ozone 12 BSRNN`),
+    /// automatically falling back to pure-Rust spectral engines when ONNX runtime is absent.
     pub fn separate_4stems_uvr5_ensemble(mix: &[StereoFrame]) -> [Vec<StereoFrame>; 4] {
+        Self::separate_4stems_uvr5_ensemble_with_sr(mix, 48_000)
+    }
+
+    pub fn separate_4stems_uvr5_ensemble_with_sr(
+        mix: &[StereoFrame],
+        sample_rate_hz: u32,
+    ) -> [Vec<StereoFrame>; 4] {
         let len = mix.len();
         if len == 0 {
             return [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        }
+
+        let gpu_cfg = ai_uvr5_stem_engine::GpuStemEnsembleConfig {
+            phase_denoise_strength: 0.25,
+            ..Default::default()
+        };
+        if let Ok(gpu_out) = ai_uvr5_stem_engine::run_global_gpu_stem_ensemble(
+            mix,
+            sample_rate_hz.clamp(8_000, 384_000),
+            &gpu_cfg,
+        ) {
+            return [gpu_out.vocals, gpu_out.drums, gpu_out.bass, gpu_out.other];
         }
 
         let demucs = HTDemucs4::new(512, 128, 16, 4, 2);

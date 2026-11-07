@@ -18,11 +18,13 @@ use daw_core_graph::{
     asio_planar_f32_to_int32_lsb, stereo_frames_to_wasapi_interleaved,
 };
 use daw_tauri_host::{
-    AudioStreamController, AutomationClipStateDto, DawAppState, OfflineRenderConfig,
-    OfflineRenderResult, Ozone12MasterConfigDto, PatcherCanvasUpdateDto, PianoRollPatternDto,
-    PlaylistClipDto, ProQ4BandUpdateDto, ProQ4GlobalUpdateDto, Soothe3ScBandUpdateDto,
-    Soothe3UpdateDto, Uvr5SeparationRequestDto, Uvr5SeparationResultDto,
-    ZeroCopyBinaryTelemetryStreamer,
+    AudioStreamController, AutomationClipStateDto, DawAppState, GpuAcceleratorStatus,
+    NativeLoadedAudioDto, OfflineRenderConfig, OfflineRenderResult, Ozone12MasterConfigDto,
+    PatcherCanvasUpdateDto, PianoRollPatternDto, PlaylistClipDto, ProQ4BandUpdateDto,
+    ProQ4GlobalUpdateDto, Soothe3ScBandUpdateDto, Soothe3UpdateDto, Uvr5SeparationRequestDto,
+    Uvr5SeparationResultDto, ZeroCopyBinaryTelemetryStreamer, decode_audio_file_native,
+    encode_exact_sr_pcm16_wav_bytes, pick_audio_file_dialog_native, pick_directory_dialog_native,
+    resample_stereo_frames,
 };
 use parking_lot::Mutex;
 use tauri::{RunEvent, State};
@@ -33,6 +35,8 @@ struct SharedDawController {
     mixer_engine: Arc<Mutex<Box<MixerEngine>>>,
     custom_audio_pcm: Arc<Mutex<Vec<StereoFrame>>>,
     custom_audio_sr: Arc<Mutex<u32>>,
+    custom_audio_path: Arc<Mutex<Option<PathBuf>>>,
+    custom_audio_wav_cache: Arc<Mutex<Vec<u8>>>,
     custom_audio_active: AtomicBool,
     uvr5_stem_wavs: Arc<Mutex<[Vec<u8>; 4]>>,
 }
@@ -196,6 +200,185 @@ fn build_demo_harmonic_stem() -> Vec<StereoFrame> {
     demo_stem
 }
 
+#[allow(clippy::too_many_arguments)]
+fn load_decoded_audio_into_engine(
+    path: &std::path::Path,
+    mixer_engine: &Arc<Mutex<Box<MixerEngine>>>,
+    custom_audio_pcm: &Arc<Mutex<Vec<StereoFrame>>>,
+    custom_audio_sr: &Arc<Mutex<u32>>,
+    custom_audio_path: &Arc<Mutex<Option<PathBuf>>>,
+    custom_audio_wav_cache: &Arc<Mutex<Vec<u8>>>,
+    uvr5_stem_wavs: &Arc<Mutex<[Vec<u8>; 4]>>,
+) -> Result<NativeLoadedAudioDto, String> {
+    let decoded = decode_audio_file_native(path)?;
+    let dto = decoded.to_dto();
+    let wav_bytes = encode_exact_sr_pcm16_wav_bytes(&decoded.frames, decoded.sample_rate_hz);
+
+    let dst_sr = {
+        let engine = mixer_engine.lock();
+        engine.slicer.sample_rate.max(8_000.0).round() as u32
+    };
+    let engine_frames = if decoded.sample_rate_hz == dst_sr {
+        decoded.frames.clone()
+    } else {
+        resample_stereo_frames(&decoded.frames, decoded.sample_rate_hz, dst_sr)
+    };
+
+    {
+        let mut engine = mixer_engine.lock();
+        engine
+            .replace_with_custom_audio_stem(engine_frames, true)
+            .map_err(|e| e.to_string())?;
+    }
+
+    *custom_audio_pcm.lock() = decoded.frames;
+    *custom_audio_sr.lock() = decoded.sample_rate_hz.max(8_000);
+    *custom_audio_path.lock() = Some(decoded.file_path);
+    *custom_audio_wav_cache.lock() = wav_bytes;
+    *uvr5_stem_wavs.lock() = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+
+    Ok(dto)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_pick_and_load_audio_native(
+    state: State<'_, SharedDawController>,
+    initial_dir: Option<String>,
+) -> Result<Option<NativeLoadedAudioDto>, String> {
+    let start_dir = initial_dir
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            state
+                .custom_audio_path
+                .lock()
+                .as_ref()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        });
+    let mixer_engine = Arc::clone(&state.mixer_engine);
+    let custom_audio_pcm = Arc::clone(&state.custom_audio_pcm);
+    let custom_audio_sr = Arc::clone(&state.custom_audio_sr);
+    let custom_audio_path = Arc::clone(&state.custom_audio_path);
+    let custom_audio_wav_cache = Arc::clone(&state.custom_audio_wav_cache);
+    let uvr5_stem_wavs = Arc::clone(&state.uvr5_stem_wavs);
+
+    let loaded = tauri::async_runtime::spawn_blocking(
+        move || -> Result<Option<NativeLoadedAudioDto>, String> {
+            let Some(picked_path) = pick_audio_file_dialog_native(start_dir.as_deref()) else {
+                return Ok(None);
+            };
+            let dto = load_decoded_audio_into_engine(
+                &picked_path,
+                &mixer_engine,
+                &custom_audio_pcm,
+                &custom_audio_sr,
+                &custom_audio_path,
+                &custom_audio_wav_cache,
+                &uvr5_stem_wavs,
+            )?;
+            Ok(Some(dto))
+        },
+    )
+    .await
+    .map_err(|e| format!("Native audio picker worker join error: {e}"))??;
+
+    if loaded.is_some() {
+        state.custom_audio_active.store(true, Ordering::SeqCst);
+    }
+    Ok(loaded)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_load_audio_from_path_native(
+    state: State<'_, SharedDawController>,
+    file_path: String,
+) -> Result<NativeLoadedAudioDto, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("file_path must not be empty".to_string());
+    }
+    let path = PathBuf::from(trimmed);
+    let mixer_engine = Arc::clone(&state.mixer_engine);
+    let custom_audio_pcm = Arc::clone(&state.custom_audio_pcm);
+    let custom_audio_sr = Arc::clone(&state.custom_audio_sr);
+    let custom_audio_path = Arc::clone(&state.custom_audio_path);
+    let custom_audio_wav_cache = Arc::clone(&state.custom_audio_wav_cache);
+    let uvr5_stem_wavs = Arc::clone(&state.uvr5_stem_wavs);
+
+    let dto = tauri::async_runtime::spawn_blocking(move || {
+        load_decoded_audio_into_engine(
+            &path,
+            &mixer_engine,
+            &custom_audio_pcm,
+            &custom_audio_sr,
+            &custom_audio_path,
+            &custom_audio_wav_cache,
+            &uvr5_stem_wavs,
+        )
+    })
+    .await
+    .map_err(|e| format!("Native audio path loader join error: {e}"))??;
+
+    state.custom_audio_active.store(true, Ordering::SeqCst);
+    Ok(dto)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_fetch_loaded_custom_audio_wav(
+    state: State<'_, SharedDawController>,
+) -> Result<tauri::ipc::Response, String> {
+    {
+        let cached = state.custom_audio_wav_cache.lock();
+        if !cached.is_empty() {
+            return Ok(tauri::ipc::Response::new(cached.clone()));
+        }
+    }
+    let pcm = state.custom_audio_pcm.lock();
+    if pcm.is_empty() {
+        return Err("No custom audio file is currently loaded".to_string());
+    }
+    let sr = (*state.custom_audio_sr.lock()).max(8_000);
+    let encoded = encode_exact_sr_pcm16_wav_bytes(&pcm, sr);
+    *state.custom_audio_wav_cache.lock() = encoded.clone();
+    Ok(tauri::ipc::Response::new(encoded))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_pick_directory_native(
+    state: State<'_, SharedDawController>,
+    title: Option<String>,
+    initial_dir: Option<String>,
+) -> Result<Option<String>, String> {
+    let start_dir = initial_dir
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            state
+                .custom_audio_path
+                .lock()
+                .as_ref()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        });
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        let dialog_title = title
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("Chọn thư mục xuất file — ToneForge Studio");
+        pick_directory_dialog_native(dialog_title, start_dir.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Native directory picker join error: {e}"))?;
+
+    Ok(picked.map(|p| p.display().to_string()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_query_gpu_accelerator_status() -> Result<GpuAcceleratorStatus, String> {
+    tauri::async_runtime::spawn_blocking(daw_tauri_host::cmd_query_gpu_accelerator_status)
+        .await
+        .map_err(|e| format!("GPU status probe join error: {e}"))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn cmd_begin_custom_audio_upload(
     state: State<'_, SharedDawController>,
@@ -207,6 +390,8 @@ fn cmd_begin_custom_audio_upload(
     pcm.clear();
     pcm.reserve(total_frames.min(48_000 * 60 * 25)); // reserve up to 25 minutes safely
     *state.custom_audio_sr.lock() = sample_rate.max(8_000);
+    *state.custom_audio_path.lock() = None;
+    state.custom_audio_wav_cache.lock().clear();
     *state.uvr5_stem_wavs.lock() = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     Ok(())
 }
@@ -228,7 +413,7 @@ fn cmd_append_custom_audio_chunk(
 
 #[tauri::command(rename_all = "camelCase")]
 fn cmd_finalize_custom_audio_upload(state: State<'_, SharedDawController>) -> Result<usize, String> {
-    let src_sr = (*state.custom_audio_sr.lock()).max(8_000) as f64;
+    let src_sr = (*state.custom_audio_sr.lock()).max(8_000);
     let raw_frames = {
         let pcm = state.custom_audio_pcm.lock();
         if pcm.is_empty() {
@@ -237,35 +422,26 @@ fn cmd_finalize_custom_audio_upload(state: State<'_, SharedDawController>) -> Re
         pcm.clone()
     };
 
-    let mut engine = state.mixer_engine.lock();
-    let dst_sr = engine.slicer.sample_rate.max(8_000.0);
-    let engine_frames: Vec<StereoFrame> = if (src_sr - dst_sr).abs() < 1.0 {
+    let dst_sr = {
+        let engine = state.mixer_engine.lock();
+        engine.slicer.sample_rate.max(8_000.0).round() as u32
+    };
+    let engine_frames: Vec<StereoFrame> = if src_sr == dst_sr {
         raw_frames
     } else {
-        let ratio = src_sr / dst_sr;
-        let out_len = ((raw_frames.len() as f64) / ratio).round() as usize;
-        let mut resampled = Vec::with_capacity(out_len);
-        for i in 0..out_len {
-            let src_pos = (i as f64) * ratio;
-            let idx0 = (src_pos.floor() as usize).min(raw_frames.len() - 1);
-            let idx1 = (idx0 + 1).min(raw_frames.len() - 1);
-            let frac = (src_pos - idx0 as f64) as f32;
-            let f0 = raw_frames[idx0];
-            let f1 = raw_frames[idx1];
-            resampled.push([
-                f0[0] + frac * (f1[0] - f0[0]),
-                f0[1] + frac * (f1[1] - f0[1]),
-            ]);
-        }
+        let resampled = resample_stereo_frames(&raw_frames, src_sr, dst_sr);
         *state.custom_audio_pcm.lock() = resampled.clone();
-        *state.custom_audio_sr.lock() = dst_sr as u32;
+        *state.custom_audio_sr.lock() = dst_sr;
         resampled
     };
 
     let total_len = engine_frames.len();
-    engine
-        .replace_with_custom_audio_stem(engine_frames, true)
-        .map_err(|e| e.to_string())?;
+    {
+        let mut engine = state.mixer_engine.lock();
+        engine
+            .replace_with_custom_audio_stem(engine_frames, true)
+            .map_err(|e| e.to_string())?;
+    }
     state.custom_audio_active.store(true, Ordering::SeqCst);
     Ok(total_len)
 }
@@ -296,9 +472,34 @@ async fn cmd_run_uvr5_separation(
     state: State<'_, SharedDawController>,
     req: Uvr5SeparationRequestDto,
 ) -> Result<Uvr5SeparationResultDto, String> {
-    let mix_frames = state.custom_audio_pcm.lock().clone();
-    let sr = (*state.custom_audio_sr.lock()).max(44_100);
-    let req_cloned = req.clone();
+    let loaded_path = state.custom_audio_path.lock().clone();
+    let mut req_cloned = req.clone();
+    let req_path = PathBuf::from(req_cloned.audio_path.trim());
+    let req_is_real_file = !req_cloned.audio_path.trim().is_empty() && req_path.is_file();
+
+    let (mix_frames, sr) = if req_is_real_file {
+        let matches_loaded = loaded_path
+            .as_ref()
+            .map(|lp| lp == &req_path)
+            .unwrap_or(false);
+        if matches_loaded {
+            (
+                state.custom_audio_pcm.lock().clone(),
+                (*state.custom_audio_sr.lock()).clamp(8_000, 384_000),
+            )
+        } else {
+            // Decode directly from `req_cloned.audio_path` inside `execute_uvr5_separation_dsp`
+            (Vec::new(), 48_000)
+        }
+    } else {
+        if let Some(lp) = &loaded_path {
+            req_cloned.audio_path = lp.display().to_string();
+        }
+        (
+            state.custom_audio_pcm.lock().clone(),
+            (*state.custom_audio_sr.lock()).clamp(8_000, 384_000),
+        )
+    };
 
     let (result_dto, stems, wav_buffers) = tauri::async_runtime::spawn_blocking(move || {
         daw_tauri_host::execute_uvr5_separation_dsp(&mix_frames, sr, &req_cloned)
@@ -312,16 +513,27 @@ async fn cmd_run_uvr5_separation(
     }
 
     if req.bounce_to_mixer {
+        let engine_sr = {
+            let engine = state.mixer_engine.lock();
+            engine.slicer.sample_rate.max(8_000.0)
+        };
+        let dst_sr_hz = engine_sr.round() as u32;
+        let src_sr_hz = result_dto.sample_rate_hz.max(8_000);
+        let engine_stems: [Vec<StereoFrame>; 4] = if src_sr_hz == dst_sr_hz {
+            stems
+        } else {
+            std::array::from_fn(|idx| resample_stereo_frames(&stems[idx], src_sr_hz, dst_sr_hz))
+        };
+
         let mut engine = state.mixer_engine.lock();
-        let engine_sr = engine.slicer.sample_rate;
         let _ = AudioStreamController::bounce_stems_to_engine(
             &mut engine,
-            &stems,
+            &engine_stems,
             &[1, 2, 3, 4],
             engine_sr,
             256,
         )?;
-        if !state.custom_audio_pcm.lock().is_empty() {
+        if !state.custom_audio_pcm.lock().is_empty() || req_is_real_file {
             state.custom_audio_active.store(true, Ordering::SeqCst);
         }
     }
@@ -565,6 +777,10 @@ fn main() {
                 .expect("Failed to initialize ToneForge Mastering Template");
             let _ = ctrl.add_polyphonic_synth_channel(1, 1, 64);
 
+            // Activate Tier 1 CUDA 12 (RTX 4080) / Tier 2 DirectML background ONNX worker
+            // on Master Track 0 Slot 0 (`RealTimeBsrnnStemNode`) outside the RT audio thread.
+            let _ = ctrl.enable_realtime_onnx_gpu_bsrnn_on_master();
+
             // Seed rich harmonic test stems on Tracks 1..4 so Track 1 (Pro-Q 4 + Soothe3) and Master are live
             let demo_stem = build_demo_harmonic_stem();
             let _ = ctrl.bounce_stems_to_mixer_tracks(
@@ -636,6 +852,8 @@ fn main() {
             mixer_engine: shared_engine,
             custom_audio_pcm: Arc::new(Mutex::new(Vec::new())),
             custom_audio_sr: Arc::new(Mutex::new(48_000)),
+            custom_audio_path: Arc::new(Mutex::new(None)),
+            custom_audio_wav_cache: Arc::new(Mutex::new(Vec::new())),
             custom_audio_active: AtomicBool::new(false),
             uvr5_stem_wavs: Arc::new(Mutex::new([
                 Vec::new(),
@@ -658,6 +876,11 @@ fn main() {
             cmd_set_track_gain,
             cmd_route_mixer_track,
             cmd_set_internal_controller_norm,
+            cmd_pick_and_load_audio_native,
+            cmd_load_audio_from_path_native,
+            cmd_fetch_loaded_custom_audio_wav,
+            cmd_pick_directory_native,
+            cmd_query_gpu_accelerator_status,
             cmd_begin_custom_audio_upload,
             cmd_append_custom_audio_chunk,
             cmd_finalize_custom_audio_upload,

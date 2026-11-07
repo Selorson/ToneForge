@@ -58,8 +58,12 @@ impl<T: FftNum> RealToComplex<T> for R2CPlan<T> {
         self.len
     }
 
+    fn get_scratch_len(&self) -> usize {
+        self.len + self.fft.get_inplace_scratch_len()
+    }
+
     fn process(&self, input: &mut [T], output: &mut [Complex<T>]) -> Result<(), &'static str> {
-        let mut work = vec![Complex::new(T::zero(), T::zero()); self.len];
+        let mut work = vec![Complex::new(T::zero(), T::zero()); self.get_scratch_len()];
         self.process_with_scratch(input, output, &mut work)
     }
 
@@ -74,11 +78,11 @@ impl<T: FftNum> RealToComplex<T> for R2CPlan<T> {
         {
             return Err("invalid buffer length");
         }
-        let work = &mut scratch[..self.len];
+        let (work, fft_scratch) = scratch.split_at_mut(self.len);
         for (dst, &src) in work.iter_mut().zip(input.iter()) {
             *dst = Complex::new(src, T::zero());
         }
-        self.fft.process(work);
+        self.fft.process_with_scratch(work, fft_scratch);
         output.copy_from_slice(&work[..self.complex_len()]);
         Ok(())
     }
@@ -102,8 +106,12 @@ impl<T: FftNum> ComplexToReal<T> for C2RPlan<T> {
         self.len
     }
 
+    fn get_scratch_len(&self) -> usize {
+        self.len + self.ifft.get_inplace_scratch_len()
+    }
+
     fn process(&self, input: &mut [Complex<T>], output: &mut [T]) -> Result<(), &'static str> {
-        let mut work = vec![Complex::new(T::zero(), T::zero()); self.len];
+        let mut work = vec![Complex::new(T::zero(), T::zero()); self.get_scratch_len()];
         self.process_with_scratch(input, output, &mut work)
     }
 
@@ -120,14 +128,15 @@ impl<T: FftNum> ComplexToReal<T> for C2RPlan<T> {
         }
         let n = self.len;
         let half = n / 2;
-        let work = &mut scratch[..n];
+        let mirror_limit = (n + 1) / 2;
+        let (work, fft_scratch) = scratch.split_at_mut(n);
         for k in 0..=half {
             work[k] = input[k];
-            if k > 0 && k < half {
+            if k > 0 && k < mirror_limit {
                 work[n - k] = Complex::new(input[k].re, -input[k].im);
             }
         }
-        self.ifft.process(work);
+        self.ifft.process_with_scratch(work, fft_scratch);
         for (dst, src) in output.iter_mut().zip(work.iter()) {
             *dst = src.re;
         }

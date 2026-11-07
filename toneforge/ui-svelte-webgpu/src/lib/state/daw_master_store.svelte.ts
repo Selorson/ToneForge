@@ -206,10 +206,12 @@ export class DawTelemetryView {
   activeStemMode = $state(0);
 
   // Real-Time WebAudio Speaker Output & Custom Audio File Picker State
+  readonly isDesktopTauri = isTauriEnvironment();
   speakerVolumePct = $state(85);
   speakerMuted = $state(false);
   audioSourceMode = $state<AudioSourceMode>('pianoRoll');
   loadedAudioFileName = $state<string | null>(null);
+  loadedAudioFullPath = $state<string | null>(null);
   customAudioDurationFrames = $state(0);
   customAudioSampleRate = $state(48000);
   readonly speakerEngine = new RealtimeSpeakerEngine();
@@ -346,6 +348,9 @@ export class DawTelemetryView {
   uvr5SelectedModelProfile = $state('Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)');
   uvr5ModelSpecSummary = $state('n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035');
   uvr5AudioPath = $state('F:/Mixes/ToneForge_Master_Session.wav');
+  uvr5OutputDir = $state('');
+  gpuAcceleratorBadge = $state('⚡ GPU ONNX Runtime • Probing...');
+  gpuAcceleratorDetail = $state('3-Tier ONNX Accelerator: CUDA 12 → DirectML → CPU');
   uvr5EnsembleMode = $state<'MAX_SPEC' | 'MIN_SPEC' | 'AVERAGE' | 'MEDIAN' | 'WEIGHTED'>('WEIGHTED');
   uvr5ModelWeights = $state<[number, number, number]>([0.45, 0.35, 0.20]); // [MDX23C, HTDemucs4, VR-ASPP]
   uvr5EnableDenoise2Pass = $state(true);
@@ -1144,9 +1149,138 @@ export class DawTelemetryView {
     this.speakerEngine.syncDspChain(this);
   }
 
+  async refreshGpuAcceleratorStatus(): Promise<void> {
+    if (!isTauriEnvironment()) {
+      this.gpuAcceleratorBadge = 'Browser Preview • Pure-Rust DSP';
+      this.gpuAcceleratorDetail = 'Run ToneForge_Studio.exe for RTX 4080 CUDA 12 Acceleration';
+      return;
+    }
+    try {
+      const res = await invoke<any>('cmd_query_gpu_accelerator_status');
+      if (!res) return;
+      const tier = String(res.tier ?? res.active_tier ?? '');
+      const provider = String(res.provider_name ?? 'ONNX');
+      const dev = String(res.device_name ?? 'GPU');
+      const shortDev = dev.replace(/^NVIDIA\s+GeForce\s+/i, '');
+      const vramGb =
+        typeof res.vram_mib === 'number' && res.vram_mib > 0
+          ? ` ${Math.round(res.vram_mib / 1024)}GB`
+          : '';
+      if (tier === 'CudaTensorCore' || provider === 'CUDAExecutionProvider') {
+        this.gpuAcceleratorBadge = `⚡ CUDA 12 • ${shortDev}${vramGb}`;
+        this.gpuAcceleratorDetail = `${provider} • ${dev} (${res.vram_mib} MiB VRAM • CUDA Driver ${res.cuda_driver_version} • ${res.preloaded_dll_count} DLLs)`;
+      } else if (tier === 'DirectMlDx12' || provider === 'DmlExecutionProvider') {
+        this.gpuAcceleratorBadge = `⚡ DirectML DX12 • ${shortDev}`;
+        this.gpuAcceleratorDetail = `${provider} • ${dev}`;
+      } else if (tier === 'CpuOrt') {
+        this.gpuAcceleratorBadge = 'ONNX CPU Execution';
+        this.gpuAcceleratorDetail = `${provider} (${res.diagnostic_note ?? 'CPU mode'})`;
+      } else {
+        this.gpuAcceleratorBadge = 'Pure-Rust Spectral DSP';
+        this.gpuAcceleratorDetail = String(res.diagnostic_note ?? 'GPU runtime unavailable');
+      }
+    } catch {
+      // Ignore if command is unavailable in preview mode
+    }
+  }
+
+  private async applyNativeLoadedAudioDto(dto: any): Promise<void> {
+    this.audioSourceMode = 'customFile';
+    this.loadedAudioFileName = String(dto.file_name ?? 'Audio');
+    this.loadedAudioFullPath = String(dto.file_path ?? dto.file_name ?? '');
+    this.uvr5AudioPath = this.loadedAudioFullPath;
+    if (dto.parent_dir) {
+      this.uvr5OutputDir = String(dto.parent_dir);
+      this.renderOutputDir = String(dto.parent_dir);
+    }
+    const cleanStem = this.loadedAudioFileName.replace(/\.[^.]+$/, '').trim();
+    if (cleanStem) {
+      this.renderFilePrefix = `${cleanStem}_Master`;
+    }
+    this.customAudioDurationFrames = Number(dto.total_frames ?? 0);
+    this.customAudioSampleRate = Number(dto.sample_rate_hz ?? 48000);
+    this.uvr5SeparatedStems = [];
+    this.syncDspToSpeakerEngine();
+
+    const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
+      'cmd_fetch_loaded_custom_audio_wav'
+    );
+    const wavAb = toArrayBuffer(rawWav);
+    if (wavAb && wavAb.byteLength > 44) {
+      await this.speakerEngine.loadCustomAudioArrayBuffer(wavAb, this);
+    }
+    await this.setTransport(true, this.tempoBpm);
+  }
+
+  async openNativeAudioFilePicker(): Promise<boolean> {
+    if (!isTauriEnvironment()) return false;
+    try {
+      const dto = await invoke<any>('cmd_pick_and_load_audio_native', {
+        initialDir: this.uvr5OutputDir.trim() || null,
+      });
+      if (!dto) return false;
+      await this.applyNativeLoadedAudioDto(dto);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async loadAudioFromPathNative(filePath: string): Promise<boolean> {
+    if (!isTauriEnvironment() || !filePath.trim()) return false;
+    try {
+      const dto = await invoke<any>('cmd_load_audio_from_path_native', {
+        filePath: filePath.trim(),
+      });
+      if (!dto) return false;
+      await this.applyNativeLoadedAudioDto(dto);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async pickUvr5OutputDirectory(): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      const picked = await invoke<string | null>('cmd_pick_directory_native', {
+        title: 'Chọn thư mục xuất 4 file Stem (.wav) — ToneForge UVR5 Studio',
+        initialDir: this.uvr5OutputDir.trim() || null,
+      });
+      if (picked) {
+        this.uvr5OutputDir = picked;
+      }
+    } catch {
+      // Ignore dialog cancellation / preview mode
+    }
+  }
+
+  async pickRenderOutputDirectory(): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      const picked = await invoke<string | null>('cmd_pick_directory_native', {
+        title: 'Chọn thư mục xuất file Master (.wav) — ToneForge Offline Render',
+        initialDir: this.renderOutputDir.trim() || null,
+      });
+      if (picked) {
+        this.renderOutputDir = picked;
+      }
+    } catch {
+      // Ignore dialog cancellation / preview mode
+    }
+  }
+
   async loadUserAudioFile(file: File): Promise<void> {
+    // If Tauri provides an underlying filesystem path on the File object, prefer zero-JSON native Symphonia decoding
+    const maybeNativePath = (file as File & { path?: string }).path;
+    if (isTauriEnvironment() && typeof maybeNativePath === 'string' && maybeNativePath.trim().length > 0) {
+      const ok = await this.loadAudioFromPathNative(maybeNativePath);
+      if (ok) return;
+    }
+
     this.audioSourceMode = 'customFile';
     this.loadedAudioFileName = file.name;
+    this.loadedAudioFullPath = null;
     this.uvr5AudioPath = file.name;
     this.uvr5SeparatedStems = [];
     this.syncDspToSpeakerEngine();
@@ -1696,6 +1830,7 @@ export class DawTelemetryView {
         const res = await invoke<any>('cmd_run_uvr5_separation', {
           req: {
             audio_path: this.uvr5AudioPath,
+            output_dir: this.uvr5OutputDir.trim() ? this.uvr5OutputDir.trim() : null,
             model_profile: this.uvr5SelectedModelProfile,
             ensemble_mode: this.uvr5EnsembleMode,
             weights: this.uvr5ModelWeights,
@@ -1711,6 +1846,9 @@ export class DawTelemetryView {
           this.uvr5SeparatedStems = stemList;
         } else if (Array.isArray(res)) {
           this.uvr5SeparatedStems = res;
+        }
+        if (typeof res?.output_directory === 'string' && res.output_directory.trim().length > 0) {
+          this.uvr5OutputDir = res.output_directory;
         }
         if (typeof res?.separated_frames === 'number' && res.separated_frames > 0) {
           this.customAudioDurationFrames = res.separated_frames;
@@ -2665,7 +2803,9 @@ export class DawTelemetryView {
       try {
         const res = await invoke<any>('cmd_load_uvr5_model_profile', { profileQuery });
         if (res) {
-          this.uvr5ModelSpecSummary = `n_fft=${res.n_fft} • dim_f=${res.dim_f} • dim_t=${res.dim_t} • hop=${res.hop_length} • comp=${res.compensate} (${res.primary_stem})`;
+          const rawDimT = Number(res.dim_t ?? 8);
+          const dimTFrames = rawDimT > 0 && rawDimT <= 16 ? 1 << rawDimT : rawDimT;
+          this.uvr5ModelSpecSummary = `n_fft=${res.n_fft} • dim_f=${res.dim_f} • dim_t=${dimTFrames} • hop=${res.hop_length} • comp=${res.compensate} (${res.primary_stem})`;
           if (Array.isArray(res.ensemble_weights) && res.ensemble_weights.length === 3) {
             this.uvr5ModelWeights = [
               res.ensemble_weights[0],
@@ -2680,25 +2820,25 @@ export class DawTelemetryView {
       }
     }
     if (profileQuery.includes('8KFFT')) {
-      this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035 (MDX23C Full-Band)';
+      this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=256 • hop=1024 • comp=1.035 (MDX23C Full-Band)';
       this.uvr5ModelWeights = [0.80, 0.15, 0.05];
     } else if (profileQuery.includes('Inst_HQ_3')) {
-      this.uvr5ModelSpecSummary = 'n_fft=6144 • dim_f=3072 • dim_t=8 • hop=1024 • comp=1.035 (Instrumental)';
+      this.uvr5ModelSpecSummary = 'n_fft=6144 • dim_f=3072 • dim_t=256 • hop=1024 • comp=1.022 (Instrumental)';
       this.uvr5ModelWeights = [0.75, 0.15, 0.10];
     } else if (profileQuery.includes('Kim_Vocal_2')) {
-      this.uvr5ModelSpecSummary = 'n_fft=7680 • dim_f=3072 • dim_t=8 • hop=1024 • comp=1.080 (Vocals)';
+      this.uvr5ModelSpecSummary = 'n_fft=7680 • dim_f=3072 • dim_t=256 • hop=1024 • comp=1.009 (Vocals)';
       this.uvr5ModelWeights = [0.78, 0.12, 0.10];
     } else if (profileQuery.includes('Karaoke')) {
-      this.uvr5ModelSpecSummary = 'n_fft=7680 • dim_f=2048 • dim_t=8 • hop=1024 • comp=1.035 (Vocals / Karaoke)';
+      this.uvr5ModelSpecSummary = 'n_fft=7680 • dim_f=2048 • dim_t=256 • hop=1024 • comp=1.035 (Vocals / Karaoke)';
       this.uvr5ModelWeights = [0.75, 0.15, 0.10];
     } else if (profileQuery.includes('HTDemucs')) {
-      this.uvr5ModelSpecSummary = 'n_fft=4096 • dim_f=2048 • dim_t=8 • hop=1024 • 4-Stem Cross-Transformer';
+      this.uvr5ModelSpecSummary = 'n_fft=4096 • dim_f=2048 • dim_t=256 • hop=1024 • 4-Stem Cross-Transformer';
       this.uvr5ModelWeights = [0.15, 0.75, 0.10];
     } else if (profileQuery.includes('VR-Arch') || profileQuery.includes('4band_v3')) {
-      this.uvr5ModelSpecSummary = 'n_fft=1536 • dim_f=768 • dim_t=6 • hop=512 • Cascaded ASPP ResNet';
+      this.uvr5ModelSpecSummary = 'n_fft=1536 • dim_f=768 • dim_t=64 • hop=512 • Cascaded ASPP ResNet';
       this.uvr5ModelWeights = [0.15, 0.15, 0.70];
     } else {
-      this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035 (3-Model Ensemble)';
+      this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=256 • hop=1024 • comp=1.035 (3-Model Ensemble)';
       this.uvr5ModelWeights = [0.45, 0.35, 0.20];
     }
   }

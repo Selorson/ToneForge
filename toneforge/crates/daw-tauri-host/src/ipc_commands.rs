@@ -711,6 +711,8 @@ pub fn cmd_poll_binary_telemetry_frame(
 pub struct Uvr5SeparationRequestDto {
     #[serde(alias = "audioPath")]
     pub audio_path: String,
+    #[serde(alias = "outputDir", default)]
+    pub output_dir: Option<String>,
     #[serde(
         alias = "model_profile",
         alias = "modelProfile",
@@ -761,6 +763,7 @@ impl Default for Uvr5SeparationRequestDto {
     fn default() -> Self {
         Self {
             audio_path: String::new(),
+            output_dir: None,
             model_hash: default_uvr5_model_hash(),
             ensemble_mode: default_ensemble_mode(),
             weights: default_ensemble_weights(),
@@ -806,11 +809,24 @@ pub struct Uvr5SeparationResultDto {
     pub separated_frames: usize,
     pub sample_rate_hz: u32,
     pub bounced_mixer_tracks: [u16; 4],
+    #[serde(default)]
+    pub gpu_provider: String,
+    #[serde(default)]
+    pub output_directory: String,
 }
 
-/// Executes full-length UVR5 3-Model Spectral Ensemble separation (`Mdx23cSeparator` + `HTDemucs4` +
-/// `CascadedASPPNet` + `SpectralEnsembler`) across 100% of `mix_frames`, encodes 4 `.wav` buffers
-/// (`[Vocals, Drums, Bass, InvInst/Other]`), writes them to disk, and returns `(Uvr5SeparationResultDto, [Vec<StereoFrame>; 4], [Vec<u8>; 4])`.
+/// Queries the active 3-Tier ONNX Runtime GPU Accelerator status (`CUDA 12` -> `DirectML` -> `CPU`).
+pub fn cmd_query_gpu_accelerator_status() -> ai_uvr5_stem_engine::GpuAcceleratorStatus {
+    ai_uvr5_stem_engine::GpuRuntimeManager::global()
+        .status()
+        .clone()
+}
+
+/// Executes full-length UVR5 3-Model GPU Spectral Ensemble separation (`Kim_Vocal_2.onnx` +
+/// `UVR-MDX-NET-Inst_HQ_3.onnx` + `Ozone 12 BSRNN 4-Stem .onnx` on RTX 4080 `CUDAExecutionProvider`,
+/// with automatic pure-Rust fallback if ONNX runtime is absent) across 100% of `mix_frames`
+/// (or decoded directly from `req.audio_path` via `symphonia`), writes 4 `.wav` stems to
+/// `req.output_dir` or `audio_path.parent()`, and returns `(Uvr5SeparationResultDto, [Vec<StereoFrame>; 4], [Vec<u8>; 4])`.
 pub fn execute_uvr5_separation_dsp(
     mix_frames: &[daw_core_graph::StereoFrame],
     sample_rate_hz: u32,
@@ -826,16 +842,38 @@ pub fn execute_uvr5_separation_dsp(
     if req.audio_path.trim().is_empty() {
         return Err("audio_path must not be empty".to_string());
     }
-    let path = PathBuf::from(&req.audio_path);
-    let stem_dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty() && p.exists())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir().join("toneforge_uvr5_stems"));
-    let _ = std::fs::create_dir_all(&stem_dir);
+    let path = PathBuf::from(req.audio_path.trim());
+
+    // Priority 1: Explicit user-selected `output_dir` in Khu 6
+    // Priority 2: Parent folder of `audio_path` on real disk (eliminating `%TEMP%`!)
+    // Priority 3: Fallback `%TEMP%/toneforge_uvr5_stems` ONLY for bare browser-only filenames
+    let stem_dir = if let Some(explicit_dir) = req
+        .output_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        PathBuf::from(explicit_dir)
+    } else if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if parent.exists() || path.is_absolute() {
+            parent.to_path_buf()
+        } else {
+            std::env::temp_dir().join("toneforge_uvr5_stems")
+        }
+    } else {
+        std::env::temp_dir().join("toneforge_uvr5_stems")
+    };
+    std::fs::create_dir_all(&stem_dir).map_err(|e| {
+        format!(
+            "Failed to create UVR5 output directory '{}': {e}",
+            stem_dir.display()
+        )
+    })?;
+
     let stem_prefix = path
         .file_stem()
         .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
         .unwrap_or("audio");
     let safe_model_tag = sanitize_model_tag_for_filename(&req.model_hash);
 
@@ -847,52 +885,99 @@ pub fn execute_uvr5_separation_dsp(
         _ => ai_uvr5_stem_engine::SpectralEnsembleMode::Weighted,
     };
 
-    let source_mix: Vec<daw_core_graph::StereoFrame> = if !mix_frames.is_empty() {
-        mix_frames.to_vec()
-    } else if path.exists() {
-        crate::offline_render_engine::read_wav_file(&path)
-            .map(|d| d.frames)
-            .unwrap_or_else(|_| make_fallback_reference_mix(4096, sample_rate_hz as f64))
-    } else {
-        make_fallback_reference_mix(4096, sample_rate_hz as f64)
-    };
+    let (source_mix, effective_sr): (Vec<daw_core_graph::StereoFrame>, u32) =
+        if !mix_frames.is_empty() {
+            (mix_frames.to_vec(), sample_rate_hz.clamp(8_000, 384_000))
+        } else if path.is_file() {
+            let decoded = crate::native_audio_decoder::decode_audio_file_native(&path)?;
+            (decoded.frames, decoded.sample_rate_hz.clamp(8_000, 384_000))
+        } else {
+            let fallback_sr = sample_rate_hz.clamp(8_000, 384_000);
+            (
+                make_fallback_reference_mix(4096, fallback_sr as f64),
+                fallback_sr,
+            )
+        };
 
     let len = source_mix.len();
-    let mut mdx = ai_uvr5_stem_engine::Mdx23cSeparator::new(512, 128, 1024, 0.5);
-    mdx.enable_denoise_2pass = req.enable_denoise_2pass;
-    let (mdx_vocals, _mdx_inst) = mdx.separate_offline(&source_mix);
-
-    let demucs = ai_uvr5_stem_engine::HTDemucs4::new(512, 128, 16, 4, 2);
-    let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
-        demucs.separate_4stems(&source_mix);
-
-    let vr = ai_uvr5_stem_engine::CascadedASPPNet::new(
-        512,
-        128,
-        req.vr_aggressiveness.clamp(-1.0, 1.0),
-    );
-    let (vr_vocals, _vr_inst) = vr.separate_vocal_instrumental(&source_mix);
-
-    let mut ensembler = ai_uvr5_stem_engine::SpectralEnsembler::new(512, 128, mode);
-    ensembler.phase_denoise_strength = req.phase_denoise_strength.clamp(0.0, 1.0);
-    let vocals = ensembler.ensemble_waveforms(
-        &[&mdx_vocals, &demucs_vocals, &vr_vocals],
-        Some(&req.weights),
-    );
-
-    let inv_inst =
-        ai_uvr5_stem_engine::SpectralEnsembler::invert_audio_waveform(&source_mix, &vocals);
-    let mut drums = vec![[0.0f32; 2]; len];
-    let mut bass = vec![[0.0f32; 2]; len];
-    for i in 0..len {
-        drums[i] = [demucs_drums[i][0] * 0.75, demucs_drums[i][1] * 0.75];
-        bass[i] = [demucs_bass[i][0] * 0.75, demucs_bass[i][1] * 0.75];
-    }
-    let fourth_stem = if req.invert_instrumental {
-        inv_inst
-    } else {
-        demucs_other
+    let gpu_cfg = ai_uvr5_stem_engine::GpuStemEnsembleConfig {
+        model_selection: ai_uvr5_stem_engine::GpuStemModelSelection::from_model_tag(
+            &req.model_hash,
+        ),
+        ensemble_mode: mode,
+        weights: req.weights,
+        enable_denoise_2pass: req.enable_denoise_2pass,
+        vr_aggressiveness: req.vr_aggressiveness.clamp(-1.0, 1.0),
+        phase_denoise_strength: req.phase_denoise_strength.clamp(0.0, 1.0),
+        invert_instrumental: req.invert_instrumental,
     };
+
+    let (vocals, drums, bass, fourth_stem, gpu_provider) =
+        match ai_uvr5_stem_engine::run_global_gpu_stem_ensemble(&source_mix, effective_sr, &gpu_cfg)
+        {
+            Ok(gpu_out) => {
+                let fourth = if req.invert_instrumental {
+                    gpu_out.inv_instrumental
+                } else {
+                    gpu_out.other
+                };
+                (
+                    gpu_out.vocals,
+                    gpu_out.drums,
+                    gpu_out.bass,
+                    fourth,
+                    gpu_out.active_tier.provider_name().to_string(),
+                )
+            }
+            Err(_) => {
+                // Tier 3B deterministic fallback when ONNX runtime / models are absent
+                let mut mdx = ai_uvr5_stem_engine::Mdx23cSeparator::new(512, 128, 1024, 0.5);
+                mdx.enable_denoise_2pass = req.enable_denoise_2pass;
+                let (mdx_vocals, _mdx_inst) = mdx.separate_offline(&source_mix);
+
+                let demucs = ai_uvr5_stem_engine::HTDemucs4::new(512, 128, 16, 4, 2);
+                let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
+                    demucs.separate_4stems(&source_mix);
+
+                let vr = ai_uvr5_stem_engine::CascadedASPPNet::new(
+                    512,
+                    128,
+                    req.vr_aggressiveness.clamp(-1.0, 1.0),
+                );
+                let (vr_vocals, _vr_inst) = vr.separate_vocal_instrumental(&source_mix);
+
+                let mut ensembler = ai_uvr5_stem_engine::SpectralEnsembler::new(512, 128, mode);
+                ensembler.phase_denoise_strength = req.phase_denoise_strength.clamp(0.0, 1.0);
+                let voc = ensembler.ensemble_waveforms(
+                    &[&mdx_vocals, &demucs_vocals, &vr_vocals],
+                    Some(&req.weights),
+                );
+
+                let inv_inst = ai_uvr5_stem_engine::SpectralEnsembler::invert_audio_waveform(
+                    &source_mix,
+                    &voc,
+                );
+                let mut drm = vec![[0.0f32; 2]; len];
+                let mut bas = vec![[0.0f32; 2]; len];
+                for i in 0..len {
+                    drm[i] = [demucs_drums[i][0] * 0.75, demucs_drums[i][1] * 0.75];
+                    bas[i] = [demucs_bass[i][0] * 0.75, demucs_bass[i][1] * 0.75];
+                }
+                let fourth = if req.invert_instrumental {
+                    inv_inst
+                } else {
+                    demucs_other
+                };
+                (
+                    voc,
+                    drm,
+                    bas,
+                    fourth,
+                    "PureRustSpectralFallback".to_string(),
+                )
+            }
+        };
+
     let fourth_suffix = if req.invert_instrumental {
         "inv_inst"
     } else {
@@ -901,7 +986,6 @@ pub fn execute_uvr5_separation_dsp(
 
     let stems = [vocals, drums, bass, fourth_stem];
     let stem_suffixes = ["vocals", "drums", "bass", fourth_suffix];
-    let render_sr = crate::offline_render_engine::RenderSampleRate::from_hz(sample_rate_hz.max(44_100));
 
     let mut stem_paths = Vec::with_capacity(4);
     let mut stem_peak_dbfs = [-144.0f32; 4];
@@ -919,17 +1003,22 @@ pub fn execute_uvr5_separation_dsp(
         stem_peak_dbfs[s] = (20.0 * peak.max(1e-7).log10() * 10.0).round() / 10.0;
         stem_rms_dbfs[s] = (20.0 * rms.max(1e-7).log10() * 10.0).round() / 10.0;
 
-        let wav_bytes = crate::offline_render_engine::encode_wav_bytes(
+        let wav_bytes = crate::offline_render_engine::encode_wav_bytes_exact_sr(
             &stems[s],
-            render_sr,
-            crate::offline_render_engine::WavBitDepth::Pcm16MbitPlus,
+            effective_sr,
+            crate::offline_render_engine::WavBitDepth::Pcm24MbitPlus,
             true,
         );
         let file_path = stem_dir.join(format!(
             "{}_{}_{}.wav",
             stem_prefix, safe_model_tag, stem_suffixes[s]
         ));
-        let _ = std::fs::write(&file_path, &wav_bytes);
+        std::fs::write(&file_path, &wav_bytes).map_err(|e| {
+            format!(
+                "Failed writing separated WAV '{}': {e}",
+                file_path.display()
+            )
+        })?;
         stem_paths.push(file_path.display().to_string());
         wav_buffers[s] = wav_bytes;
     }
@@ -940,12 +1029,14 @@ pub fn execute_uvr5_separation_dsp(
             stem_peak_dbfs,
             stem_rms_dbfs,
             separated_frames: len,
-            sample_rate_hz: render_sr.as_u32(),
+            sample_rate_hz: effective_sr,
             bounced_mixer_tracks: if req.bounce_to_mixer {
                 [1, 2, 3, 4]
             } else {
                 [0, 0, 0, 0]
             },
+            gpu_provider,
+            output_directory: stem_dir.display().to_string(),
         },
         stems,
         wav_buffers,

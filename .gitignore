@@ -21,3 +21,21 @@ Thumbs.db
 *.tmp
 *.bak
 *.log
+
+# Self-contained GPU Runtime DLLs & Pip wheel staging (> 100 MB, provisioned via scripts/setup_gpu_and_models.ps1)
+**/gpu_runtime/
+**/scripts/.staging/
+**/.staging*/
+**/*.whl
+**/*.ort
+
+# Large downloaded UVR5 neural model weights (> 50 MB)
+toneforge/assets/uvr5/models/**/*.onnx
+toneforge/assets/uvr5/models/**/*.ckpt
+toneforge/assets/uvr5/models/**/*.pth
+toneforge/assets/uvr5/models/**/*.th
+
+# Explicitly keep small bundled Ozone 12 ONNX models (< 7 MB) tracked
+!toneforge/assets/ozone12/models/*.onnx
+!toneforge/assets/models/bsrnn_realtime/*.onnx
+
