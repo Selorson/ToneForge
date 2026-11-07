@@ -158,7 +158,7 @@
       A · App này là gì & Khác gì FL Studio gốc
     </button>
     <button type="button" class="toc-link" onclick={() => scrollToSection('phan-b')}>
-      B · Từ điển âm thanh cho người mới (18 từ)
+      B · Từ điển âm thanh cho người mới (20 từ)
     </button>
 
     <div class="grp">C · Giải thích từng màn hình & từng nút</div>
@@ -205,7 +205,7 @@
       <div class="cover">
         <h1>📖 Cẩm nang sử dụng ToneForge Studio (Dành cho người mới hoàn toàn)</h1>
         <p>
-          Phiên bản <b>1.0.0</b> · Kiến trúc <b>120 FPS WebGPU + 128 KB Zero-Copy SHM</b> · Viết riêng cho người <b>chưa từng dùng FL Studio hay bất kỳ plugin phòng thu nào trước đây</b>.
+          Phiên bản <b>1.1.0</b> · Kiến trúc <b>120 FPS WebGPU + 128 KB Zero-Copy SHM + AI GPU (CUDA 12 / DirectML)</b> · Viết riêng cho người <b>chưa từng dùng FL Studio hay bất kỳ plugin phòng thu nào trước đây</b>.
         </p>
         <p>
           Giải thích bằng tiếng Việt đời thường cho từng màn hình, từng nút bấm, từng con số và từng thanh trượt. Không cần biết nhạc lý, không cần tự nối dây âm thanh — làm theo đúng các bước 1-2-3 trong cẩm nang này là ra sản phẩm.
@@ -291,7 +291,7 @@
           <tr data-filter>
             <td><b>Tách lời và nhạc nền (Stems)</b></td>
             <td>Phải mở phần mềm UVR5 riêng ở ngoài, tải từng model, chờ xuất 4 file ra ổ cứng rồi mở FL Studio kéo thả từng file vào.</td>
-            <td>Bấm 1 nút <b>Run Ensemble & Bounce to Mixer 1..4</b> ngay trong tab <b>UVR5 Stem Studio</b> — 3 AI cùng chạy và tự nạp thẳng 4 nhánh vào Kênh 1..4 của bàn trộn.</td>
+            <td>Bấm <b>📂 Chọn file</b> chọn bài hát → bấm <b>Run Ensemble & Bounce to Mixer 1..4</b> ngay trong tab <b>UVR5 Stem Studio</b> — AI chạy thẳng trên Card đồ họa GPU (<code>CUDA 12</code>), lưu 4 file <code>.wav</code> ngay cạnh bài gốc và tự nạp vào Kênh 1..4.</td>
           </tr>
           <tr data-filter>
             <td><b>Soạn trống và giai điệu</b></td>
@@ -434,6 +434,18 @@
             <b>Hai chỉ số kiểm định độ khỏe của bản nhạc (trong Offline Render):</b> <code>Crest Factor (dB)</code> đo độ nảy giữa tiếng to nhất và độ to trung bình (khoảng <code>6 dB – 12 dB</code> là nhạc vừa khỏe vừa thoáng). <code>Phase Correlation</code> đo độ đồng điệu giữa loa Trái và Phải (từ <code>+0.3 đến +1.0</code> là chuẩn đẹp; nếu tụt xuống số âm <code>-0.5</code> là hai loa đang triệt tiêu nhau).
           </dd>
         </div>
+        <div class="term" id="tu-cuda" data-filter>
+          <dt>CUDA 12 / DirectML (ONNX GPU)</dt>
+          <dd>
+            <b>Tăng tốc trí tuệ nhân tạo bằng Card đồ họa rời (ví dụ NVIDIA RTX 4080).</b> Thay vì bắt vi xử lý CPU tính toán nặng nề, ToneForge tự động đưa các mô hình AI tách nhạc (<code>Kim_Vocal_2</code>, <code>Inst_HQ_3</code>) và cân chỉnh giọng hát (<code>Ozone 12 BSRNN</code>) sang hàng nghìn nhân GPU qua <code>CUDA 12 + cuDNN 9</code> (hoặc <code>DirectML</code>), giúp xử lý cả bài hát dài chỉ trong chớp mắt.
+          </dd>
+        </div>
+        <div class="term" id="tu-solomute" data-filter>
+          <dt>Solo (S) · Mute (M) · Bypass (BYP)</dt>
+          <dd>
+            <b>Ba nút kiểm tra nhanh trong phòng thu:</b> Bấm <code>S (Solo)</code> là <i>"chỉ phát một mình nhánh này, tạm tắt các nhánh còn lại"</i>; bấm <code>M (Mute)</code> là <i>"tắt tiếng riêng nhánh này"</i>; còn bấm <code>BYP (Bypass)</code> trên hộp hiệu ứng sơ đồ Patcher là <i>"tạm cho âm thanh đi vòng qua không áp hiệu ứng đó"</i> để so sánh trước và sau khi chỉnh.
+          </dd>
+        </div>
       </dl>
     </section>
 
@@ -479,11 +491,11 @@
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">2</span></td>
-              <td class="c-label"><b>📂 Mở nhạc từ máy (.wav/.mp3) · 🔊 Loa · ⏮ Reset</b><br /><span class="ty">chọn file, âm lượng & tua đầu bài</span></td>
-              <td><b>📂 Mở nhạc từ máy:</b> Chọn bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>) trên PC để nghe qua Loa & chỉnh trực tiếp bằng Pro-Q 4, Soothe3, Ozone 12 (bấm <code>🎹 Chuyển về Nhạc mẫu Piano Roll</code> để quay lại nhịp 808/909).<br /><b>🔊 Loa (0–100%):</b> Chỉnh âm lượng loa hoặc bấm để tắt tiếng (Mute).<br /><b>⏮ Reset:</b> Đưa kim phát nhạc về đầu bài (Sample 0, PPQ 0).</td>
+              <td class="c-label"><b>📂 Mở nhạc từ máy (.wav/.mp3/.flac) · 🎹 Chuyển về Nhạc mẫu Piano Roll · 🔊 Loa · ⏮ Reset</b><br /><span class="ty">chọn file, chuyển nguồn, âm lượng & tua đầu bài</span></td>
+              <td><b>📂 Mở nhạc từ máy:</b> Mở hộp thoại Windows chọn bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>, <code>.m4a</code>, <code>.aac</code>, <code>.aiff</code> — đọc trọn vẹn 100% độ dài bài nhạc) để nghe qua Loa & chỉnh trực tiếp bằng Pro-Q 4, Soothe3, Ozone 12. Khi muốn quay lại nghe nhịp 808/909 nội bộ, bấm <b>🎹 Chuyển về Nhạc mẫu Piano Roll</b>.<br /><b>🔊 Loa (0–100%):</b> Chỉnh âm lượng loa hoặc bấm để tắt tiếng (Mute).<br /><b>⏮ Reset:</b> Đưa kim phát nhạc về đầu bài (Sample 0, PPQ 0).</td>
               <td>Loa mặc định <code>85%</code>.</td>
               <td><span class="none">—</span></td>
-              <td>Đổi bài hát khác, chuyển về Piano Roll hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td>
+              <td>Đổi bài hát khác, bấm <code>🎹 Chuyển về Nhạc mẫu Piano Roll</code> hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">3</span></td>
@@ -516,6 +528,14 @@
               <td>LUFS-I khoảng <code>-14.0</code> đến <code>-9.0</code>; TP từ <code>-1.00 dBTP</code> trở xuống.</td>
               <td>Khi <code>TP</code> hiện số dương (<code>+0.5 dBTP</code>): âm thanh đang chạm trần, nên giảm nhẹ Gain ở Ozone 12.</td>
               <td><span class="none">—</span></td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">7</span></td>
+              <td class="c-label"><b>⚡ CUDA 12 • RTX 4080 (Huy hiệu GPU)</b><br /><span class="ty">nhãn trạng thái AI phần cứng</span></td>
+              <td>Báo hiệu ToneForge đã tự động kích hoạt nhân Card đồ họa rời (ưu tiên <code>CUDA 12 + cuDNN 9</code>, dự phòng <code>DirectML</code>) để chạy các mô hình AI của <b>Ozone 12</b> và <b>UVR5</b>. Di chuột vào huy hiệu để xem chi tiết cấu hình card.</td>
+              <td>Hiện <code>⚡ CUDA 12</code> (trên card NVIDIA) hoặc <code>DirectML</code>.</td>
+              <td><span class="none">—</span></td>
+              <td>Hoàn toàn tự động nhận diện khi mở ứng dụng.</td>
             </tr>
           </tbody>
         </table>
@@ -748,7 +768,7 @@
             <tr data-filter>
               <td class="c-n"><span class="n">1</span></td>
               <td class="c-label"><b>✨ AI Master Assistant (Auto-Match)</b><br /><span class="ty">nút bấm AI</span></td>
-              <td><b>Bấm thì:</b> Trí tuệ nhân tạo phân tích toàn bộ tín hiệu âm thanh hiện tại và tự động chỉnh mọi thông số của Ozone 12 về mức cân bằng hoàn hảo nhất cho phát hành nhạc số.</td>
+              <td><b>Bấm thì:</b> Trí tuệ nhân tạo đo trực tiếp phổ âm thanh thật (<code>mel80</code>) của chính bài nhạc đang phát và tự động chỉnh mọi thông số Ozone 12 khớp với đường cong thể loại mục tiêu, đạt chuẩn phát hành nhạc số.</td>
               <td>Bấm 1 lần sau khi đã chọn thể loại nhạc.</td>
               <td><span class="none">—</span></td>
               <td>Có thể bấm lại hoặc chọn lại Preset bất kỳ lúc nào.</td>
@@ -787,11 +807,11 @@
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">6</span></td>
-              <td class="c-label"><b>120ms Real-Time BSRNN Master Rebalance (Vocals, Drums, Bass, Other)</b><br /><span class="ty">khung số 4 (Đặc biệt)</span></td>
-              <td><b>Kéo thanh trượt (-12 dB đến +12 dB):</b> Tăng hoặc giảm trực tiếp âm lượng của riêng <code>Vocals</code> (Giọng hát), <code>Drums</code> (Trống), <code>Bass</code> hoặc <code>Other</code> ngay trong bản nhạc tổng đang chạy!</td>
-              <td><code>0.0 dB</code> (mặc định); chỉnh từ <code>-3.0 dB</code> đến <code>+3.5 dB</code> là đẹp và tự nhiên nhất.</td>
-              <td><span class="none">—</span></td>
-              <td>Kéo thanh trượt về <code>0.0 dB</code> là trở lại nguyên bản.</td>
+              <td class="c-label"><b>120ms Real-Time BSRNN Master Rebalance (Vocals, Drums, Bass, Other + Nút S / M)</b><br /><span class="ty">khung số 4 (AI GPU .onnx)</span></td>
+              <td><b>Kéo thanh trượt (-12 dB đến +12 dB):</b> Tăng/giảm trực tiếp âm lượng của riêng <code>Vocals</code>, <code>Drums</code>, <code>Bass</code> hoặc <code>Other</code> ngay trong bản nhạc tổng!<br /><b>Nút S (Solo):</b> Chỉ nghe riêng nhánh đó để kiểm tra chi tiết.<br /><b>Nút M (Mute):</b> Tắt riêng nhánh đó (ví dụ tắt <code>Vocals</code> để nghe riêng nhạc nền).</td>
+              <td><code>0.0 dB</code> (mặc định), tắt <code>S/M</code>; chỉnh <code>-3.0 dB</code> đến <code>+3.5 dB</code> là đẹp nhất.</td>
+              <td>Nếu đang bật sáng nút <code>S</code> hoặc <code>M</code> mà quên tắt thì bài nhạc sẽ bị khuyết mất lời hát hoặc nhạc cụ!</td>
+              <td>Bấm lại nút <code>S</code> / <code>M</code> cho hết sáng và kéo thanh trượt về <code>0.0 dB</code>.</td>
             </tr>
           </tbody>
         </table>
@@ -852,6 +872,22 @@
               <td>Nếu tự nối Kênh A sang Kênh B rồi lại nối Kênh B ngược về Kênh A (vòng lặp hú), hệ thống sẽ tự động chặn để bảo vệ loa của anh.</td>
               <td>Chỉnh lại <code>Send to Track: 0</code> rồi bấm <code>Apply Route</code>.</td>
             </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-label"><b>Modular Patcher Sub-DAG: Kéo-thả hộp Node · ON / BYP · ⚡ Auto-Layout (Sugiyama)</b><br /><span class="ty">sơ đồ hiệu ứng tương tác</span></td>
+              <td><b>Kéo chuột hộp Node:</b> Dời vị trí hộp trên bảng sơ đồ. <b>Nút ON / BYP (hoặc nhấp đúp):</b> Bật/tắt (Bypass) riêng hiệu ứng đó và tự động tính lại độ trễ đường găng (<code>Critical-Path APDC</code>). <b>⚡ Auto-Layout (Sugiyama):</b> Tự căn hàng các hộp thẳng đẹp theo từng tầng.</td>
+              <td>Các hộp hiện chữ <code>ON</code> màu xanh ngọc.</td>
+              <td>Nếu bấm chuyển hộp đầu vào (<code>HostIn</code>) hoặc đầu ra (<code>Ozone12 / HostOut</code>) sang <code>BYP</code> màu đỏ thì đường tiếng qua sơ đồ đó sẽ tạm ngắt.</td>
+              <td>Bấm lại chữ <code>BYP</code> trên hộp để bật về <code>ON</code>, hoặc bấm <code>⚡ Auto-Layout (Sugiyama)</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">6</span></td>
+              <td class="c-label"><b>Dây cáp (Cord) · Trọng số cáp · + Nối Dây · ✕ Xóa Dây</b><br /><span class="ty">thanh điều khiển cáp Patcher</span></td>
+              <td><b>Bấm chọn dây cáp trên sơ đồ:</b> Kéo thanh <code>Trọng số cáp (×0.00..×2.00)</code> (hoặc bấm nhanh <code>0.00× / 0.707× / 1.00×</code>) để chỉnh lượng âm thanh đi qua dây đó; bấm <code>✕ Xóa Dây</code> để gỡ dây. Chọn <code>Từ → Đến</code> rồi bấm <code>+ Nối Dây</code> để tạo nhánh nối song song mới.</td>
+              <td>Trọng số chuẩn <code>×1.00</code> (nối thẳng) hoặc <code>×0.707</code> (chia đôi công suất).</td>
+              <td>Nếu kéo <code>Trọng số cáp</code> của tất cả dây chính về <code>0.00×</code> hoặc xóa hết dây nối tới đầu ra thì âm thanh sẽ không đi qua nhánh đó nữa.</td>
+              <td>Chọn lại mức <code>1.00×</code> hoặc chọn <code>Từ → Đến</code> rồi bấm <code>+ Nối Dây</code> lại ngay.</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -881,22 +917,30 @@
           <tbody>
             <tr data-filter>
               <td class="c-n"><span class="n">1</span></td>
-              <td class="c-label"><b>UVR5 Model Profile (143 Real Configs)</b><br /><span class="ty">danh sách chọn</span></td>
-              <td><b>Chọn thì:</b> Chọn mô hình AI tách nhạc: <code>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</code> (mạnh nhất, kết hợp cả 3 AI), <code>Kim_Vocal_2</code> (chuyên lấy giọng hát sạch), <code>UVR-MDX-NET Karaoke / Vocals</code> (chuyên làm nhạc beat Karaoke)...</td>
+              <td class="c-label"><b>UVR5 Model Profile (143 Real Configs) & Huy hiệu ⚡ CUDA 12</b><br /><span class="ty">danh sách chọn & nhãn GPU</span></td>
+              <td><b>Chọn thì:</b> Chọn mô hình AI tách nhạc chạy trực tiếp trên GPU: <code>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</code> (kết hợp cả 3 AI), <code>Kim_Vocal_2</code> (chuyên lấy giọng hát sạch phòng thu), <code>UVR-MDX-Net-Inst_HQ_3</code> / <code>UVR-MDX-NET Karaoke</code> (chuyên lấy nhạc beat sạch lời)...</td>
               <td><code>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</code></td>
               <td><span class="none">—</span></td>
               <td>Đổi cấu hình và bấm chạy lại bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">2</span></td>
-              <td class="c-label"><b>Run Ensemble & Bounce to Mixer 1..4</b><br /><span class="ty">nút hành động chính</span></td>
-              <td><b>Bấm thì:</b> Chạy quy trình tách 4 nhánh âm thanh và tự động nạp 4 nhánh vừa tách vào Insert Track 1 (Vocals), Track 2 (Drums), Track 3 (Bass) và Track 4 (Other).</td>
+              <td class="c-label"><b>📂 Chọn file (Input File) & 📁 Chọn thư mục (Output Folder)</b><br /><span class="ty">chọn bài hát đầu vào & nơi lưu 4 file .wav</span></td>
+              <td><b>📂 Chọn file (hoặc 📂 Mở nhạc từ máy):</b> Mở hộp thoại Windows chọn bài hát cần tách mà không cần tự gõ đường dẫn.<br /><b>📁 Chọn thư mục (Output Folder):</b> Chọn thư mục lưu 4 file <code>.wav</code> sau khi tách (nếu để trống, máy tự động xuất ngay tại thư mục chứa bài hát gốc).</td>
+              <td>Mặc định tự lưu cùng thư mục bài hát gốc.</td>
               <td><span class="none">—</span></td>
-              <td><span class="none">—</span></td>
-              <td>Không làm hỏng file nhạc gốc; chỉ tạo ra 4 nhánh mới trên bàn trộn.</td>
+              <td>Bấm chọn lại file hoặc thư mục khác bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>Run Ensemble & Bounce to Mixer 1..4</b><br /><span class="ty">nút hành động chính</span></td>
+              <td><b>Bấm thì:</b> Chạy quy trình tách 4 nhánh âm thanh bằng GPU, lưu 4 file <code>.wav</code> thật vào thư mục đích và tự động nạp vào Insert Track 1 (Vocals), Track 2 (Drums), Track 3 (Bass) và Track 4 (Other).</td>
+              <td><span class="none">—</span></td>
+              <td><span class="none">—</span></td>
+              <td>Không làm hỏng file nhạc gốc; chỉ tạo ra 4 file nhánh mới.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
               <td class="c-label"><b>Ensemble Algorithm & 3 hộp kiểm khử nhiễu</b><br /><span class="ty">khung bên trái</span></td>
               <td>Chọn cách gộp phổ của 3 AI (<code>WEIGHTED</code>, <code>MAX_SPEC</code>, <code>MIN_SPEC</code>, <code>AVERAGE</code>, <code>MEDIAN</code>) và bật khử nhiễu 2 lượt (<code>2-Pass Denoising</code>) + đảo pha triệt tiêu phần dư (<code>Phase-Inverted Residual</code>).</td>
               <td><code>WEIGHTED</code> + bật cả 3 hộp kiểm.</td>
@@ -904,7 +948,7 @@
               <td>Tích hoặc bỏ tích lại bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-n"><span class="n">5</span></td>
               <td class="c-label"><b>Multi-Model Weights (MDX23C / HTDemucs v4 / VR ASPP)</b><br /><span class="ty">khung ở giữa</span></td>
               <td>Chỉnh tỷ lệ đóng góp của từng mô hình AI: tăng <code>MDX23C</code> nếu ưu tiên độ sạch giọng hát; tăng <code>HTDemucs v4</code> nếu ưu tiên tiếng trống và bass chắc khỏe.</td>
               <td>MDX23C <code>0.45</code> · HTDemucs <code>0.35</code> · VR ASPP <code>0.20</code>.</td>
@@ -941,13 +985,21 @@
             <tr data-filter>
               <td class="c-n"><span class="n">1</span></td>
               <td class="c-label"><b>Export Studio WAV & Analyze LUFS/dBTP</b><br /><span class="ty">nút xuất file chính</span></td>
-              <td><b>Bấm thì:</b> Chạy kết xuất âm thanh chất lượng tối đa (Offline Bounce), áp lớp mịn MBIT+ Dither, cắt bỏ phần trễ đầu file (APDC Trim) và cập nhật bảng báo cáo kiểm định ngay bên dưới.</td>
+              <td><b>Bấm thì:</b> Kết xuất trọn vẹn 100% thời lượng bài nhạc ở chất lượng tối đa (Offline Bounce đồng nhất tuyệt đối với lúc nghe thật), áp lớp mịn MBIT+ Dither, cắt trễ đầu file (APDC Trim) và hiện báo cáo kiểm định ngay bên dưới.</td>
               <td><span class="none">—</span></td>
               <td><span class="none">—</span></td>
               <td>Bấm xuất lại bao nhiêu lần tùy thích sau mỗi lần tinh chỉnh.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">2</span></td>
+              <td class="c-label"><b>Output Directory & Nút 📁 Chọn thư mục</b><br /><span class="ty">chọn thư mục lưu file xuất</span></td>
+              <td>Hiển thị đường dẫn thư mục nơi file <code>.wav</code> hoàn chỉnh sẽ được lưu ra (tự động điền sẵn thư mục của bài hát gốc đang mở). Bấm <b>📁 Chọn thư mục</b> để mở cửa sổ Windows chọn bất kỳ thư mục nào anh muốn.</td>
+              <td>Thư mục bài hát gốc hoặc thư mục do anh chọn.</td>
+              <td><span class="none">—</span></td>
+              <td>Bấm <code>📁 Chọn thư mục</code> để đổi nơi lưu lúc nào cũng được.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">3</span></td>
               <td class="c-label"><b>Render Mode</b><br /><span class="ty">danh sách chọn</span></td>
               <td><code>Render Master</code>: Xuất 1 file bài nhạc hoàn chỉnh. <code>Split Mixer Tracks</code>: Xuất rời từng kênh trên bàn trộn thành từng file riêng. <code>UVR5 4-Stem Mastering</code>: Xuất bộ 4 file Stems đã qua xử lý sạch đẹp.</td>
               <td><code>Render Master (502-Track Sum + Ozone 12)</code></td>
@@ -955,7 +1007,7 @@
               <td>Đổi chế độ rồi bấm xuất lại.</td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">3</span></td>
+              <td class="c-n"><span class="n">4</span></td>
               <td class="c-label"><b>Bit Depth & Dither / Sample Rate</b><br /><span class="ty">2 danh sách chọn</span></td>
               <td>Chọn chuẩn file xuất: <code>24-Bit PCM + Ozone 12 MBIT+</code> (chuẩn vàng cho phát hành nhạc số và video), <code>16-Bit PCM</code> (chuẩn đĩa CD), hoặc <code>32-Bit IEEE Float</code> (dành cho lưu trữ gốc phòng thu). Tần số lấy mẫu <code>48.0 kHz</code> hoặc <code>44.1 kHz</code>.</td>
               <td><code>24-Bit PCM + MBIT+</code> ở <code>48.0 kHz</code>.</td>
@@ -963,7 +1015,7 @@
               <td>Đổi tùy chọn rồi bấm xuất lại.</td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-n"><span class="n">5</span></td>
               <td class="c-label"><b>Streaming Broadcast Compliance (Spotify / Apple Music / YouTube)</b><br /><span class="ty">3 thẻ kiểm định</span></td>
               <td>Hiển thị nhãn <b>PASS</b> (màu xanh lá) nếu bài nhạc nằm đúng chuẩn độ to và không vượt trần <code>-1.0 dBTP</code>; hoặc hiện <b>TRIM</b> (màu vàng kèm số dB bị giảm) nếu bài nhạc hơi to hơn chuẩn của nền tảng đó.</td>
               <td>Hiện chữ <code>PASS</code> màu xanh lá.</td>
@@ -990,13 +1042,13 @@
           <h3>🎤 Kịch bản 1: Muốn tách lời bài hát để lấy nhạc Beat hát Karaoke (hoặc lấy riêng giọng hát)</h3>
           <ol class="steps">
             <li>
-              <b>Bước 1:</b> Bấm vào tab <b>UVR5 Stem Studio</b> trên thanh điều khiển. Ở ô <code>UVR5 Model Profile</code>, chọn <b>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</b> (hoặc chọn <b>UVR-MDX-NET Karaoke / Vocals</b>).
+              <b>Bước 1:</b> Bấm vào tab <b>UVR5 Stem Studio</b> trên thanh điều khiển. Ở ô <code>UVR5 Model Profile</code>, chọn <b>Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)</b> (hoặc <b>Kim_Vocal_2</b> / <b>UVR-MDX-Net-Inst_HQ_3</b>).
             </li>
             <li>
-              <b>Bước 2:</b> Nhập đường dẫn bài hát vào ô <code>Input File</code> rồi bấm nút màu xanh <b>Run Ensemble & Bounce to Mixer 1..4</b>. Máy sẽ tách bài hát thành 4 nhánh riêng biệt và đưa thẳng vào Kênh 1..4.
+              <b>Bước 2:</b> Bấm nút <b>📂 Chọn file</b> cạnh ô <code>Input File</code> để chọn bài hát trên máy, kiểm tra nơi lưu ở ô <code>Output Folder</code> (mặc định lưu ngay cạnh bài gốc hoặc bấm <b>📁 Chọn thư mục</b>), rồi bấm nút màu xanh <b>Run Ensemble & Bounce to Mixer 1..4</b>.
             </li>
             <li>
-              <b>Bước 3:</b> Nếu muốn xuất riêng 4 nhánh đó ra file <code>.wav</code>: chuyển sang tab <b>Offline Render & Bounce</b>, chọn <code>Render Mode: UVR5 4-Stem Mastering</code> rồi bấm <b>Export Studio WAV</b>! (Hoặc vào <b>502-Track Mixer</b> kéo thanh trượt của Kênh #1 Vocals xuống <code>0</code> để có ngay bản nhạc Beat Karaoke sạch lời).
+              <b>Bước 3:</b> GPU sẽ tách sẵn 4 file <code>.wav</code> vào đúng thư mục anh chọn và nạp thẳng vào Kênh 1..4! Muốn xuất bản Beat Karaoke đã chỉnh đẹp: vào <b>502-Track Mixer</b> kéo Kênh #1 Vocals xuống <code>0</code> (hoặc bấm nút <code>M</code> cạnh Vocals ở <b>Ozone 12</b>) rồi qua <b>Offline Render</b> bấm xuất file.
             </li>
           </ol>
           <button type="button" class="open-rack-btn noprint" onclick={() => jumpToTab('uvr5')}>
@@ -1009,10 +1061,10 @@
           <h3>🎚️ Kịch bản 2: Có một bài nhạc đã ghép sẵn nhưng tiếng Hát hơi nhỏ (hoặc tiếng Trống quá to), muốn chỉnh lại ngay</h3>
           <ol class="steps">
             <li>
-              <b>Bước 1:</b> Bấm vào tab <b>Ozone 12 Console</b> trên thanh điều khiển.
+              <b>Bước 1:</b> Bấm nút <b>📂 Mở nhạc từ máy (.wav/.mp3/.flac)</b> trên thanh trên cùng để mở bài hát, rồi chuyển sang tab <b>Ozone 12 Console</b>.
             </li>
             <li>
-              <b>Bước 2:</b> Nhìn vào khung thứ 4 bên tay phải có tên <b>120ms Real-Time BSRNN Master Rebalance</b> (gồm 4 thanh trượt: <code>Vocals</code>, <code>Drums</code>, <code>Bass</code>, <code>Other</code>).
+              <b>Bước 2:</b> Nhìn vào khung thứ 4 bên tay phải <b>120ms Real-Time BSRNN Master Rebalance</b> (có thể bấm thử nút <b>S</b> cạnh <code>Vocals</code> để nghe kiểm tra riêng giọng hát, kiểm tra xong bấm tắt <b>S</b>).
             </li>
             <li>
               <b>Bước 3:</b> Kéo thanh <b>Vocals</b> lên khoảng <code>+2.0 dB</code> đến <code>+3.5 dB</code> để giọng hát nổi bật hẳn lên trên nền nhạc (hoặc kéo thanh <b>Drums</b> xuống <code>-2.0 dB</code> nếu tiếng trống quá chát), sau đó qua tab <b>Offline Render & Bounce</b> bấm xuất file!
@@ -1050,7 +1102,7 @@
               <b>Bước 1:</b> Mở tab <b>Ozone 12 Console</b> → Chọn thể loại nhạc ở ô <code>Genre Target Curve</code> (ví dụ <code>Pop</code>, <code>EDM</code>, <code>LoFi</code>) rồi bấm nút màu xanh <b>✨ AI Master Assistant (Auto-Match)</b>.
             </li>
             <li>
-              <b>Bước 2:</b> Mở tab <b>Offline Render & Bounce</b> → Chọn <code>Bit Depth: 24-Bit PCM + Ozone 12 MBIT+ Noise-Shaping Dither</code> và giữ nguyên 2 dấu tích khử nhiễu/bù trễ.
+              <b>Bước 2:</b> Mở tab <b>Offline Render & Bounce</b> → Chọn <code>Bit Depth: 24-Bit PCM + Ozone 12 MBIT+ Noise-Shaping Dither</code>, kiểm tra nơi lưu ở ô <code>Output Directory</code> (hoặc bấm <b>📁 Chọn thư mục</b>) và giữ nguyên 2 dấu tích khử nhiễu/bù trễ.
             </li>
             <li>
               <b>Bước 3:</b> Bấm nút <b>Export Studio WAV & Analyze LUFS/dBTP</b>. Nhìn sang khung bên phải: thấy 3 thẻ <b>Spotify</b>, <b>Apple Music</b>, <b>YouTube</b> hiện chữ <b>PASS</b> màu xanh lá cây là file <code>.wav</code> của anh đã sẵn sàng đăng tải!
@@ -1080,12 +1132,12 @@
       </details>
 
       <details class="trouble" data-filter>
-        <summary>2. Sao tự nhiên bài nhạc nghe mỏng dính, toàn tiếng xì xào chói tai như đài radio bị hỏng?</summary>
+        <summary>2. Sao tự nhiên bài nhạc nghe mỏng dính như đài hỏng, hoặc mất hẳn giọng hát / mất tiếng nhạc nền?</summary>
         <p>
-          <b>Vì sao:</b> Anh đang bật nút <b>Delta Solo</b> (màu vàng) trong khu vực <b>oeksound Soothe3</b>. Chế độ này cố ý tắt nhạc chính và chỉ phát riêng "phần tần số xấu đang bị cắt bỏ" để kiểm tra.
+          <b>Vì sao:</b> Thường do anh đang bật chế độ nghe kiểm tra riêng: (1) nút <b>Delta Solo</b> (màu vàng) trong <b>Soothe3</b> chỉ phát phần rác bị cắt bỏ; hoặc (2) nút <b>S (Solo)</b> / <b>M (Mute)</b> trong khung <b>BSRNN Master Rebalance</b> của <b>Ozone 12</b> đang tắt bớt các nhánh còn lại; hoặc (3) hộp đầu vào/đầu ra trên sơ đồ <b>Patcher</b> đang để trạng thái <b>BYP</b>.
         </p>
         <p>
-          <b>Cách xử lý:</b> Mở khu vực <b>Soothe3 Spectral</b> → bấm vào nút <b>Delta Solo</b> ở góc phải trên để tắt màu vàng đi. Âm thanh đầy đặn sẽ lập tức quay trở lại.
+          <b>Cách xử lý:</b> Kiểm tra tắt nút <b>Delta Solo</b> ở Soothe3, tắt sáng các nút <b>S / M</b> ở góc phải Ozone 12, và đảm bảo các hộp trên sơ đồ Patcher đang bật <b>ON</b> màu xanh. Âm thanh đầy đặn sẽ lập tức quay trở lại!
         </p>
       </details>
 
@@ -1113,6 +1165,13 @@
         <summary>5. Tôi muốn in toàn bộ cuốn Cẩm nang này ra giấy hoặc lưu thành file PDF để đọc trên điện thoại được không?</summary>
         <p>
           <b>Cách làm:</b> Bấm ngay nút <b>🖨️ In / Lưu PDF</b> ở đầu cột mục lục bên trái (hoặc mở file <code>huong-dan-toneforge.html</code> trong thư mục phần mềm bằng bất kỳ trình duyệt nào rồi nhấn <code>Ctrl + P</code>). Giao diện đã được thiết kế sẵn chế độ in chuyên dụng: tự động chuyển sang nền trắng chữ đen sắc nét, ẩn các nút điều khiển thừa và căn chỉnh bảng biểu không bị cắt đôi trang giấy.
+        </p>
+      </details>
+
+      <details class="trouble" data-filter>
+        <summary>6. Làm sao biết phần mềm đã nhận diện và tận dụng Card đồ họa rời (như NVIDIA RTX 4080) của máy tôi chưa?</summary>
+        <p>
+          <b>Cách kiểm tra trong 1 giây:</b> Nhìn lên góc trên bên trái thanh điều khiển cạnh logo ToneForge (hoặc góc phải trên của mục <b>UVR5 Stem Studio</b>): nếu hiện huy hiệu màu xanh <b>⚡ CUDA 12 • RTX 4080 ...</b> (hoặc <b>DirectML</b>) nghĩa là toàn bộ các tác vụ AI tách lời bài hát và cân chỉnh giọng hát đang chạy thẳng trên nhân GPU tốc độ cao mà anh không cần tự cài thêm bộ công cụ lập trình nào cả.
         </p>
       </details>
     </section>

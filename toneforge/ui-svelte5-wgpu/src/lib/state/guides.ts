@@ -33,13 +33,13 @@ export const GUIDES: Record<string, Guide> = {
   unified: {
     title: 'Tổng quan quy trình 5 bước (Dành cho người chưa từng dùng FL Studio)',
     what:
-      'ToneForge Studio gom 5 phần mềm phòng thu phức tạp nhất thế giới (UVR5 tách nhạc, FL Studio 26 soạn nhạc/trộn âm, FabFilter Pro-Q 4 lọc tần số, Soothe3 khử chói và iZotope Ozone 12 nâng âm lượng AI) vào chung một màn hình duy nhất. Anh không cần tự nối dây hay cài từng plugin rời — mọi thứ đã được nối sẵn và có nút chọn Preset (cấu hình làm sẵn) chỉ việc bấm là nghe hay.',
+      'ToneForge Studio gom 5 phần mềm phòng thu phức tạp nhất thế giới (UVR5 tách nhạc, FL Studio 26 soạn nhạc/trộn âm, FabFilter Pro-Q 4 lọc tần số, Soothe3 khử chói và iZotope Ozone 12 nâng âm lượng AI) vào chung một màn hình duy nhất, đồng thời tự động tận dụng Card đồ họa rời (CUDA 12 / DirectML) để xử lý AI cực nhanh. Anh không cần tự nối dây hay cài từng plugin rời — mọi thứ đã được nối sẵn và có nút chọn Preset chỉ việc bấm là nghe hay.',
     steps: [
-      'Bấm nút "▶ Play" ở góc trên bên trái để phát âm thanh thật ra Loa máy tính (kèm sóng phổ nhấp nhô 120Hz). Bấm "⏸ Pause" để dừng hẳn nhạc và tắt đường sóng nhấp nhô (trên màn hình Pro-Q 4 sẽ chỉ còn lại đúng đường kẻ EQ màu vàng đứng yên).',
-      'Muốn đưa bài hát có sẵn trong máy vào nghe và chỉnh trực tiếp: bấm nút "📂 Mở nhạc từ máy (.wav/.mp3)" ngay trên thanh trên cùng (hoặc trong khung UVR5), chọn file nhạc trên ổ cứng — nhạc sẽ phát ra loa ngay lập tức qua bộ lọc Pro-Q 4, Soothe3 và Ozone 12!',
+      'Bấm nút "▶ Play" ở góc trên bên trái để phát âm thanh thật ra Loa máy tính (kèm sóng phổ nhấp nhô 120Hz). Bấm "⏸ Pause" để dừng hẳn nhạc và tắt đường sóng nhấp nhô (trên màn hình Pro-Q 4 sẽ chỉ còn lại đúng đường kẻ EQ màu vàng đứng yên). Huy hiệu "⚡ CUDA 12" cạnh tên app cho biết card đồ họa rời đang tăng tốc AI.',
+      'Muốn đưa bài hát có sẵn trong máy vào nghe và chỉnh trọn bài: bấm nút "📂 Mở nhạc từ máy (.wav/.mp3/.flac)" ngay trên thanh trên cùng (hỗ trợ .wav, .mp3, .flac, .ogg, .m4a, .aac, .aiff không giới hạn độ dài). Khi muốn quay lại nghe bộ trống mẫu nội bộ, bấm nút "🎹 Chuyển về Nhạc mẫu Piano Roll".',
       'Nếu muốn đổi giai điệu hoặc bộ trống/nhạc cụ: ở "Playlist & Piano Roll", chọn "FL26 Sample & Synth Kit" và "FL26 Piano Roll Score (.fsc)" (bấm vào từng nốt nhạc cũng sẽ kêu thử ngay cao độ nốt đó).',
       'Làm sạch và làm mượt tiếng bằng Preset có sẵn ở "Pro-Q 4" (kéo các chấm tròn 1..7 sẽ nghe tiếng nhạc đổi màu ngay tức thì) và "Soothe3" (chọn That Grammy balance preset).',
-      'Cuối cùng: bấm "✨ AI Master Assistant (Auto-Match)" ở khung "Ozone 12 Console" để AI tự cân chỉnh âm lượng chuẩn quốc tế, rồi bấm "Export Studio WAV" ở cuối trang để lấy file .wav hoàn chỉnh.',
+      'Cuối cùng: bấm "✨ AI Master Assistant (Auto-Match)" ở khung "Ozone 12 Console" để AI tự đo phổ bài nhạc và cân chỉnh âm lượng chuẩn quốc tế, rồi bấm "📁 Chọn thư mục" + "Export Studio WAV & Analyze LUFS/dBTP" ở cuối trang để lấy file .wav hoàn chỉnh.',
     ],
     gotcha:
       'Không cần chỉnh tay hàng chục thanh trượt cùng lúc! Người mới chỉ cần chọn đúng "Factory Preset" (cấu hình mẫu của hãng) ở mỗi khung là âm thanh đã đạt 90% chất lượng phòng thu chuyên nghiệp.',
@@ -112,7 +112,7 @@ export const GUIDES: Record<string, Guide> = {
       'Nhiều người mới bấm bật "Delta Solo" để nghe phần âm thanh rác bị cắt đi, rồi quên tắt nó nên tưởng bài nhạc bị hỏng hoặc nghe mỏng tang như radio cũ! Nhớ tắt "Delta Solo" sau khi kiểm tra xong.',
     next: {
       tab: 'mixer',
-      label: 'Khử chói xong → Sang Bước 4: Bàn trộn 502-Track Mixer & Hiệu ứng FL26',
+      label: 'Khử chói xong → Sang Bước 4: Bàn trộn 502-Track Mixer & Sơ đồ Patcher',
     },
     handbookAnchor: {
       sectionId: 'khu-soothe3',
@@ -121,17 +121,18 @@ export const GUIDES: Record<string, Guide> = {
   },
 
   mixer: {
-    title: 'Bàn trộn 502 kênh, Tự động bù trễ 5-Point APDC & Hiệu ứng FL26 (.fst)',
+    title: 'Bàn trộn 502 kênh, Sơ đồ kéo-thả Patcher & Hiệu ứng FL26 (.fst)',
     what:
-      'Đây là bàn trộn trung tâm (502-Track Mixer & Patcher) nơi mọi giọng hát, trống, bass và nhạc cụ hội tụ về trước khi ra loa. ToneForge tích hợp sẵn hệ thống "5-Point APDC" tự động căn chỉnh độ trễ của mọi hiệu ứng đến từng mẫu âm thanh (sample) để tiếng trống và nhạc không bao giờ bị lệch nhịp hay ngược pha (out of phase).',
+      'Đây là bàn trộn trung tâm (502-Track Mixer & Modular Patcher) nơi mọi giọng hát, trống, bass và nhạc cụ hội tụ về trước khi ra loa. ToneForge tích hợp hệ thống "5-Point APDC" tự động căn chỉnh độ trễ của mọi hiệu ứng và bảng sơ đồ dây nối Patcher trực quan có thể kéo-thả bằng chuột.',
     steps: [
       'Chọn nhóm kênh muốn xem bằng các nút "Tracks 0..31", "32..63"... ở góc phải trên. Kênh #0 là "Master" (kênh tổng của cả bài); các kênh #1..#4 mặc định nhận 4 nhánh âm thanh (Vocals, Drums, Bass, Other).',
       'Bấm vào một ô kênh (ví dụ Track #1) rồi kéo thanh trượt trong ô đó để tăng/giảm âm lượng riêng cho kênh đó. Nhìn chỉ số màu xanh (dB) để biết độ lớn và dòng chữ vàng (smp) để xem số mẫu trễ đã được bù tự động.',
-      'Ở khung bên trái phía dưới ("10 FX Insert Slots & Routing"): mở ô "FL26 Native FX Preset (.fst)" để nạp ngay hiệu ứng bản quyền của FL Studio 26 như "Maximus: Clear Master.fst" (Maximus Clear Master), "Emphasis: Pop (heavy).fst" (Emphasis Pop Heavy), "Fruity Soft Clipper.fst" (Fruity Soft Clipper), "Fruity Limiter: Ducking music behind voice.fst" hoặc "LuxeVerb: Shimmer Cathedral.fst".',
-      'Nếu muốn gửi âm thanh từ kênh đang chọn sang kênh khác (hoặc làm hiệu ứng nhạc nền tự nhỏ xuống khi có tiếng hát / tiếng trống đập): nhập số kênh vào "Send to Track", tích "Sidechain Only" nếu chỉ gửi tín hiệu kích hoạt, rồi bấm "Apply Route".',
+      'Ở khung "10 FX Insert Slots & Routing": mở ô "FL26 Native FX Preset (.fst)" để nạp ngay hiệu ứng bản quyền của FL Studio 26 như "Maximus: Clear Master.fst", "Emphasis: Pop (heavy).fst", "Fruity Soft Clipper.fst", "Fruity Limiter: Ducking music behind voice.fst" hoặc "LuxeVerb: Shimmer Cathedral.fst".',
+      'Nếu muốn gửi âm thanh từ kênh đang chọn sang kênh khác: nhập số kênh vào "Send to Track", tích "Sidechain Only" nếu chỉ gửi nhịp kích hoạt (nhạc tự nhỏ xuống nhường giọng hát), rồi bấm "Apply Route".',
+      'Ở bảng sơ đồ "Modular Patcher Sub-DAG" phía dưới: kéo-thả các hộp hiệu ứng bằng chuột để xếp bố cục (hoặc bấm "⚡ Auto-Layout (Sugiyama)" để tự căn hàng đẹp); bấm nhãn "ON / BYP" trên hộp để bật/tắt nhanh hiệu ứng; bấm vào sợi dây cáp để chỉnh "Trọng số cáp", bấm "✕ Xóa Dây" hoặc chọn "Từ → Đến" + "+ Nối Dây".',
     ],
     gotcha:
-      'Khi tích chọn "Sidechain Only" rồi bấm "Apply Route", âm thanh của kênh đó sẽ KHÔNG phát chồng lên kênh đích (tránh bị gấp đôi âm lượng) mà chỉ gửi nhịp đập sang để điều khiển bộ nén (như Fruity Limiter Ducking).',
+      'Khi tích chọn "Sidechain Only" rồi bấm "Apply Route", âm thanh kênh đó sẽ không phát chồng lên kênh đích mà chỉ gửi nhịp điều khiển. Ngoài ra trên sơ đồ Patcher, nhớ giữ hộp đầu vào (HostIn) và đầu ra (Ozone12/HostOut) ở trạng thái "ON" (không để "BYP") để luồng âm thanh đi xuyên suốt.',
     next: {
       tab: 'ozone12',
       label: 'Trộn kênh xong → Sang Bước 5: Hoàn thiện AI Mastering với Ozone 12',
@@ -143,17 +144,17 @@ export const GUIDES: Record<string, Guide> = {
   },
 
   ozone12: {
-    title: 'Bàn Mastering AI & Cân chỉnh lại Giọng hát / Trống thời gian thực (iZotope Ozone 12)',
+    title: 'Bàn Mastering AI & Cân chỉnh lại Giọng hát / Trống trên GPU (iZotope Ozone 12)',
     what:
-      'Mastering là bước "đánh bóng và nâng âm lượng cuối cùng" trước khi xuất bản để bài nhạc của anh nghe to, dày, ấm và đạt chuẩn âm lượng quốc tế như trên Spotify, Apple Music hay YouTube. Đặc biệt, công nghệ BSRNN 120ms ở góc phải cho phép anh vặn to tiếng Hát hoặc giảm tiếng Trống ngay cả trên một file nhạc đã ghép sẵn!',
+      'Mastering là bước "đánh bóng và nâng âm lượng cuối cùng" để bài nhạc nghe to, dày, ấm và đạt chuẩn quốc tế trên Spotify, Apple Music hay YouTube. Đặc biệt, khung BSRNN 120ms ở góc phải chạy mô hình AI .onnx trên GPU cho phép anh vặn to/nhỏ hoặc nghe riêng (Solo) / tắt riêng (Mute) từng phần Giọng hát, Trống, Bass ngay trên một bản nhạc đã ghép sẵn!',
     steps: [
-      'Cách dễ nhất (1 cú nhấp chuột): Bấm nút màu xanh "✨ AI Master Assistant (Auto-Match)". Trí tuệ nhân tạo sẽ tự động đo âm thanh và thiết lập toàn bộ bộ nâng âm lượng (IRC V), độ ấm bóng đèn (12AX7) và độ rộng không gian (Imager).',
-      'Hoặc chọn màu âm theo thể loại nhạc: Mở ô "Genre Target Curve (36 Real IZRESEMBED)" (chọn Pop, EDM, HipHop, LoFi, KPopJPop...) và ô "Global Mastering Preset (82 Real XML)" (như "Streaming Master (-14 LUFS)" hoặc "Modern Clarity").',
-      'Muốn giọng hát nổi bật hơn hoặc tiếng trống mạnh hơn ngay trong bản nhạc tổng: Nhìn vào khung thứ 4 bên phải "120ms Real-Time BSRNN Master Rebalance" → kéo thanh "Vocals" lên (+1.5 đến +3.0 dB) hoặc chỉnh "Drums", "Bass", "Other" theo ý thích.',
+      'Cách dễ nhất (1 cú nhấp chuột): Chọn thể loại nhạc ở ô "Genre Target Curve" rồi bấm nút màu xanh "✨ AI Master Assistant (Auto-Match)". AI sẽ đo phổ âm thanh thật của bài nhạc đang phát và tự động cân chỉnh bộ nâng âm lượng (IRC V), độ ấm bóng đèn (12AX7) và không gian Stereo (Imager).',
+      'Hoặc chọn sẵn màu âm tổng thể ở ô "Global Mastering Preset (82 Real XML)" (như "Streaming Master (-14 LUFS)" hoặc "Modern Clarity").',
+      'Ở khung thứ 4 bên phải "120ms Real-Time BSRNN Master Rebalance": kéo thanh "Vocals" lên (+1.5 đến +3.0 dB) để giọng ca sĩ nổi bật hơn, hoặc bấm nút "S" (Solo — chỉ nghe riêng nhánh đó) và nút "M" (Mute — tắt riêng nhánh đó, ví dụ tắt Vocals để nghe thử nhạc nền).',
       'Quan sát dãy số đo ở góc trên bên phải: "I: -14.0 LUFS" là độ to chuẩn cho Spotify/YouTube, và "TP L/R" (True Peak) nên luôn nằm từ -1.0 dBTP trở xuống để không bao giờ bị rè tiếng.',
     ],
     gotcha:
-      'Đừng kéo thanh "Gain" của IRC V Maximizer quá cao (trên +12 dB) nếu thấy chỉ số "IRC V GR" (Gain Reduction) vượt quá 6 dB, vì ép âm lượng quá mức sẽ làm bài nhạc bị bí, phẳng lì và mất độ nảy tự nhiên của tiếng trống.',
+      'Nếu anh bấm nút "S" (Solo) hoặc "M" (Mute) ở khung BSRNN để nghe kiểm tra từng nhánh, kiểm tra xong nhớ bấm tắt sáng đi để bài nhạc phát đầy đủ trở lại! Đồng thời đừng kéo thanh "Gain" của IRC V quá cao (trên +12 dB) kẻo tiếng trống bị ép phẳng.',
     next: {
       tab: 'render',
       label: 'Mastering hoàn tất → Sang Bước cuối: Xuất file WAV phòng thu (Offline Render)',
@@ -165,13 +166,14 @@ export const GUIDES: Record<string, Guide> = {
   },
 
   uvr5: {
-    title: 'Phòng tách lời & nhạc nền bằng 3 mô hình AI kết hợp (UVR5 Stem Studio)',
+    title: 'Phòng tách lời & nhạc nền tốc độ cao bằng AI trên GPU (UVR5 Stem Studio)',
     what:
-      'Khu vực này giúp anh đưa bất kỳ bài hát hoàn chỉnh nào vào và dùng 3 mô hình AI mạnh nhất của UVR5 (MDX23C + HTDemucs v4 + VR CascadedASPPNet) chạy cùng lúc để tách riêng thành 4 nhánh âm thanh độc lập: Giọng hát (Vocals), Trống (Drums), Bass và Nhạc cụ khác (Other) — cực kỳ hữu ích khi làm nhạc Karaoke, Remix hoặc lấy Acapella.',
+      'Khu vực này dùng các mô hình AI phòng thu thật (Kim_Vocal_2, UVR-MDX-Net-Inst_HQ_3 và chế độ hợp nhất 3 AI Ensemble) chạy trực tiếp trên nhân Card đồ họa rời (⚡ CUDA 12 / DirectML) để tách bất kỳ bài hát nào thành 4 nhánh .wav độc lập: Giọng hát (Vocals), Trống (Drums), Bass và Nhạc cụ khác (Other).',
     steps: [
-      'Chọn cấu hình AI ở ô "UVR5 Model Profile (143 Real Configs)": chọn "Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)" để tách sạch nhất cả 4 nhánh, hoặc "Kim_Vocal_2" / "UVR-MDX-NET Karaoke / Vocals" nếu chuyên tách giọng hát và nhạc beat.',
-      'Kiểm tra đường dẫn file nhạc đầu vào ở ô "Input File" và giữ nguyên tích chọn "Auto-Bounce 4 Stems onto Mixer Insert Tracks 1..4" để tách xong máy tự động đưa thẳng 4 nhánh vào bàn trộn Mixer.',
-      'Bấm nút màu xanh "Run Ensemble & Bounce to Mixer 1..4". Khi chạy xong, khung bên phải sẽ hiện rõ 4 file .wav đã tách (Track 1: Vocals, Track 2: Drums, Track 3: Bass, Track 4: Other).',
+      'Bấm nút "📂 Mở nhạc từ máy (.wav/.mp3/.flac)" ở thanh tiêu đề (hoặc nút "📂 Chọn file" cạnh ô Input File) để chọn bài hát cần tách trên ổ cứng.',
+      'Chọn cấu hình AI ở ô "UVR5 Model Profile (143 Real Configs)": chọn "Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)" để tách sạch cả 4 nhánh, hoặc "Kim_Vocal_2" / "UVR-MDX-Net-Inst_HQ_3" nếu chuyên tách Giọng hát sạch và Nhạc beat Karaoke.',
+      'Kiểm tra ô "Output Folder (Thư mục xuất 4 Stem .wav)": mặc định để trống máy sẽ tự xuất 4 file .wav ngay tại thư mục chứa bài hát gốc của anh, hoặc bấm "📁 Chọn thư mục" để chọn nơi lưu tùy ý.',
+      'Giữ tích chọn "Auto-Bounce 4 Stems onto Mixer Insert Tracks 1..4" rồi bấm nút "Run Ensemble & Bounce to Mixer 1..4" — GPU sẽ tách nhanh và nạp thẳng 4 nhánh vào Kênh 1..4.',
     ],
     gotcha:
       'Nếu thấy tiếng nhạc cụ vẫn còn vương nhẹ bóng giọng hát (hoặc ngược lại), hãy bật cả hai ô "MDX23C 2-Pass Phase-Inverted Bias Denoising" và "Phase-Inverted Residual Subtraction" để AI khử nhiễu pha lần 2 sạch bóng.',
@@ -186,13 +188,13 @@ export const GUIDES: Record<string, Guide> = {
   },
 
   render: {
-    title: 'Xuất file nhạc WAV phòng thu & Kiểm định chuẩn Spotify / YouTube (Offline Render)',
+    title: 'Xuất file nhạc WAV trọn bài & Kiểm định chuẩn Spotify / YouTube (Offline Render)',
     what:
-      'Đây là bước cuối cùng để đóng gói tác phẩm của anh thành file âm thanh `.wav` chất lượng cao lưu vào ổ cứng, đồng thời máy sẽ tự động chấm điểm xem file nhạc đã đạt chuẩn phát hành lên Spotify, Apple Music và YouTube mà không bị các nền tảng đó tự động bóp nhỏ âm lượng hay chưa.',
+      'Đây là bước cuối cùng để kết xuất trọn vẹn 100% độ dài tác phẩm thành file `.wav` chất lượng phòng thu lưu ra thư mục anh chọn, đồng thời máy tự động chấm điểm xem file xuất ra đã đạt chuẩn phát hành Spotify, Apple Music và YouTube hay chưa.',
     steps: [
       'Chọn kiểu xuất ở ô "Render Mode": chọn "Render Master" để xuất 1 file bài nhạc hoàn chỉnh; chọn "Split Mixer Tracks" nếu muốn xuất rời từng kênh; hoặc "UVR5 4-Stem Mastering" để xuất bộ 4 nhánh đã qua xử lý.',
-      'Chọn chất lượng file ở ô "Bit Depth & Dither": khuyên dùng "24-Bit PCM + Ozone 12 MBIT+ Noise-Shaping Dither" (chuẩn phát hành nhạc số phổ biến nhất) hoặc "32-Bit IEEE Float" (nếu cần lưu trữ gốc tuyệt đối không vỡ tiếng).',
-      'Bấm nút màu xanh "Export Studio WAV & Analyze LUFS/dBTP" ở góc phải trên.',
+      'Chọn chất lượng file ở ô "Bit Depth & Dither": khuyên dùng "24-Bit PCM + Ozone 12 MBIT+ Noise-Shaping Dither" (chuẩn phát hành nhạc số phổ biến nhất) hoặc "32-Bit IEEE Float" (lưu trữ gốc tuyệt đối không vỡ tiếng).',
+      'Kiểm tra nơi lưu ở ô "Output Directory" (mặc định tự điền thư mục chứa bài hát gốc đang mở, hoặc bấm nút "📁 Chọn thư mục" để chọn thư mục khác) rồi bấm "Export Studio WAV & Analyze LUFS/dBTP".',
       'Đọc bảng kết quả ở khung thứ 2 và thứ 3: nếu các nhãn Spotify, Apple Music, YouTube hiện chữ "PASS" màu xanh lá tức là file nhạc đã đạt chuẩn vàng để đăng tải ngay!',
     ],
     gotcha:
