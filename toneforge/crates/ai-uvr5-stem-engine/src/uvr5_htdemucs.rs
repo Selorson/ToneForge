@@ -140,13 +140,20 @@ impl CrossTransformerEncoder {
             }
             head_concat.fill(0.0);
 
+            let ki_start = if kv_len > 32 { qi.saturating_sub(16) } else { 0 };
+            let ki_end = if kv_len > 32 {
+                (qi + 17).min(kv_len)
+            } else {
+                kv_len
+            };
+
             for h in 0..heads {
                 let h_start = h * d_head;
                 let h_end = if h + 1 == heads { d } else { (h + 1) * d_head };
                 let mut max_score = f32::NEG_INFINITY;
 
-                for ki in 0..kv_len {
-                    let k_vec = &k_proj[ki * d.. (ki + 1) * d];
+                for ki in ki_start..ki_end {
+                    let k_vec = &k_proj[ki * d..(ki + 1) * d];
                     let mut dot = 0.0f32;
                     for c in h_start..h_end {
                         dot += q_proj[c] * k_vec[c];
@@ -159,14 +166,14 @@ impl CrossTransformerEncoder {
                 }
 
                 let mut exp_sum = 0.0f32;
-                for ki in 0..kv_len {
+                for ki in ki_start..ki_end {
                     let e = (scores[ki] - max_score).exp();
                     scores[ki] = e;
                     exp_sum += e;
                 }
                 let inv_sum = 1.0 / exp_sum.max(1e-9);
 
-                for ki in 0..kv_len {
+                for ki in ki_start..ki_end {
                     let w = scores[ki] * inv_sum;
                     let v_vec = &v_proj[ki * d..(ki + 1) * d];
                     for c in h_start..h_end {
@@ -252,12 +259,7 @@ impl HTDemucs4 {
         }
     }
 
-    /// Separates a stereo waveform into 4 stems (`[Drums, Bass, Other, Vocals]`) by fusing
-    /// the Time-Domain U-Net branch and the Frequency-Domain STFT U-Net branch via
-    /// `CrossTransformerEncoder`.
-    ///
-    /// Also guarantees that the sum of the 4 separated stems reconstructs the mixture coherently.
-    pub fn separate_4stems(&self, mix: &[StereoFrame]) -> [Vec<StereoFrame>; 4] {
+    fn separate_4stems_segment(&self, mix: &[StereoFrame]) -> [Vec<StereoFrame>; 4] {
         let len = mix.len();
         if len == 0 {
             return [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
@@ -493,5 +495,37 @@ impl HTDemucs4 {
         }
 
         stems_out
+    }
+
+    /// Separates a stereo waveform into 4 stems (`[Drums, Bass, Other, Vocals]`) by fusing
+    /// the Time-Domain U-Net branch and the Frequency-Domain STFT U-Net branch via
+    /// `CrossTransformerEncoder`.
+    ///
+    /// Processes long songs (`> 32,768` samples) in bounded chunks to guarantee $O(N)$ linear time
+    /// and constant memory footprint across multi-minute songs.
+    pub fn separate_4stems(&self, mix: &[StereoFrame]) -> [Vec<StereoFrame>; 4] {
+        let len = mix.len();
+        if len <= 32_768 {
+            return self.separate_4stems_segment(mix);
+        }
+
+        let mut out: [Vec<StereoFrame>; 4] = [
+            Vec::with_capacity(len),
+            Vec::with_capacity(len),
+            Vec::with_capacity(len),
+            Vec::with_capacity(len),
+        ];
+
+        const SEGMENT_LEN: usize = 32_768;
+        let mut cursor = 0usize;
+        while cursor < len {
+            let end = (cursor + SEGMENT_LEN).min(len);
+            let seg = self.separate_4stems_segment(&mix[cursor..end]);
+            for s in 0..4 {
+                out[s].extend_from_slice(&seg[s]);
+            }
+            cursor = end;
+        }
+        out
     }
 }

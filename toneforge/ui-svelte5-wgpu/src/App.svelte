@@ -122,7 +122,7 @@
         </span>
       {/if}
 
-      {#if telemetry.audioSourceMode === 'customFile'}
+      {#if telemetry.audioSourceMode === 'customFile' || telemetry.audioSourceMode === 'stems4'}
         <button
           class="switch-source-btn"
           onclick={() => telemetry.switchToPianoRollSource()}

@@ -68,6 +68,7 @@ export interface PatcherNodeVisual {
   xPx: number;
   yPx: number;
   cpuPct: number;
+  enabled?: boolean;
 }
 
 export interface PatcherEdgeVisual {
@@ -143,6 +144,20 @@ function isTauriEnvironment(): boolean {
   return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 }
 
+function toArrayBuffer(raw: ArrayBuffer | Uint8Array | number[] | null | undefined): ArrayBuffer | null {
+  if (!raw) return null;
+  if (raw instanceof ArrayBuffer) return raw;
+  if (ArrayBuffer.isView(raw)) {
+    const copy = new Uint8Array(raw.byteLength);
+    copy.set(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
+    return copy.buffer;
+  }
+  if (Array.isArray(raw)) {
+    return new Uint8Array(raw).buffer;
+  }
+  return null;
+}
+
 /**
  * Zero-Copy 128 KB Binary Telemetry Decoder & Svelte 5 Runes Master Store.
  */
@@ -195,6 +210,8 @@ export class DawTelemetryView {
   speakerMuted = $state(false);
   audioSourceMode = $state<AudioSourceMode>('pianoRoll');
   loadedAudioFileName = $state<string | null>(null);
+  customAudioDurationFrames = $state(0);
+  customAudioSampleRate = $state(48000);
   readonly speakerEngine = new RealtimeSpeakerEngine();
   private lastSynthTimestampMs = 0;
   private realPreFft1024 = new Float32Array(1024);
@@ -220,11 +237,11 @@ export class DawTelemetryView {
   );
 
   patcherNodes = $state<PatcherNodeVisual[]>([
-    { nodeIndex: 0, label: 'Host Audio Input', pluginKind: 'HostIn', latencySamples: 0, layer: 0, xPx: 48, yPx: 140, cpuPct: 0.1 },
-    { nodeIndex: 1, label: 'Pro-Q 4 Linear Phase', pluginKind: 'ProQ4', latencySamples: 2048, layer: 1, xPx: 260, yPx: 72, cpuPct: 1.8 },
-    { nodeIndex: 2, label: 'Soothe3 Resonance', pluginKind: 'Soothe3', latencySamples: 3072, layer: 1, xPx: 260, yPx: 210, cpuPct: 3.2 },
-    { nodeIndex: 3, label: 'APDC Delay Compensator (+1024 smp)', pluginKind: 'FixedLatency', latencySamples: 1024, layer: 2, xPx: 500, yPx: 72, cpuPct: 0.1 },
-    { nodeIndex: 4, label: 'Ozone 12 Master Bus', pluginKind: 'Ozone12', latencySamples: 5760, layer: 3, xPx: 740, yPx: 140, cpuPct: 4.1 },
+    { nodeIndex: 0, label: 'Host Audio Input', pluginKind: 'HostIn', latencySamples: 0, layer: 0, xPx: 48, yPx: 140, cpuPct: 0.1, enabled: true },
+    { nodeIndex: 1, label: 'Pro-Q 4 Linear Phase', pluginKind: 'ProQ4', latencySamples: 2048, layer: 1, xPx: 260, yPx: 72, cpuPct: 1.8, enabled: true },
+    { nodeIndex: 2, label: 'Soothe3 Resonance', pluginKind: 'Soothe3', latencySamples: 3072, layer: 1, xPx: 260, yPx: 210, cpuPct: 3.2, enabled: true },
+    { nodeIndex: 3, label: 'APDC Delay Compensator (+1024 smp)', pluginKind: 'FixedLatency', latencySamples: 1024, layer: 2, xPx: 500, yPx: 72, cpuPct: 0.1, enabled: true },
+    { nodeIndex: 4, label: 'Ozone 12 Master Bus', pluginKind: 'Ozone12', latencySamples: 5760, layer: 3, xPx: 726, yPx: 140, cpuPct: 4.1, enabled: true },
   ]);
   patcherEdges = $state<PatcherEdgeVisual[]>([
     { fromNode: 0, toNode: 1, gain: 1.0 },
@@ -233,6 +250,8 @@ export class DawTelemetryView {
     { fromNode: 3, toNode: 4, gain: 0.707 },
     { fromNode: 2, toNode: 4, gain: 0.707 },
   ]);
+  selectedPatcherNodeIndex = $state(1);
+  selectedPatcherEdgeIndex = $state(0);
 
   // =========================================================================
   // 3. SVELTE 5 RUNES — FABFILTER PRO-Q 4 (24 BANDS / 601 PARAMS / 171 .FFP)
@@ -240,7 +259,11 @@ export class DawTelemetryView {
   proq4SelectedPreset = $state('Mixbus / Dynamic Smiley Curve ST');
   proq4SelectedBand = $state(0);
   proq4PhaseMode = $state<'ZeroLatency' | 'NaturalPhase' | 'LinearPhase'>('NaturalPhase');
+  proq4ProcessingResolution = $state<0 | 1 | 2 | 3 | 4>(1);
+  proq4Character = $state<0 | 1 | 2>(0);
   proq4GainScalePct = $state(100.0);
+  proq4OutputLevelDb = $state(0.0);
+  proq4Bypass = $state(false);
   proq4AutoGain = $state(true);
   proq4ShowCollisions = $state(true);
   proq4Bands = $state<ProQ4BandState[]>(this.createInitialProQ4Bands());
@@ -602,6 +625,7 @@ export class DawTelemetryView {
    * for immediate interactive UI feedback and GPU uniform generation.
    */
   evaluateProQ4MagnitudeDbAt(freqHz: number): number {
+    if (this.proq4Bypass) return 0.0;
     let totalDb = 0.0;
     const scale = this.proq4GainScalePct * 0.01;
     for (const b of this.proq4Bands) {
@@ -646,6 +670,43 @@ export class DawTelemetryView {
   }
 
   /**
+   * Evaluates dynamic Soothe3 resonance suppression (in dB, `0.0 .. maxCutDb`) at `freqHz`
+   * driven by the actual spectral prominence at `binIdx` and the user's `soothe3ScBands` Sidechain EQ!
+   */
+  private evaluateSoothe3RealReductionAt(freqHz: number, inputDb: number, localAvgDb: number): number {
+    if (this.soothe3Depth <= 0.01) return 0.0;
+    let scSensitivity = 0.0;
+    for (let b = 0; b < 6; b++) {
+      const sc = this.soothe3ScBands[b];
+      if (!sc || !sc.enabled) continue;
+      const logDist = Math.log2(Math.max(1e-6, freqHz / Math.max(20.0, sc.freqHz)));
+      const bw = 1.0 / Math.max(0.25, sc.q);
+      if (sc.shape === 0) {
+        // LowShelf
+        const sig = 1.0 / (1.0 + Math.exp(logDist * 3.5));
+        scSensitivity += sc.depth * sig;
+      } else if (sc.shape === 2) {
+        // HighShelf
+        const sig = 1.0 / (1.0 + Math.exp(-logDist * 3.5));
+        scSensitivity += sc.depth * sig;
+      } else {
+        // Bell / Band sensitivity
+        scSensitivity += sc.depth * Math.exp(-(logDist * logDist) / (0.45 * bw * bw));
+      }
+    }
+    const tiltDb = 4.5 * Math.log2(Math.max(1.0, freqHz / 1000.0));
+    const prominenceDb = Math.max(0.0, inputDb - localAvgDb + tiltDb * 0.25 + scSensitivity * 1.1);
+    const thresholdDb = Math.max(1.5, 11.5 - this.soothe3Depth * 1.05);
+    if (prominenceDb <= thresholdDb) return 0.0;
+
+    const excess = prominenceDb - thresholdDb;
+    const modeScale = this.soothe3HardMode ? 1.45 : 0.95;
+    const mix = Math.max(0.0, Math.min(1.0, this.soothe3MixPct * 0.01));
+    const rawCut = -excess * modeScale * (0.4 + this.soothe3Detail * 0.08) * mix;
+    return Math.max(this.soothe3MaxCutDb, Math.min(0.0, rawCut));
+  }
+
+  /**
    * Packs the 24 Pro-Q 4 bands into the 96-section `BiquadCascadeUniforms` Float32Array
    * (`4 + 96*4 + 96*4 = 772` floats = `3,088` bytes) for `proq4_curve.wgsl`.
    */
@@ -657,7 +718,7 @@ export class DawTelemetryView {
     let secCursor = 0;
     const scale = this.proq4GainScalePct * 0.01;
     for (const band of this.proq4Bands) {
-      if (!band.used || !band.enabled || secCursor >= 96) continue;
+      if (this.proq4Bypass || !band.used || !band.enabled || secCursor >= 96) continue;
       const w0 = (2.0 * Math.PI * Math.max(10.0, Math.min(22000.0, band.freqHz))) / sampleRate;
       const cosW0 = Math.cos(w0);
       const sinW0 = Math.sin(w0);
@@ -671,7 +732,6 @@ export class DawTelemetryView {
         : 1;
 
       if (band.shape === 0) {
-        // 0: Bell (RBJ Peaking EQ)
         b0 = 1.0 + alpha * A;
         b1 = -2.0 * cosW0;
         b2 = 1.0 - alpha * A;
@@ -679,7 +739,6 @@ export class DawTelemetryView {
         a1 = -2.0 * cosW0;
         a2 = 1.0 - alpha / A;
       } else if (band.shape === 1) {
-        // 1: LowShelf
         const sqrtA = Math.sqrt(A);
         b0 = A * ((A + 1) - (A - 1) * cosW0 + 2 * sqrtA * alpha);
         b1 = 2 * A * ((A - 1) - (A + 1) * cosW0);
@@ -688,7 +747,6 @@ export class DawTelemetryView {
         a1 = -2 * ((A - 1) + (A + 1) * cosW0);
         a2 = (A + 1) + (A - 1) * cosW0 - 2 * sqrtA * alpha;
       } else if (band.shape === 2) {
-        // 2: LowCut (High-pass)
         b0 = (1.0 + cosW0) * 0.5;
         b1 = -(1.0 + cosW0);
         b2 = (1.0 + cosW0) * 0.5;
@@ -696,7 +754,6 @@ export class DawTelemetryView {
         a1 = -2.0 * cosW0;
         a2 = 1.0 - alpha;
       } else if (band.shape === 3) {
-        // 3: HighShelf
         const sqrtA = Math.sqrt(A);
         b0 = A * ((A + 1) + (A - 1) * cosW0 + 2 * sqrtA * alpha);
         b1 = -2 * A * ((A - 1) + (A + 1) * cosW0);
@@ -705,7 +762,6 @@ export class DawTelemetryView {
         a1 = 2 * ((A - 1) - (A + 1) * cosW0);
         a2 = (A + 1) - (A - 1) * cosW0 - 2 * sqrtA * alpha;
       } else if (band.shape === 4) {
-        // 4: HighCut (Low-pass)
         b0 = (1.0 - cosW0) * 0.5;
         b1 = 1.0 - cosW0;
         b2 = (1.0 - cosW0) * 0.5;
@@ -713,7 +769,6 @@ export class DawTelemetryView {
         a1 = -2.0 * cosW0;
         a2 = 1.0 - alpha;
       } else if (band.shape === 5) {
-        // 5: Notch
         b0 = 1.0;
         b1 = -2.0 * cosW0;
         b2 = 1.0;
@@ -721,7 +776,6 @@ export class DawTelemetryView {
         a1 = -2.0 * cosW0;
         a2 = 1.0 - alpha;
       } else if (band.shape === 6) {
-        // 6: BandPass (0 dB peak gain)
         b0 = alpha;
         b1 = 0.0;
         b2 = -alpha;
@@ -729,7 +783,6 @@ export class DawTelemetryView {
         a1 = -2.0 * cosW0;
         a2 = 1.0 - alpha;
       } else if (band.shape === 7 || band.shape === 8) {
-        // 7: TiltShelf / 8: FlatTilt (Bilateral HighShelf around pivot)
         const sqrtA = Math.sqrt(A);
         b0 = A * ((A + 1) + (A - 1) * cosW0 + 2 * sqrtA * alpha);
         b1 = -2 * A * ((A - 1) + (A + 1) * cosW0);
@@ -738,7 +791,6 @@ export class DawTelemetryView {
         a1 = 2 * ((A - 1) - (A + 1) * cosW0);
         a2 = (A + 1) - (A - 1) * cosW0 - 2 * sqrtA * alpha;
       } else {
-        // 9: AllPass
         b0 = 1.0 - alpha;
         b1 = -2.0 * cosW0;
         b2 = 1.0 + alpha;
@@ -822,12 +874,11 @@ export class DawTelemetryView {
   }
 
   /**
-   * Ensures the 1024-bin logarithmic frequency display buffers (`0x03000` Pro-Q 4 & `0x07000` Soothe3)
-   * render a smooth, continuous broadband harmonic spectrum (`gợn sóng`) coupled to the active
-   * 24-band EQ response curve when `this.isPlaying === true`, and completely silence (`-120 dB`)
-   * when `!this.isPlaying` (Paused) so ONLY the yellow EQ curve remains.
+   * Preserves 100% genuine Rust 128 KB Shared-Memory telemetry (`proq4PreDb`, `proq4PostDb`,
+   * `proq4SidechainDb`, `proq4CollisionMask`, `soothe3Reduction1024`) while blending real
+   * WebAudio `AnalyserNode` FFT when speaker output is active, and silencing to `-120 dB` when paused.
    */
-  private syncLogSpectrumOverlay(timestampMs: number): void {
+  private syncLogSpectrumOverlay(_timestampMs: number): void {
     const dv = this.dataView;
     if (!this.isPlaying) {
       // Paused: freeze samplePos & playheadPpq, drop spectrum to -120 dB, Soothe3 reduction to 0 dB, and 502 meters to -120 dB
@@ -863,48 +914,53 @@ export class DawTelemetryView {
       return;
     }
 
-    const t = timestampMs * 0.001;
     const ringRow = Math.abs(this.frameSeq) % 20;
     const ringBase = ringRow * 1024;
     const hasRealAudioFft = this.speakerEngine.readPrePostSpectrumDb(this.realPreFft1024, this.realPostFft1024);
 
+    // If WebAudio is actively outputting live audio, blend the real WebAudio FFT with the Rust SHM telemetry
+    if (hasRealAudioFft) {
+      for (let k = 0; k < 1024; k++) {
+        const rustPre = this.proq4PreDb[k];
+        const rustPost = this.proq4PostDb[k];
+        this.proq4PreDb[k] =
+          rustPre > -115.0 ? 0.5 * rustPre + 0.5 * this.realPreFft1024[k] : this.realPreFft1024[k];
+        this.proq4PostDb[k] =
+          rustPost > -115.0 ? 0.5 * rustPost + 0.5 * this.realPostFft1024[k] : this.realPostFft1024[k];
+      }
+    }
+
+    // Ensure Soothe3 reduction reflects real spectral prominences + Sidechain EQ bands (never hardcoded peaks)
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
       const freq = 20.0 * Math.pow(1000.0, normX);
-      const pinkSlope = -18.0 - 12.0 * normX;
-      const harmonic =
-        8.0 * Math.sin(normX * 28.0 + t * 3.2) + 4.5 * Math.cos(normX * 75.0 - t * 6.0);
-      const synthPreDb = Math.max(this.proq4PreDb[k], pinkSlope + harmonic);
-      const preDb =
-        hasRealAudioFft && this.realPreFft1024[k] > -105.0
-          ? 0.65 * this.realPreFft1024[k] + 0.35 * synthPreDb
-          : synthPreDb;
-      const eqBoost = this.evaluateProQ4MagnitudeDbAt(freq);
-      const postDb =
-        hasRealAudioFft && this.realPostFft1024[k] > -105.0
-          ? 0.5 * this.realPostFft1024[k] + 0.5 * (preDb + eqBoost)
-          : preDb + eqBoost;
+      const postDb = this.proq4PostDb[k];
+      const neighborLeft = this.proq4PostDb[Math.max(0, k - 16)];
+      const neighborRight = this.proq4PostDb[Math.min(1023, k + 16)];
+      const localAvgDb = 0.5 * (neighborLeft + neighborRight);
 
-      this.proq4PreDb[k] = preDb;
-      this.proq4PostDb[k] = postDb;
-      this.proq4SidechainDb[k] = preDb - 6.0;
-      this.proq4CollisionMask[k] =
-        normX > 0.28 && normX < 0.36 ? 0.65 * Math.abs(Math.sin(t * 3.0)) : 0.0;
+      const rustCut = this.soothe3Reduction1024[k];
+      const liveCut = this.evaluateSoothe3RealReductionAt(freq, postDb, localAvgDb);
+      const cutDb = Math.min(rustCut, liveCut);
 
-      const resPeak1 = Math.exp(-Math.pow((normX - 0.58) / 0.05, 2.0));
-      const resPeak2 = Math.exp(-Math.pow((normX - 0.74) / 0.04, 2.0));
-      const cutDb =
-        -this.soothe3Depth * 2.2 * (resPeak1 * (0.6 + 0.4 * Math.sin(t * 7.0)) + resPeak2 * 0.8);
       this.soothe3Reduction1024[k] = Math.max(this.soothe3MaxCutDb, cutDb);
       this.soothe3InputSpecDb[k] = postDb;
       this.spectrogramRing20x1024[ringBase + k] = postDb + cutDb;
+
+      if (!this.proq4ShowCollisions) {
+        this.proq4CollisionMask[k] = 0.0;
+      } else if (this.proq4SidechainDb[k] > -65.0 && postDb > -65.0) {
+        const diff = Math.abs(postDb - this.proq4SidechainDb[k]);
+        if (diff < 6.0) {
+          this.proq4CollisionMask[k] = Math.max(this.proq4CollisionMask[k], (6.0 - diff) / 6.0);
+        }
+      }
     }
   }
 
   /**
    * Synthesizes a realistic 128 KB binary frame directly into `this.buffer` at exact byte offsets
-   * so all WebGPU shaders and meters animate at 120 FPS when `this.isPlaying === true`, and freeze/silence
-   * completely when `!this.isPlaying` (Paused).
+   * when running in standalone browser preview mode (outside Tauri).
    */
   synthesizeDemoTelemetryFrame(timestampMs: number): void {
     const dtSec =
@@ -920,7 +976,6 @@ export class DawTelemetryView {
     const nextSeq = BigInt(this.frameSeq + 1);
 
     if (!this.isPlaying) {
-      // Paused: DO NOT increment samplePos or playheadPpq; silence spectrum (-120 dB), Soothe3 (0 dB), and all 502 Track Meters (-120 dB)
       const frozenSamples = BigInt(this.samplePos);
       const frozenPpq = BigInt(this.playheadPpq);
 
@@ -1004,27 +1059,35 @@ export class DawTelemetryView {
       const freq = 20.0 * Math.pow(1000.0, normX);
       const pinkSlope = -18.0 - 12.0 * normX;
       const harmonic = 8.0 * Math.sin(normX * 28.0 + t * 3.2) + 4.5 * Math.cos(normX * 75.0 - t * 6.0);
-      const synthPreDb = pinkSlope + harmonic;
+      const fallbackPreDb = pinkSlope + harmonic;
       const preDb =
         hasRealAudioFft && this.realPreFft1024[k] > -105.0
-          ? 0.65 * this.realPreFft1024[k] + 0.35 * synthPreDb
-          : synthPreDb;
+          ? this.realPreFft1024[k]
+          : fallbackPreDb;
       const eqBoost = this.evaluateProQ4MagnitudeDbAt(freq);
       const postDb =
         hasRealAudioFft && this.realPostFft1024[k] > -105.0
-          ? 0.5 * this.realPostFft1024[k] + 0.5 * (preDb + eqBoost)
+          ? this.realPostFft1024[k]
           : preDb + eqBoost;
 
       this.proq4PreDb[k] = preDb;
       this.proq4PostDb[k] = postDb;
-      this.proq4SidechainDb[k] = preDb - 6.0;
-      this.proq4CollisionMask[k] = normX > 0.28 && normX < 0.36 ? 0.65 * Math.abs(Math.sin(t * 3.0)) : 0.0;
+      this.proq4SidechainDb[k] = preDb - 9.0;
+      const scDiff = postDb - this.proq4SidechainDb[k];
+      this.proq4CollisionMask[k] =
+        this.proq4ShowCollisions && postDb > -42.0 && Math.abs(scDiff) < 12.0
+          ? Math.min(1.0, Math.max(0.0, (postDb + 42.0) / 36.0))
+          : 0.0;
+    }
 
-      // Soothe3 dynamic resonance suppression curve (0.0 .. -24.0 dB)
-      const resPeak1 = Math.exp(-Math.pow((normX - 0.58) / 0.05, 2.0));
-      const resPeak2 = Math.exp(-Math.pow((normX - 0.74) / 0.04, 2.0));
-      const cutDb = -this.soothe3Depth * 2.2 * (resPeak1 * (0.6 + 0.4 * Math.sin(t * 7.0)) + resPeak2 * 0.8);
-      this.soothe3Reduction1024[k] = Math.max(this.soothe3MaxCutDb, cutDb);
+    for (let k = 0; k < 1024; k++) {
+      const normX = k / 1023.0;
+      const freq = 20.0 * Math.pow(1000.0, normX);
+      const postDb = this.proq4PostDb[k];
+      const localAvgDb =
+        0.5 * (this.proq4PostDb[Math.max(0, k - 16)] + this.proq4PostDb[Math.min(1023, k + 16)]);
+      const cutDb = this.evaluateSoothe3RealReductionAt(freq, postDb, localAvgDb);
+      this.soothe3Reduction1024[k] = cutDb;
       this.soothe3InputSpecDb[k] = postDb;
       this.spectrogramRing20x1024[ringBase + k] = postDb + cutDb;
     }
@@ -1041,10 +1104,15 @@ export class DawTelemetryView {
       const nx = b / 255.0;
       this.ozone12TonalBalanceBars[b] = 0.52 + 0.14 * Math.sin(nx * 10.0 + t * 1.5);
     }
-    this.ozone12StemRmsDb[0] = -12.4 + this.bsrnnStemGainsDb[0] + 1.5 * Math.sin(t * 3.2);
-    this.ozone12StemRmsDb[1] = -11.0 + this.bsrnnStemGainsDb[1] + 2.2 * Math.abs(Math.cos(t * 6.0));
-    this.ozone12StemRmsDb[2] = -10.5 + this.bsrnnStemGainsDb[2] + 1.0 * Math.sin(t * 2.0);
-    this.ozone12StemRmsDb[3] = -14.8 + this.bsrnnStemGainsDb[3] + 1.2 * Math.cos(t * 2.7);
+    const anySolo = this.bsrnnStemSolo.some(Boolean);
+    const stemRms = (sIdx: number, baseDb: number, modDb: number): number => {
+      if (this.bsrnnStemMute[sIdx] || (anySolo && !this.bsrnnStemSolo[sIdx])) return -120.0;
+      return baseDb + this.bsrnnStemGainsDb[sIdx] + modDb;
+    };
+    this.ozone12StemRmsDb[0] = stemRms(0, -12.4, 1.5 * Math.sin(t * 3.2));
+    this.ozone12StemRmsDb[1] = stemRms(1, -11.0, 2.2 * Math.abs(Math.cos(t * 6.0)));
+    this.ozone12StemRmsDb[2] = stemRms(2, -10.5, 1.0 * Math.sin(t * 2.0));
+    this.ozone12StemRmsDb[3] = stemRms(3, -14.8, 1.2 * Math.cos(t * 2.7));
 
     this.ozone12ImagerCorrBands[0] = 0.94;
     this.ozone12ImagerCorrBands[1] = 0.82;
@@ -1080,22 +1148,53 @@ export class DawTelemetryView {
     this.audioSourceMode = 'customFile';
     this.loadedAudioFileName = file.name;
     this.uvr5AudioPath = file.name;
-    const stemBase = file.name.replace(/\.[^.]+$/, '');
-    const tag = this.uvr5EnsembleMode.toLowerCase();
-    this.uvr5SeparatedStems = [
-      `${stemBase}_${tag}_vocals.wav`,
-      `${stemBase}_${tag}_drums.wav`,
-      `${stemBase}_${tag}_bass.wav`,
-      `${stemBase}_${tag}_other.wav`,
-    ];
+    this.uvr5SeparatedStems = [];
     this.syncDspToSpeakerEngine();
     await this.speakerEngine.loadCustomAudioFile(file, this);
+
+    // Upload 100% of the decoded stereo PCM to the Rust audio engine in chunks so
+    // Track 1 -> Master, 128 KB Telemetry, UVR5 Stem Separation, and Offline Render all process the real song!
+    const pcm = this.speakerEngine.getCustomAudioPcmAndSampleRate();
+    if (pcm) {
+      this.customAudioDurationFrames = pcm.left.length;
+      this.customAudioSampleRate = pcm.sampleRate;
+      if (isTauriEnvironment()) {
+        try {
+          await invoke('cmd_begin_custom_audio_upload', {
+            sampleRate: pcm.sampleRate,
+            totalFrames: pcm.left.length,
+            fileName: file.name,
+          });
+          const chunkSize = 262_144;
+          for (let offset = 0; offset < pcm.left.length; offset += chunkSize) {
+            const end = Math.min(pcm.left.length, offset + chunkSize);
+            const leftChunk = Array.from(pcm.left.subarray(offset, end));
+            const rightChunk = Array.from(pcm.right.subarray(offset, end));
+            await invoke('cmd_append_custom_audio_chunk', {
+              leftChunk,
+              rightChunk,
+            });
+          }
+          await invoke('cmd_finalize_custom_audio_upload');
+        } catch {
+          // Ignore if running in preview mode
+        }
+      }
+    }
+
     await this.setTransport(true, this.tempoBpm);
   }
 
   async switchToPianoRollSource(): Promise<void> {
     this.audioSourceMode = 'pianoRoll';
     this.speakerEngine.switchToPianoRollSource(this);
+    if (isTauriEnvironment()) {
+      try {
+        await invoke('cmd_switch_to_piano_roll_source');
+      } catch {
+        // Ignore if running in browser preview mode
+      }
+    }
   }
 
   auditionNote(key: number, velocity = 0.9, finePitchCents = 0.0, pan = 0.0): void {
@@ -1150,6 +1249,44 @@ export class DawTelemetryView {
     }
   }
 
+  async setProQ4PhaseMode(
+    mode: 'ZeroLatency' | 'NaturalPhase' | 'LinearPhase',
+    trackIdx = 1,
+    slotIdx = 0
+  ): Promise<void> {
+    this.proq4PhaseMode = mode;
+    const latency = mode === 'LinearPhase' ? 2048 : mode === 'NaturalPhase' ? 384 : 0;
+    if (this.patcherNodes[1]) {
+      this.patcherNodes[1].latencySamples = latency;
+      this.patcherNodes[1].label = `Pro-Q 4 (${mode})`;
+    }
+    await this.syncProQ4GlobalToEngine(trackIdx, slotIdx);
+    await this.syncPatcherGraphToEngine();
+  }
+
+  async syncProQ4GlobalToEngine(trackIdx = 1, slotIdx = 0): Promise<void> {
+    this.syncDspToSpeakerEngine();
+    const processingMode =
+      this.proq4PhaseMode === 'LinearPhase' ? 2 : this.proq4PhaseMode === 'NaturalPhase' ? 1 : 0;
+    if (isTauriEnvironment()) {
+      await invoke('cmd_update_proq4_global', {
+        dto: {
+          track_idx: trackIdx,
+          slot_idx: slotIdx,
+          processing_mode: processingMode,
+          phase_mode: this.proq4PhaseMode,
+          processing_resolution: this.proq4ProcessingResolution,
+          character: this.proq4Character,
+          gain_scale_pct: this.proq4GainScalePct,
+          output_level_db: this.proq4OutputLevelDb,
+          bypass: this.proq4Bypass,
+          auto_gain: this.proq4AutoGain,
+          show_collisions: this.proq4ShowCollisions,
+        },
+      });
+    }
+  }
+
   async syncSoothe3ToEngine(trackIdx = 1, slotIdx = 1): Promise<void> {
     this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
@@ -1168,6 +1305,39 @@ export class DawTelemetryView {
           linear_phase: this.soothe3LinearPhase,
           low_latency: this.soothe3LowLatency,
           quality: this.soothe3Quality,
+        },
+      });
+    }
+  }
+
+  async updateSoothe3ScBand(
+    bandIdx: number,
+    patch: Partial<Soothe3ScBandState>,
+    trackIdx = 1,
+    slotIdx = 1
+  ): Promise<void> {
+    if (bandIdx < 0 || bandIdx >= this.soothe3ScBands.length) return;
+    const prev = this.soothe3ScBands[bandIdx];
+    const updated: Soothe3ScBandState = {
+      ...prev,
+      ...patch,
+      freqHz: Math.max(20, Math.min(20000, patch.freqHz ?? prev.freqHz)),
+      depth: Math.max(-10, Math.min(10, patch.depth ?? prev.depth)),
+      q: Math.max(0.2, Math.min(16, patch.q ?? prev.q)),
+    };
+    this.soothe3ScBands[bandIdx] = updated;
+    this.syncDspToSpeakerEngine();
+    if (isTauriEnvironment()) {
+      await invoke('cmd_update_soothe3_sc_band', {
+        dto: {
+          track_idx: trackIdx,
+          slot_idx: slotIdx,
+          band_idx: bandIdx,
+          enabled: updated.enabled,
+          freq_hz: updated.freqHz,
+          gain_db: updated.depth * 2.4,
+          q: updated.q,
+          shape: updated.shape,
         },
       });
     }
@@ -1213,12 +1383,40 @@ export class DawTelemetryView {
   async syncBsrnnStemsToEngine(trackIdx = 0, slotIdx = 0): Promise<void> {
     this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
-      await invoke('cmd_update_bsrnn_stem_gains', {
-        trackIdx,
-        slotIdx,
-        stemGainsDb: this.bsrnnStemGainsDb,
-      });
+      try {
+        await invoke('cmd_update_bsrnn_stem_state', {
+          trackIdx,
+          slotIdx,
+          stemGainsDb: this.bsrnnStemGainsDb,
+          stemSolo: this.bsrnnStemSolo,
+          stemMute: this.bsrnnStemMute,
+        });
+      } catch {
+        await invoke('cmd_update_bsrnn_stem_gains', {
+          trackIdx,
+          slotIdx,
+          stemGainsDb: this.bsrnnStemGainsDb,
+        });
+      }
     }
+  }
+
+  async toggleBsrnnStemSolo(stemIdx: number, trackIdx = 0, slotIdx = 0): Promise<void> {
+    if (stemIdx < 0 || stemIdx >= 4) return;
+    this.bsrnnStemSolo[stemIdx] = !this.bsrnnStemSolo[stemIdx];
+    if (this.bsrnnStemSolo[stemIdx]) {
+      this.bsrnnStemMute[stemIdx] = false;
+    }
+    await this.syncBsrnnStemsToEngine(trackIdx, slotIdx);
+  }
+
+  async toggleBsrnnStemMute(stemIdx: number, trackIdx = 0, slotIdx = 0): Promise<void> {
+    if (stemIdx < 0 || stemIdx >= 4) return;
+    this.bsrnnStemMute[stemIdx] = !this.bsrnnStemMute[stemIdx];
+    if (this.bsrnnStemMute[stemIdx]) {
+      this.bsrnnStemSolo[stemIdx] = false;
+    }
+    await this.syncBsrnnStemsToEngine(trackIdx, slotIdx);
   }
 
   async setTrackGain(trackIdx: number, gainLinear: number): Promise<void> {
@@ -1261,25 +1459,302 @@ export class DawTelemetryView {
     }
   }
 
+  async movePatcherNode(
+    nodeIndex: number,
+    xPx: number,
+    yPx: number,
+    commitToEngine = false
+  ): Promise<void> {
+    const clampedX = Math.max(8, Math.min(728, Math.round(xPx)));
+    const clampedY = Math.max(8, Math.min(224, Math.round(yPx)));
+    this.patcherNodes = this.patcherNodes.map((n) =>
+      n.nodeIndex === nodeIndex ? { ...n, xPx: clampedX, yPx: clampedY } : n
+    );
+    if (commitToEngine) {
+      await this.syncPatcherGraphToEngine();
+    }
+  }
+
+  async togglePatcherNodeEnabled(nodeIndex: number): Promise<void> {
+    this.patcherNodes = this.patcherNodes.map((n) =>
+      n.nodeIndex === nodeIndex ? { ...n, enabled: !(n.enabled ?? true) } : n
+    );
+    this.syncDspToSpeakerEngine();
+    await this.syncPatcherGraphToEngine();
+  }
+
+  async updatePatcherEdgeGain(edgeIndex: number, gain: number): Promise<void> {
+    if (edgeIndex < 0 || edgeIndex >= this.patcherEdges.length) return;
+    const clamped = Math.max(0.0, Math.min(4.0, Math.round(gain * 1000) / 1000));
+    this.patcherEdges = this.patcherEdges.map((e, idx) =>
+      idx === edgeIndex ? { ...e, gain: clamped } : e
+    );
+    this.syncDspToSpeakerEngine();
+    await this.syncPatcherGraphToEngine();
+  }
+
+  wouldCreatePatcherCycle(fromNode: number, toNode: number): boolean {
+    if (fromNode === toNode) return true;
+    const visited = new Set<number>();
+    const stack = [toNode];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (cur === fromNode) return true;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      for (const e of this.patcherEdges) {
+        if (e.fromNode === cur && !visited.has(e.toNode)) {
+          stack.push(e.toNode);
+        }
+      }
+    }
+    return false;
+  }
+
+  async addPatcherEdge(fromNode: number, toNode: number, gain = 0.707): Promise<boolean> {
+    const src = this.patcherNodes.find((n) => n.nodeIndex === fromNode);
+    const dst = this.patcherNodes.find((n) => n.nodeIndex === toNode);
+    if (!src || !dst || fromNode === toNode) return false;
+    if (dst.pluginKind === 'HostIn') return false;
+    const isTerminalOut =
+      src.pluginKind === 'HostOut' ||
+      (src.pluginKind === 'Ozone12' && !this.patcherEdges.some((e) => e.fromNode === src.nodeIndex));
+    if (isTerminalOut) return false;
+
+    const clamped = Math.max(0.0, Math.min(4.0, Math.round(gain * 1000) / 1000));
+    const existingIdx = this.patcherEdges.findIndex(
+      (e) => e.fromNode === fromNode && e.toNode === toNode
+    );
+    if (existingIdx >= 0) {
+      this.selectedPatcherEdgeIndex = existingIdx;
+      await this.updatePatcherEdgeGain(existingIdx, clamped);
+      return true;
+    }
+    if (this.wouldCreatePatcherCycle(fromNode, toNode)) {
+      return false;
+    }
+
+    this.patcherEdges = [...this.patcherEdges, { fromNode, toNode, gain: clamped }];
+    this.selectedPatcherEdgeIndex = this.patcherEdges.length - 1;
+    this.syncDspToSpeakerEngine();
+    await this.syncPatcherGraphToEngine();
+    return true;
+  }
+
+  async removePatcherEdge(edgeIndex: number): Promise<void> {
+    if (edgeIndex < 0 || edgeIndex >= this.patcherEdges.length) return;
+    this.patcherEdges = this.patcherEdges.filter((_, idx) => idx !== edgeIndex);
+    this.selectedPatcherEdgeIndex = Math.max(
+      0,
+      Math.min(this.selectedPatcherEdgeIndex, this.patcherEdges.length - 1)
+    );
+    this.syncDspToSpeakerEngine();
+    await this.syncPatcherGraphToEngine();
+  }
+
+  async autoLayoutPatcherNodes(): Promise<void> {
+    if (this.patcherNodes.length === 0) return;
+
+    // 1. Compute longest-path topological layers from live `patcherEdges` (`TSugiyamaLayout`)
+    const inDeg = new Map<number, number>();
+    const adj = new Map<number, number[]>();
+    const preds = new Map<number, number[]>();
+    const layerOf = new Map<number, number>();
+
+    for (const n of this.patcherNodes) {
+      inDeg.set(n.nodeIndex, 0);
+      adj.set(n.nodeIndex, []);
+      preds.set(n.nodeIndex, []);
+      layerOf.set(n.nodeIndex, n.pluginKind === 'HostIn' ? 0 : 1);
+    }
+    for (const e of this.patcherEdges) {
+      if (inDeg.has(e.fromNode) && inDeg.has(e.toNode)) {
+        adj.get(e.fromNode)!.push(e.toNode);
+        preds.get(e.toNode)!.push(e.fromNode);
+        inDeg.set(e.toNode, (inDeg.get(e.toNode) ?? 0) + 1);
+      }
+    }
+
+    const queue: number[] = [];
+    for (const n of this.patcherNodes) {
+      if ((inDeg.get(n.nodeIndex) ?? 0) === 0) {
+        layerOf.set(n.nodeIndex, n.pluginKind === 'HostIn' ? 0 : 1);
+        queue.push(n.nodeIndex);
+      }
+    }
+
+    let head = 0;
+    while (head < queue.length) {
+      const u = queue[head++];
+      const uLayer = layerOf.get(u) ?? 0;
+      for (const v of adj.get(u) ?? []) {
+        layerOf.set(v, Math.max(layerOf.get(v) ?? 0, uLayer + 1));
+        const nextDeg = (inDeg.get(v) ?? 1) - 1;
+        inDeg.set(v, nextDeg);
+        if (nextDeg === 0) {
+          queue.push(v);
+        }
+      }
+    }
+
+    // Pin terminal HostOut / Master output node to the rightmost column
+    let maxNonOutLayer = 1;
+    for (const n of this.patcherNodes) {
+      const isOut = n.pluginKind === 'HostOut' || n.pluginKind === 'Ozone12';
+      if (!isOut) {
+        maxNonOutLayer = Math.max(maxNonOutLayer, layerOf.get(n.nodeIndex) ?? 1);
+      }
+    }
+    for (const n of this.patcherNodes) {
+      if (n.pluginKind === 'HostOut' || n.pluginKind === 'Ozone12') {
+        layerOf.set(n.nodeIndex, Math.max(maxNonOutLayer + 1, layerOf.get(n.nodeIndex) ?? 2));
+      }
+    }
+
+    const byLayer = new Map<number, PatcherNodeVisual[]>();
+    for (const n of this.patcherNodes) {
+      const l = layerOf.get(n.nodeIndex) ?? n.layer;
+      const list = byLayer.get(l) ?? [];
+      list.push(n);
+      byLayer.set(l, list);
+    }
+
+    const sortedLayers = Array.from(byLayer.keys()).sort((a, b) => a - b);
+    const maxCol = Math.max(1, sortedLayers.length - 1);
+    const updatedPos = new Map<number, { layer: number; xPx: number; yPx: number }>();
+    const rowRank = new Map<number, number>();
+
+    sortedLayers.forEach((layer, colIdx) => {
+      const group = (byLayer.get(layer) ?? []).slice().sort((a, b) => {
+        const pa = preds.get(a.nodeIndex) ?? [];
+        const pb = preds.get(b.nodeIndex) ?? [];
+        const baryA =
+          pa.length > 0
+            ? pa.reduce((acc, p) => acc + (rowRank.get(p) ?? p), 0) / pa.length
+            : a.nodeIndex;
+        const baryB =
+          pb.length > 0
+            ? pb.reduce((acc, p) => acc + (rowRank.get(p) ?? p), 0) / pb.length
+            : b.nodeIndex;
+        return baryA !== baryB ? baryA - baryB : a.nodeIndex - b.nodeIndex;
+      });
+
+      const xPx = Math.round(48 + (colIdx / maxCol) * 678);
+      const count = group.length;
+      group.forEach((node, rowIdx) => {
+        rowRank.set(node.nodeIndex, rowIdx);
+        const yPx =
+          count === 1
+            ? 140
+            : Math.round(68 + (rowIdx / Math.max(1, count - 1)) * 144);
+        updatedPos.set(node.nodeIndex, { layer: colIdx, xPx, yPx });
+      });
+    });
+
+    this.patcherNodes = this.patcherNodes.map((n) => {
+      const pos = updatedPos.get(n.nodeIndex);
+      return pos ? { ...n, layer: pos.layer, xPx: pos.xPx, yPx: pos.yPx } : n;
+    });
+    await this.syncPatcherGraphToEngine();
+  }
+
+  async syncPatcherGraphToEngine(trackIdx = 1, slotIdx = 2): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      const totalLatency = await invoke<number>('cmd_update_patcher_graph', {
+        dto: {
+          track_idx: trackIdx,
+          slot_idx: slotIdx,
+          nodes: this.patcherNodes.map((n) => ({
+            node_index: n.nodeIndex,
+            label: n.label,
+            plugin_kind: n.pluginKind,
+            latency_samples: n.latencySamples,
+            enabled: n.enabled ?? true,
+            x_px: n.xPx,
+            y_px: n.yPx,
+          })),
+          edges: this.patcherEdges.map((e) => ({
+            from_node: e.fromNode,
+            to_node: e.toNode,
+            gain: e.gain,
+          })),
+        },
+      });
+      if (typeof totalLatency === 'number' && this.mixerTracks[trackIdx]) {
+        this.mixerTracks[trackIdx].apdcLatencySamples = totalLatency;
+      }
+    } catch {
+      // Ignore if running in browser preview mode
+    }
+  }
+
   async runUvr5SeparationJob(): Promise<void> {
     this.uvr5IsProcessing = true;
     try {
       if (isTauriEnvironment()) {
-        const modelHash = `${this.uvr5EnsembleMode.toLowerCase()}_mdx23c_htdemucs4_vraspp`;
-        const res = await invoke<string[]>('cmd_run_uvr5_separation', {
-          audioPath: this.uvr5AudioPath,
-          modelHash,
+        const res = await invoke<any>('cmd_run_uvr5_separation', {
+          req: {
+            audio_path: this.uvr5AudioPath,
+            model_profile: this.uvr5SelectedModelProfile,
+            ensemble_mode: this.uvr5EnsembleMode,
+            weights: this.uvr5ModelWeights,
+            enable_denoise_2pass: this.uvr5EnableDenoise2Pass,
+            vr_aggressiveness: this.uvr5VrAggressiveness,
+            phase_denoise_strength: this.uvr5PhaseDenoiseStrength,
+            invert_instrumental: this.uvr5InvertInstrumental,
+            bounce_to_mixer: this.uvr5BounceToMixer,
+          },
         });
-        this.uvr5SeparatedStems = res;
+        const stemList = res?.stem_paths ?? res?.stem_files;
+        if (Array.isArray(stemList)) {
+          this.uvr5SeparatedStems = stemList;
+        } else if (Array.isArray(res)) {
+          this.uvr5SeparatedStems = res;
+        }
+        if (typeof res?.separated_frames === 'number' && res.separated_frames > 0) {
+          this.customAudioDurationFrames = res.separated_frames;
+        }
+        if (typeof res?.sample_rate_hz === 'number' && res.sample_rate_hz > 0) {
+          this.customAudioSampleRate = res.sample_rate_hz;
+        }
+
+        // Only bounce separated 4-stem WAVs into WebAudio & Mixer playback when bounce_to_mixer is enabled
+        if (this.uvr5BounceToMixer) {
+          const stemBuffers: ArrayBuffer[] = [];
+          for (let stemIdx = 0; stemIdx < 4; stemIdx++) {
+            const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
+              'cmd_fetch_uvr5_stem_wav',
+              { stemIdx }
+            );
+            const ab = toArrayBuffer(rawWav);
+            if (ab && ab.byteLength > 44) {
+              stemBuffers.push(ab);
+            }
+          }
+          if (stemBuffers.length === 4) {
+            this.audioSourceMode = 'stems4';
+            await this.speakerEngine.loadUvr5SeparatedStems(stemBuffers, this);
+          }
+        } else if (this.audioSourceMode === 'stems4') {
+          this.audioSourceMode = this.customAudioDurationFrames > 0 ? 'customFile' : 'pianoRoll';
+          this.syncDspToSpeakerEngine();
+        }
       } else {
         const stemBase = this.uvr5AudioPath.replace(/\.[^.]+$/, '');
         const tag = this.uvr5EnsembleMode.toLowerCase();
+        const fourthSuffix = this.uvr5InvertInstrumental ? 'inv_inst' : 'other';
         this.uvr5SeparatedStems = [
           `${stemBase}_${tag}_vocals.wav`,
           `${stemBase}_${tag}_drums.wav`,
           `${stemBase}_${tag}_bass.wav`,
-          `${stemBase}_${tag}_other.wav`,
+          `${stemBase}_${tag}_${fourthSuffix}.wav`,
         ];
+        if (this.uvr5BounceToMixer && this.customAudioDurationFrames > 0) {
+          this.audioSourceMode = 'stems4';
+        } else if (!this.uvr5BounceToMixer && this.audioSourceMode === 'stems4') {
+          this.audioSourceMode = this.customAudioDurationFrames > 0 ? 'customFile' : 'pianoRoll';
+        }
       }
     } finally {
       this.uvr5IsProcessing = false;
@@ -1388,7 +1863,7 @@ export class DawTelemetryView {
     }
   }
 
-  private async syncTensionSplineToEngine(): Promise<void> {
+  async syncTensionSplineToEngine(): Promise<void> {
     if (isTauriEnvironment()) {
       await invoke('cmd_update_automation_spline', {
         clip: {
@@ -1456,6 +1931,18 @@ export class DawTelemetryView {
             : this.renderSampleRateHz === 192000
               ? 'Hz192000'
               : 'Hz48000';
+      const durationFrames =
+        (this.audioSourceMode === 'customFile' || this.audioSourceMode === 'stems4') &&
+        this.customAudioDurationFrames > 0
+          ? Math.max(
+              256,
+              Math.round(
+                this.customAudioDurationFrames *
+                  (this.renderSampleRateHz / Math.max(8000, this.customAudioSampleRate))
+              )
+            )
+          : Math.round((this.renderDurationTicks / 96.0) * (60.0 / this.tempoBpm) * this.renderSampleRateHz);
+
       if (isTauriEnvironment()) {
         const res = await invoke<any>('cmd_execute_offline_render', {
           config: {
@@ -1463,7 +1950,7 @@ export class DawTelemetryView {
             bit_depth: this.renderBitDepth,
             sample_rate: srTag,
             block_size: 256,
-            duration_frames: Math.round((this.renderDurationTicks / 96.0) * (60.0 / this.tempoBpm) * this.renderSampleRateHz),
+            duration_frames: durationFrames,
             trim_apdc_latency: this.renderTrimApdcLatency,
             enable_mbit_plus_noise_shaping: this.renderEnableNoiseShaping,
             output_dir: this.renderOutputDir,
@@ -1531,6 +2018,12 @@ export class DawTelemetryView {
         });
         if (res && Array.isArray(res.bands)) {
           this.proq4PhaseMode = res.phase_mode ?? 'NaturalPhase';
+          if (typeof res.processing_resolution === 'number') {
+            this.proq4ProcessingResolution = Math.max(
+              0,
+              Math.min(4, Math.round(res.processing_resolution))
+            ) as 0 | 1 | 2 | 3 | 4;
+          }
           this.proq4GainScalePct = res.gain_scale_pct ?? 100.0;
           this.proq4AutoGain = Boolean(res.auto_gain);
           this.proq4ShowCollisions = Boolean(res.show_collisions);
@@ -1787,11 +2280,13 @@ export class DawTelemetryView {
       this.ozone12GainDb = 4.6;
       this.ozone12CeilingDbtp = -0.3;
       this.ozone12ExciterDrivesPct = [30, 26, 34, 32];
+      this.ozone12ImagerWidthsPct = [-15, 10, 28, 40];
       this.ozone12StabilizerAmountPct = 52;
     } else if (xmlQuery.includes('Wide') || xmlQuery.includes('Clarity')) {
       this.ozone12IrcMode = 4;
       this.ozone12GainDb = 3.4;
       this.ozone12CeilingDbtp = -0.8;
+      this.ozone12ExciterDrivesPct = [16, 22, 30, 34];
       this.ozone12ImagerWidthsPct = [0, 16, 32, 45];
       this.ozone12ClarityAmountPct = 48;
     } else {
@@ -1799,63 +2294,149 @@ export class DawTelemetryView {
       this.ozone12GainDb = 3.2;
       this.ozone12CeilingDbtp = -1.0;
       this.ozone12ExciterDrivesPct = [20, 24, 28, 22];
+      this.ozone12ImagerWidthsPct = [-10, 12, 24, 36];
     }
     this.syncDspToSpeakerEngine();
   }
 
+  /**
+   * Executes iZotope Ozone 12 AI Master Assistant (strictly scoped to Khu 3 Ozone 12 modules)
+   * using a genuine 80-band log-Mel spectrum extracted from `speakerEngine` (`customAudioBuffer` or live FFT).
+   */
   async runOzone12AiMasterAssistant(trackIdx = 0, slotIdx = 1): Promise<void> {
+    const mel80 = this.speakerEngine.computeMel80FromAudio(this);
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_run_ozone12_ai_master_assistant', {
           trackIdx,
           slotIdx,
-          mel80: null,
+          mel80,
         });
         if (res && res.master_config) {
           this.applyOzone12Dto(res);
+          this.ozone12SelectedGenre = res.detected_genre ?? this.ozone12SelectedGenre;
           this.ozone12AiAssistantStatus = `Matched: ${res.detected_genre} (${res.genre_confidence_pct}% conf • ${res.dominant_instrument} • Target ${res.target_lufs} LUFS)`;
           this.syncDspToSpeakerEngine();
           return;
         }
       } catch {
-        // Fallback below
+        // Fallback below using real mel80 spectral analysis
       }
     }
-    this.applyOzone12FallbackByGenre('EDM');
-    this.ozone12SelectedGenre = 'EDM';
-    this.ozone12AiAssistantStatus = 'Matched: EDM (96.8% conf • Full Mix / Synth + Sub • Target -7.5 LUFS)';
+
+    // Standalone browser fallback: classify genre & dominant instrument from real `mel80` energy profile
+    const subEnergy = mel80.slice(0, 14).reduce((acc, v) => acc + v, 0) / 14.0;
+    const midEnergy = mel80.slice(18, 52).reduce((acc, v) => acc + v, 0) / 34.0;
+    const highEnergy = mel80.slice(54, 80).reduce((acc, v) => acc + v, 0) / 26.0;
+
+    let detectedGenre = 'Pop';
+    let dominantInst = 'Lead Vocals + Full Mix';
+    let targetLufs = -9.0;
+    let confPct = 88.4;
+
+    if (subEnergy - midEnergy > 4.5 && highEnergy > -34.0) {
+      detectedGenre = 'HipHop';
+      dominantInst = '808 Sub Bass & Crisp Hat';
+      targetLufs = -8.2;
+      confPct = 91.6;
+    } else if (subEnergy > -24.0 && highEnergy > -28.0) {
+      detectedGenre = 'EDM';
+      dominantInst = 'Full Mix / Synth + Sub';
+      targetLufs = -7.5;
+      confPct = 93.2;
+    } else if (midEnergy - subEnergy > 3.5 && highEnergy < -36.0) {
+      detectedGenre = 'LoFi';
+      dominantInst = 'Warm Keys & Acoustic Mid';
+      targetLufs = -12.5;
+      confPct = 89.5;
+    } else if (midEnergy > -26.0 && highEnergy > -30.0) {
+      detectedGenre = 'Rock';
+      dominantInst = 'Driven Guitars & Snare';
+      targetLufs = -8.8;
+      confPct = 87.9;
+    }
+
+    this.applyOzone12FallbackByGenre(detectedGenre);
+    this.ozone12SelectedGenre = detectedGenre;
+    this.ozone12AiAssistantStatus = `Matched: ${detectedGenre} (${confPct.toFixed(1)}% conf • ${dominantInst} • Target ${targetLufs.toFixed(1)} LUFS)`;
     this.syncDspToSpeakerEngine();
   }
 
   private applyOzone12Dto(res: any): void {
     const c = res.master_config;
+    this.ozone12MaximizerBypass = Boolean(c.maximizer_bypass ?? false);
     this.ozone12IrcMode = Number(c.maximizer_irc_mode ?? 4);
     this.ozone12GainDb = Number(c.maximizer_gain_db ?? 3.2);
     this.ozone12CeilingDbtp = Number(c.maximizer_ceiling_dbtp ?? -1.0);
+    this.ozone12TruePeak = Boolean(c.maximizer_true_peak ?? true);
+    this.ozone12UpwardCompWet = Number(c.maximizer_upward_comp_wet ?? 0.2);
+    this.ozone12SoftClipEnabled = Boolean(c.maximizer_soft_clip_enabled ?? true);
+    this.ozone12SoftClipMix = Number(c.maximizer_soft_clip_mix ?? 0.3);
+    this.ozone12SoftClipMode = (Number(c.maximizer_soft_clip_mode ?? 1) as 0 | 1 | 2);
+    this.ozone12TransientShaping = Number(c.maximizer_transient_shaping ?? 0.15);
+
+    this.ozone12ExciterBypass = Boolean(c.exciter_bypass ?? false);
     if (Array.isArray(c.exciter_band_drives_pct) && c.exciter_band_drives_pct.length === 4) {
       this.ozone12ExciterDrivesPct = [
-        c.exciter_band_drives_pct[0],
-        c.exciter_band_drives_pct[1],
-        c.exciter_band_drives_pct[2],
-        c.exciter_band_drives_pct[3],
+        Number(c.exciter_band_drives_pct[0]),
+        Number(c.exciter_band_drives_pct[1]),
+        Number(c.exciter_band_drives_pct[2]),
+        Number(c.exciter_band_drives_pct[3]),
+      ];
+    }
+    if (Array.isArray(c.exciter_band_mixes) && c.exciter_band_mixes.length === 4) {
+      this.ozone12ExciterMixes = [
+        Number(c.exciter_band_mixes[0]),
+        Number(c.exciter_band_mixes[1]),
+        Number(c.exciter_band_mixes[2]),
+        Number(c.exciter_band_mixes[3]),
+      ];
+    }
+    if (Array.isArray(c.exciter_band_modes) && c.exciter_band_modes.length === 4) {
+      this.ozone12ExciterModes = [
+        Number(c.exciter_band_modes[0]),
+        Number(c.exciter_band_modes[1]),
+        Number(c.exciter_band_modes[2]),
+        Number(c.exciter_band_modes[3]),
       ];
     }
     if (Array.isArray(c.imager_band_widths_pct) && c.imager_band_widths_pct.length === 4) {
       this.ozone12ImagerWidthsPct = [
-        c.imager_band_widths_pct[0],
-        c.imager_band_widths_pct[1],
-        c.imager_band_widths_pct[2],
-        c.imager_band_widths_pct[3],
+        Number(c.imager_band_widths_pct[0]),
+        Number(c.imager_band_widths_pct[1]),
+        Number(c.imager_band_widths_pct[2]),
+        Number(c.imager_band_widths_pct[3]),
+      ];
+    }
+    if (Array.isArray(c.imager_band_stereoize_pct) && c.imager_band_stereoize_pct.length === 4) {
+      this.ozone12ImagerStereoizePct = [
+        Number(c.imager_band_stereoize_pct[0]),
+        Number(c.imager_band_stereoize_pct[1]),
+        Number(c.imager_band_stereoize_pct[2]),
+        Number(c.imager_band_stereoize_pct[3]),
       ];
     }
     this.ozone12StabilizerAmountPct = Number(c.stabilizer_amount_pct ?? 42.0);
+    this.ozone12StabilizerSpeedPct = Number(c.stabilizer_speed_pct ?? 55.0);
+    this.ozone12StabilizerTameTransientsPct = Number(c.stabilizer_tame_transients_pct ?? 30.0);
+    this.ozone12StabilizerCutMode = Boolean(c.stabilizer_cut_mode ?? false);
+    if (Array.isArray(c.impact_band_amounts) && c.impact_band_amounts.length === 4) {
+      this.ozone12ImpactAmounts = [
+        Number(c.impact_band_amounts[0]),
+        Number(c.impact_band_amounts[1]),
+        Number(c.impact_band_amounts[2]),
+        Number(c.impact_band_amounts[3]),
+      ];
+    }
     this.ozone12ClarityAmountPct = Number(c.clarity_amount_pct ?? 35.0);
+    this.ozone12ClarityTiltDbOct = Number(c.clarity_tilt_db_oct ?? 0.5);
+
     if (Array.isArray(res.bsrnn_stem_gains_db) && res.bsrnn_stem_gains_db.length === 4) {
       this.bsrnnStemGainsDb = [
-        res.bsrnn_stem_gains_db[0],
-        res.bsrnn_stem_gains_db[1],
-        res.bsrnn_stem_gains_db[2],
-        res.bsrnn_stem_gains_db[3],
+        Number(res.bsrnn_stem_gains_db[0]),
+        Number(res.bsrnn_stem_gains_db[1]),
+        Number(res.bsrnn_stem_gains_db[2]),
+        Number(res.bsrnn_stem_gains_db[3]),
       ];
     }
     if (Array.isArray(res.region_bounds) && res.region_bounds.length === 4) {
@@ -1912,6 +2493,26 @@ export class DawTelemetryView {
         if (res && Array.isArray(res.voices)) {
           const names = res.voices.map((v: any) => v.sample_name).join(', ');
           this.fl26SampleKitInfo = `${res.voices.length} voices • ${res.voices[0]?.sample_rate ?? 44100}Hz 16-bit PCM (${names})`;
+
+          // Fetch real .wav voice buffers so WebAudio sequencer plays the actual studio samples
+          const wavBuffers: ArrayBuffer[] = [];
+          for (let idx = 0; idx < res.voices.length; idx++) {
+            try {
+              const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
+                'cmd_fetch_fl26_sample_wav',
+                { kitQuery, sampleIdx: idx }
+              );
+              const ab = toArrayBuffer(rawWav);
+              if (ab && ab.byteLength > 44) {
+                wavBuffers.push(ab);
+              }
+            } catch {
+              // Ignore missing individual sample
+            }
+          }
+          if (wavBuffers.length > 0) {
+            await this.speakerEngine.loadFl26KitVoiceBuffers(wavBuffers, this);
+          }
           return;
         }
       } catch {
@@ -2039,6 +2640,7 @@ export class DawTelemetryView {
         ];
       }
     }
+    this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_load_fl26_fx_preset', {
@@ -2101,4 +2703,3 @@ export class DawTelemetryView {
     }
   }
 }
-

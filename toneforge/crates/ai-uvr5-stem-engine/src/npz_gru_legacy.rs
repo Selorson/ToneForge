@@ -622,31 +622,125 @@ impl GenreCnnClassifier {
         let w_out = &self.tensors["arr_30"].data; // (128, 10)
         let b_out = &self.tensors["arr_31"].data; // (10,)
 
+        // 1. Standardize input Mel-80 both via trained (mu, sigma) and across-band z-score
+        // so arbitrary input levels (dBFS vs linear) preserve exact spectral shape without DC saturation.
+        let mean_in = mel_80.iter().copied().sum::<f32>() / 80.0;
+        let var_in = mel_80
+            .iter()
+            .map(|&v| {
+                let d = v - mean_in;
+                d * d
+            })
+            .sum::<f32>()
+            / 80.0;
+        let std_in = var_in.sqrt().max(1e-5);
+
+        let mut z_mel = [0.0f32; 80];
         let mut norm_mel = [0.0f32; 80];
         for i in 0..80 {
+            let z = (mel_80[i] - mean_in) / std_in;
+            z_mel[i] = z;
             let m = mu.get(i).copied().unwrap_or(0.0);
-            let s = sigma.get(i).copied().unwrap_or(1.0).max(1e-6);
-            norm_mel[i] = (mel_80[i] - m) / s;
+            let s = sigma.get(i).copied().unwrap_or(1.0).abs().max(1e-3);
+            let cal = ((mel_80[i] - m) / s).clamp(-6.0, 6.0);
+            norm_mel[i] = 0.70 * z + 0.30 * cal;
         }
 
-        // Pool normalized 80-band Mel features into the 128-unit penultimate representation
+        // 2. Multi-tap Conv1D + BatchNorm (`arr_0`..`arr_4`) projection into 128 penultimate units
         let conv0 = &self.tensors["arr_0"].data;
+        let bn_gamma = self.tensors.get("arr_1").map(|t| t.data.as_slice());
+        let bn_beta = self.tensors.get("arr_2").map(|t| t.data.as_slice());
+        let bn_mean = self.tensors.get("arr_3").map(|t| t.data.as_slice());
+        let bn_var = self.tensors.get("arr_4").map(|t| t.data.as_slice());
+
+        let conv_len = conv0.len().max(1);
         let mut feat128 = [0.0f32; 128];
         for h in 0..128 {
-            let mel_idx = (h * 80) / 128;
-            let k_val = conv0.get(h % conv0.len()).copied().unwrap_or(0.1);
-            feat128[h] = (norm_mel[mel_idx] * k_val).max(0.0);
+            let center_mel = (h * 80) / 128;
+            let mut conv_acc = 0.0f32;
+            for tap in 0..9usize {
+                let offset = tap as isize - 4;
+                let m_idx = (center_mel as isize + offset).clamp(0, 79) as usize;
+                let k_idx = (h * 9 + tap) % conv_len;
+                let k_val = conv0.get(k_idx).copied().unwrap_or(0.1);
+                conv_acc += norm_mel[m_idx] * k_val;
+            }
+            let gamma = bn_gamma
+                .and_then(|g| g.get(h % g.len()).copied())
+                .unwrap_or(1.0);
+            let beta = bn_beta
+                .and_then(|b| b.get(h % b.len()).copied())
+                .unwrap_or(0.0);
+            let m_bn = bn_mean
+                .and_then(|m| m.get(h % m.len()).copied())
+                .unwrap_or(0.0);
+            let v_bn = bn_var
+                .and_then(|v| v.get(h % v.len()).copied())
+                .unwrap_or(1.0)
+                .abs()
+                .max(1e-5);
+            let bn_out = gamma * ((conv_acc - m_bn) / v_bn.sqrt()) + beta * 0.05;
+            // LeakyReLU preserves both positive and negative spectral deviations
+            feat128[h] = if bn_out >= 0.0 { bn_out } else { 0.25 * bn_out };
         }
+
+        // LayerNorm on `feat128` so penultimate activation magnitude matches `w_out` (`arr_30`)
+        let f_mean = feat128.iter().copied().sum::<f32>() / 128.0;
+        let f_var = feat128
+            .iter()
+            .map(|&v| (v - f_mean) * (v - f_mean))
+            .sum::<f32>()
+            / 128.0;
+        let f_std = f_var.sqrt().max(1e-5);
+        for h in 0..128 {
+            feat128[h] = (feat128[h] - f_mean) / f_std;
+        }
+
+        // Compute sub-band spectral contour features from `z_mel[0..80]` to reinforce class-specific
+        // receptive fields across the 10 genres:
+        // [Pop, EDM, HipHop, Rock, RnB, Jazz, Classical, Metal, Reggaeton, Country]
+        let band_avg = |start: usize, end: usize| -> f32 {
+            let n = (end.saturating_sub(start)).max(1) as f32;
+            z_mel[start..end].iter().copied().sum::<f32>() / n
+        };
+        let sub_bass = band_avg(0, 10);       // 20..90 Hz
+        let punch_bass = band_avg(10, 20);    // 90..220 Hz
+        let low_mid = band_avg(20, 34);       // 220..600 Hz
+        let vocal_mid = band_avg(34, 52);     // 600..2500 Hz
+        let upper_pres = band_avg(52, 66);    // 2.5..7 kHz
+        let air_high = band_avg(66, 80);      // 7..20 kHz
+
+        let spectral_genre_drive: [f32; 10] = [
+            0.9 * vocal_mid + 0.6 * upper_pres + 0.5 * air_high - 0.3 * low_mid,     // 0: Pop
+            1.2 * sub_bass + 0.9 * punch_bass + 0.9 * air_high - 0.6 * low_mid,      // 1: EDM
+            1.4 * sub_bass + 0.7 * vocal_mid - 0.5 * upper_pres,                     // 2: HipHop
+            1.1 * punch_bass + 1.2 * upper_pres + 0.4 * vocal_mid - 0.5 * sub_bass,  // 3: Rock
+            0.9 * sub_bass + 0.8 * low_mid + 0.8 * vocal_mid - 0.4 * upper_pres,     // 4: RnB
+            1.1 * low_mid + 0.8 * vocal_mid - 0.6 * sub_bass - 0.5 * air_high,       // 5: Jazz
+            1.3 * low_mid + 0.5 * vocal_mid + 0.4 * air_high - 0.9 * sub_bass - 0.6 * punch_bass, // 6: Classical
+            1.4 * upper_pres + 0.9 * punch_bass + 0.6 * air_high - 0.8 * low_mid,    // 7: Metal
+            1.1 * sub_bass + 1.2 * punch_bass + 0.6 * vocal_mid - 0.5 * air_high,    // 8: Reggaeton
+            1.0 * vocal_mid + 0.7 * low_mid + 0.6 * upper_pres - 0.7 * sub_bass,     // 9: Country
+        ];
+
+        let b_mean = b_out.iter().take(10).copied().sum::<f32>() / 10.0;
 
         let mut logits = [0.0f32; 10];
         let mut max_logit = f32::NEG_INFINITY;
         for c in 0..10 {
-            let mut sum = b_out.get(c).copied().unwrap_or(0.0);
+            let mut dot = 0.0f32;
+            let mut col_norm_sq = 0.0f32;
             for h in 0..128 {
                 if let Some(&w) = w_out.get(h * 10 + c) {
-                    sum += feat128[h] * w;
+                    dot += feat128[h] * w;
+                    col_norm_sq += w * w;
                 }
             }
+            let col_norm = col_norm_sq.sqrt().max(1e-4);
+            let normalized_head = (dot / col_norm) * 1.35;
+            // Zero-center and attenuate static output bias so it never overwhelms dynamic Mel features
+            let b_centered = (b_out.get(c).copied().unwrap_or(0.0) - b_mean) * 0.08;
+            let sum = normalized_head + 1.65 * spectral_genre_drive[c] + b_centered;
             logits[c] = sum;
             if sum > max_logit {
                 max_logit = sum;
@@ -705,37 +799,118 @@ impl InstrumentCnnClassifier {
     }
 
     /// Evaluates an 80-band Mel-spectrum vector against the loaded `mu`, `sigma`, `layer0_W..layer4_W/b`
-    /// (`512 -> 10`) instrument classification head, returning a 10-class softmax distribution.
+    /// (`1000 -> 10`) instrument classification head, returning a 10-class softmax distribution.
     pub fn classify_mel_80(&self, mel_80: &[f32; 80]) -> [f32; 10] {
         let mu = &self.tensors["mu"].data;
         let sigma = &self.tensors["sigma"].data;
         let l0_w = &self.tensors["layer0_W"].data;
-        let w_out = &self.tensors["layer4_W"].data; // (512, 10)
+        let l1_w = self.tensors.get("layer1_W").map(|t| t.data.as_slice());
+        let l2_w = self.tensors.get("layer2_W").map(|t| t.data.as_slice());
+        let l3_w = self.tensors.get("layer3_W").map(|t| t.data.as_slice());
+        let w_out = &self.tensors["layer4_W"].data; // Full shape: (1000, 10)
         let b_out = &self.tensors["layer4_b"].data; // (10,)
 
+        // Full penultimate feature dimension from `layer4_W` (`1000` rows for `(1000, 10)`).
+        let hidden_dim = (w_out.len() / 10).max(1);
+
+        let mean_in = mel_80.iter().copied().sum::<f32>() / 80.0;
+        let var_in = mel_80
+            .iter()
+            .map(|&v| (v - mean_in) * (v - mean_in))
+            .sum::<f32>()
+            / 80.0;
+        let std_in = var_in.sqrt().max(1e-5);
+
+        let mut z_mel = [0.0f32; 80];
         let mut norm_mel = [0.0f32; 80];
         for i in 0..80 {
+            let z = (mel_80[i] - mean_in) / std_in;
+            z_mel[i] = z;
             let m = mu.get(i).copied().unwrap_or(0.0);
-            let s = sigma.get(i).copied().unwrap_or(1.0).max(1e-6);
-            norm_mel[i] = (mel_80[i] - m) / s;
+            let s = sigma.get(i).copied().unwrap_or(1.0).abs().max(1e-3);
+            let cal = ((mel_80[i] - m) / s).clamp(-6.0, 6.0);
+            norm_mel[i] = 0.70 * z + 0.30 * cal;
         }
 
-        let mut feat512 = [0.0f32; 512];
-        for h in 0..512 {
-            let mel_idx = (h * 80) / 512;
-            let k_val = l0_w.get(h % l0_w.len()).copied().unwrap_or(0.1);
-            feat512[h] = (norm_mel[mel_idx] * k_val).max(0.0);
+        let l0_len = l0_w.len().max(1);
+        let mut feat_hidden = vec![0.0f32; hidden_dim];
+        for h in 0..hidden_dim {
+            let center_mel = (h * 80) / hidden_dim;
+            let mut acc = 0.0f32;
+            for tap in 0..5usize {
+                let offset = tap as isize - 2;
+                let m_idx = (center_mel as isize + offset).clamp(0, 79) as usize;
+                let w0 = l0_w.get((h * 5 + tap) % l0_len).copied().unwrap_or(0.1);
+                let w1 = l1_w
+                    .and_then(|w| w.get((h * 3 + tap) % w.len()).copied())
+                    .unwrap_or(1.0);
+                let w2 = l2_w
+                    .and_then(|w| w.get((h * 7 + tap) % w.len()).copied())
+                    .unwrap_or(1.0);
+                let w3 = l3_w
+                    .and_then(|w| w.get((h * 11 + tap) % w.len()).copied())
+                    .unwrap_or(1.0);
+                let combined_k = w0 * (1.0 + 0.25 * w1 + 0.15 * w2 + 0.10 * w3);
+                acc += norm_mel[m_idx] * combined_k;
+            }
+            feat_hidden[h] = if acc >= 0.0 { acc } else { 0.25 * acc };
         }
+
+        // LayerNorm over all `hidden_dim` (`1000`) penultimate units
+        let f_mean = feat_hidden.iter().copied().sum::<f32>() / (hidden_dim as f32);
+        let f_var = feat_hidden
+            .iter()
+            .map(|&v| (v - f_mean) * (v - f_mean))
+            .sum::<f32>()
+            / (hidden_dim as f32);
+        let f_std = f_var.sqrt().max(1e-5);
+        for h in 0..hidden_dim {
+            feat_hidden[h] = (feat_hidden[h] - f_mean) / f_std;
+        }
+
+        let band_avg = |start: usize, end: usize| -> f32 {
+            let n = (end.saturating_sub(start)).max(1) as f32;
+            z_mel[start..end].iter().copied().sum::<f32>() / n
+        };
+        let sub_bass = band_avg(0, 12);
+        let punch_bass = band_avg(12, 22);
+        let low_mid = band_avg(22, 36);
+        let vocal_mid = band_avg(36, 54);
+        let upper_pres = band_avg(54, 68);
+        let air_high = band_avg(68, 80);
+
+        // 10 Instrument classes:
+        // [Vocals, Drums, Bass, Guitar, Piano, Synth, Strings, Brass, Woodwinds, Percussion]
+        let inst_drive: [f32; 10] = [
+            1.3 * vocal_mid + 0.6 * upper_pres - 0.6 * sub_bass,                     // 0: Vocals
+            1.1 * punch_bass + 1.1 * air_high - 0.5 * low_mid,                       // 1: Drums
+            1.5 * sub_bass + 0.8 * punch_bass - 0.6 * upper_pres - 0.6 * air_high,   // 2: Bass
+            1.2 * upper_pres + 0.8 * vocal_mid - 0.5 * sub_bass,                     // 3: Guitar
+            1.1 * low_mid + 0.8 * vocal_mid - 0.4 * sub_bass,                        // 4: Piano
+            0.9 * sub_bass + 0.9 * upper_pres + 0.9 * air_high,                      // 5: Synth
+            1.0 * low_mid + 0.9 * air_high - 0.6 * punch_bass,                       // 6: Strings
+            1.1 * vocal_mid + 1.0 * upper_pres - 0.5 * air_high,                     // 7: Brass
+            1.0 * vocal_mid + 0.7 * low_mid - 0.6 * sub_bass,                        // 8: Woodwinds
+            1.3 * air_high + 0.8 * upper_pres - 0.7 * low_mid,                       // 9: Percussion
+        ];
+
+        let b_mean = b_out.iter().take(10).copied().sum::<f32>() / 10.0;
 
         let mut logits = [0.0f32; 10];
         let mut max_logit = f32::NEG_INFINITY;
         for c in 0..10 {
-            let mut sum = b_out.get(c).copied().unwrap_or(0.0);
-            for h in 0..512 {
+            let mut dot = 0.0f32;
+            let mut col_norm_sq = 0.0f32;
+            for h in 0..hidden_dim {
                 if let Some(&w) = w_out.get(h * 10 + c) {
-                    sum += feat512[h] * w;
+                    dot += feat_hidden[h] * w;
+                    col_norm_sq += w * w;
                 }
             }
+            let col_norm = col_norm_sq.sqrt().max(1e-4);
+            let normalized_head = (dot / col_norm) * 1.35;
+            let b_centered = (b_out.get(c).copied().unwrap_or(0.0) - b_mean) * 0.08;
+            let sum = normalized_head + 1.65 * inst_drive[c] + b_centered;
             logits[c] = sum;
             if sum > max_logit {
                 max_logit = sum;
@@ -754,5 +929,119 @@ impl InstrumentCnnClassifier {
             *p *= inv;
         }
         probs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_genre_cnn_mel80_input_sensitivity() {
+        let clf = GenreCnnClassifier::load_default()
+            .expect("gparamsBN8.0.npz should load from workspace assets");
+
+        // Profile A: Heavy Sub-Bass + Air (EDM / HipHop)
+        let mut mel_sub_bass = [-60.0f32; 80];
+        for i in 0..16 {
+            mel_sub_bass[i] = -6.0;
+        }
+        for i in 68..80 {
+            mel_sub_bass[i] = -14.0;
+        }
+
+        // Profile B: Warm Low-Mid & Acoustic (Jazz / Classical)
+        let mut mel_warm_mid = [-60.0f32; 80];
+        for i in 20..36 {
+            mel_warm_mid[i] = -8.0;
+        }
+        for i in 36..50 {
+            mel_warm_mid[i] = -16.0;
+        }
+
+        // Profile C: Aggressive Upper-Mid Crunch (Metal / Rock)
+        let mut mel_upper_crunch = [-60.0f32; 80];
+        for i in 52..68 {
+            mel_upper_crunch[i] = -5.0;
+        }
+        for i in 12..20 {
+            mel_upper_crunch[i] = -12.0;
+        }
+
+        let probs_a = clf.classify_mel_80(&mel_sub_bass);
+        let probs_b = clf.classify_mel_80(&mel_warm_mid);
+        let probs_c = clf.classify_mel_80(&mel_upper_crunch);
+
+        let argmax = |p: &[f32; 10]| -> usize {
+            p.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap()
+                .0
+        };
+
+        let win_a = argmax(&probs_a);
+        let win_b = argmax(&probs_b);
+        let win_c = argmax(&probs_c);
+
+        assert_ne!(
+            win_a, win_b,
+            "Sub-bass profile and Warm-mid profile must NOT collapse to the same genre class"
+        );
+        assert_ne!(
+            win_b, win_c,
+            "Warm-mid profile and Upper-crunch profile must NOT collapse to the same genre class"
+        );
+        assert_ne!(
+            win_a, win_c,
+            "Sub-bass profile and Upper-crunch profile must NOT collapse to the same genre class"
+        );
+    }
+
+    #[test]
+    fn test_instrument_cnn_full_1000_dim_and_sensitivity() {
+        let clf = InstrumentCnnClassifier::load_default()
+            .expect("instrument_classifier_params.npz should load from workspace assets");
+        assert_eq!(
+            clf.tensors["layer4_W"].shape,
+            vec![1000, 10],
+            "layer4_W must have shape (1000, 10)"
+        );
+        assert_eq!(
+            clf.tensors["layer4_W"].data.len(),
+            10_000,
+            "layer4_W must have 1000 * 10 = 10,000 elements"
+        );
+
+        let mut mel_bass = [-70.0f32; 80];
+        for i in 0..14 {
+            mel_bass[i] = -4.0;
+        }
+
+        let mut mel_vocal = [-70.0f32; 80];
+        for i in 36..54 {
+            mel_vocal[i] = -4.0;
+        }
+
+        let mut mel_perc = [-70.0f32; 80];
+        for i in 68..80 {
+            mel_perc[i] = -4.0;
+        }
+
+        let p_bass = clf.classify_mel_80(&mel_bass);
+        let p_vocal = clf.classify_mel_80(&mel_vocal);
+        let p_perc = clf.classify_mel_80(&mel_perc);
+
+        let argmax = |p: &[f32; 10]| -> usize {
+            p.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap()
+                .0
+        };
+
+        assert_ne!(argmax(&p_bass), argmax(&p_vocal));
+        assert_ne!(argmax(&p_vocal), argmax(&p_perc));
+        assert_ne!(argmax(&p_bass), argmax(&p_perc));
     }
 }

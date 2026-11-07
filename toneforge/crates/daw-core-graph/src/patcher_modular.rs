@@ -250,7 +250,15 @@ impl PatcherGraphNode {
 
         let mut queue: Vec<usize> = (0..n).filter(|&i| in_deg[i] == 0).collect();
         let mut order = Vec::with_capacity(n);
-        let mut max_in_lat = vec![0usize; n];
+        let mut max_in_lat: Vec<Option<usize>> = vec![None; n];
+        for conn in &self.connections {
+            if conn.from_node == PATCHER_HOST_INPUT_NODE
+                && conn.to_node < n
+                && conn.gain.abs() > 1e-4
+            {
+                max_in_lat[conn.to_node] = Some(0);
+            }
+        }
 
         let mut head = 0usize;
         while head < queue.len() {
@@ -258,11 +266,19 @@ impl PatcherGraphNode {
             head += 1;
             order.push(u);
 
-            let out_lat_u = max_in_lat[u] + self.nodes[u].dsp.latency_samples();
-            self.nodes[u].accumulated_latency = out_lat_u;
+            let out_lat_u = max_in_lat[u].map(|in_lat| in_lat + self.nodes[u].dsp.latency_samples());
+            self.nodes[u].accumulated_latency = out_lat_u.unwrap_or(0);
+
+            if let Some(lat_u) = out_lat_u {
+                for conn in &self.connections {
+                    if conn.from_node == u && conn.to_node < n && conn.gain.abs() > 1e-4 {
+                        let dst = conn.to_node;
+                        max_in_lat[dst] = Some(max_in_lat[dst].map_or(lat_u, |cur| cur.max(lat_u)));
+                    }
+                }
+            }
 
             for &v in &adj[u] {
-                max_in_lat[v] = max_in_lat[v].max(out_lat_u);
                 in_deg[v] -= 1;
                 if in_deg[v] == 0 {
                     queue.push(v);
@@ -274,39 +290,44 @@ impl PatcherGraphNode {
             return false; // Cycle detected
         }
 
-        // Compute critical-path latency at PATCHER_HOST_OUTPUT_NODE
+        // Compute critical-path latency at PATCHER_HOST_OUTPUT_NODE over active (`|gain| > 1e-4`) cords
         let mut host_out_lat = 0usize;
         for conn in &self.connections {
-            if conn.to_node == PATCHER_HOST_OUTPUT_NODE {
-                let src_lat = if conn.from_node == PATCHER_HOST_INPUT_NODE {
-                    0
-                } else if conn.from_node < n {
-                    self.nodes[conn.from_node].accumulated_latency
-                } else {
-                    0
-                };
-                host_out_lat = host_out_lat.max(src_lat);
+            if conn.to_node == PATCHER_HOST_OUTPUT_NODE && conn.gain.abs() > 1e-4 {
+                if conn.from_node == PATCHER_HOST_INPUT_NODE {
+                    host_out_lat = host_out_lat.max(0);
+                } else if conn.from_node < n && max_in_lat[conn.from_node].is_some() {
+                    host_out_lat = host_out_lat.max(self.nodes[conn.from_node].accumulated_latency);
+                }
             }
         }
         self.total_latency_samples = host_out_lat;
 
         // Configure `TMultiBufferDelay` (`edge_apdc_delay`) on every internal edge
         for conn in &mut self.connections {
-            let src_lat = if conn.from_node == PATCHER_HOST_INPUT_NODE {
+            let slack = if conn.gain.abs() <= 1e-4 {
                 0
-            } else if conn.from_node < n {
-                self.nodes[conn.from_node].accumulated_latency
             } else {
-                0
+                let src_lat_opt = if conn.from_node == PATCHER_HOST_INPUT_NODE {
+                    Some(0)
+                } else if conn.from_node < n && max_in_lat[conn.from_node].is_some() {
+                    Some(self.nodes[conn.from_node].accumulated_latency)
+                } else {
+                    None
+                };
+                if let Some(src_lat) = src_lat_opt {
+                    let dst_target_lat = if conn.to_node == PATCHER_HOST_OUTPUT_NODE {
+                        host_out_lat
+                    } else if conn.to_node < n {
+                        max_in_lat[conn.to_node].unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    dst_target_lat.saturating_sub(src_lat)
+                } else {
+                    0
+                }
             };
-            let dst_target_lat = if conn.to_node == PATCHER_HOST_OUTPUT_NODE {
-                host_out_lat
-            } else if conn.to_node < n {
-                max_in_lat[conn.to_node]
-            } else {
-                0
-            };
-            let slack = dst_target_lat.saturating_sub(src_lat);
             conn.edge_apdc_delay
                 .ensure_capacity(slack.max(DEFAULT_APDC_CAPACITY));
             conn.edge_apdc_delay.set_delay_samples(slack);

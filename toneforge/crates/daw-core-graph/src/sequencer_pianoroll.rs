@@ -884,6 +884,7 @@ pub struct PolyphonicSynthGeneratorNode {
     event_count: usize,
     sampler_pcm: Vec<StereoFrame>,
     sampler_root_key: u8,
+    sampler_kit_voices: Vec<(u8, Vec<StereoFrame>)>,
     lookahead_latency_samples: usize,
     lookahead_delay: ApdcDelayLine,
     slide_events_processed: u64,
@@ -909,6 +910,7 @@ impl PolyphonicSynthGeneratorNode {
             event_count: 0,
             sampler_pcm: Vec::new(),
             sampler_root_key: 60,
+            sampler_kit_voices: Vec::new(),
             lookahead_latency_samples: 0,
             lookahead_delay: ApdcDelayLine::with_capacity(DEFAULT_APDC_CAPACITY),
             slide_events_processed: 0,
@@ -933,6 +935,17 @@ impl PolyphonicSynthGeneratorNode {
     pub fn load_sampler_pcm(&mut self, pcm: Vec<StereoFrame>, root_key: u8) {
         self.sampler_pcm = pcm;
         self.sampler_root_key = root_key.min(127);
+    }
+
+    /// Loads discrete multi-sample kit voices `[(midi_key, stereo_pcm)]` (e.g. `36`=Kick, `42`=CH, `46`=OH, `49`=Crash)
+    /// for one-shot sample-accurate kit triggering (`[Nhóm C.5]`).
+    pub fn load_sample_kit_voices(&mut self, kit_voices: Vec<(u8, Vec<StereoFrame>)>) {
+        self.sampler_kit_voices = kit_voices;
+    }
+
+    #[inline]
+    pub fn sample_kit_voice_count(&self) -> usize {
+        self.sampler_kit_voices.len()
     }
 
     #[inline]
@@ -1245,7 +1258,38 @@ impl UnifiedDspNode for PolyphonicSynthGeneratorNode {
                     (440.0 * ((v.current_pitch_semitones as f64 - 69.0) / 12.0).exp2()).clamp(20.0, sr * 0.47);
                 let dt = freq_hz * inv_sr;
 
-                let (mut sig_l, mut sig_r) = if !self.sampler_pcm.is_empty() {
+                let (mut sig_l, mut sig_r) = if !self.sampler_kit_voices.is_empty() {
+                    // Find closest kit voice by MIDI key (e.g. 36=Kick, 42=CH, 46=OH, 49=Crash)
+                    let mut best_voice_idx = 0usize;
+                    let mut min_dist = u8::MAX;
+                    for (idx, (root_key, _)) in self.sampler_kit_voices.iter().enumerate() {
+                        let dist = (*root_key).abs_diff(v.key);
+                        if dist < min_dist {
+                            min_dist = dist;
+                            best_voice_idx = idx;
+                        }
+                    }
+                    let (root_key, sample_buf) = &self.sampler_kit_voices[best_voice_idx];
+                    let ratio = ((v.current_pitch_semitones - (*root_key as f32)) / 12.0)
+                        .clamp(-2.0, 2.0)
+                        .exp2() as f64;
+                    let idx0 = v.sample_cursor as usize;
+                    if idx0 + 1 < sample_buf.len() {
+                        let frac = (v.sample_cursor - idx0 as f64) as f32;
+                        let s0 = sample_buf[idx0];
+                        let s1 = sample_buf[idx0 + 1];
+                        v.sample_cursor += ratio;
+                        (
+                            s0[0] + frac * (s1[0] - s0[0]),
+                            s0[1] + frac * (s1[1] - s0[1]),
+                        )
+                    } else {
+                        // One-shot sample finished: deactivate voice cleanly without looping
+                        v.active = false;
+                        v.stage = AdsrStage::Idle;
+                        continue;
+                    }
+                } else if !self.sampler_pcm.is_empty() {
                     let ratio = ((v.current_pitch_semitones - self.sampler_root_key as f32) / 12.0)
                         .exp2() as f64;
                     let idx0 = v.sample_cursor as usize;

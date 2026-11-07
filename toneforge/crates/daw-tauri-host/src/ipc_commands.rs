@@ -7,19 +7,21 @@
 
 use crate::project_state::Ozone12MasterConfigDto;
 use crate::shm_telemetry_server::ShmTelemetryServer;
-use daw_core_graph::MAX_INSERT_SLOTS;
-use daw_core_graph::MAX_MIXER_TRACKS;
+use daw_core_graph::{MAX_INSERT_SLOTS, MAX_MIXER_TRACKS, UnifiedDspNode};
 use daw_core_graph::automation_spline::normalized_to_fixed30;
 use daw_core_graph::telemetry_shm::{
     EngineCommand, VISUAL_TELEMETRY_FRAME_BYTES,
 };
 use dsp_proq4_eq::{
-    EqBandParams, FilterShape, PROQ4_NUM_BANDS, PROQ4_PARAMS_PER_BAND, PROQ4_TOTAL_PARAMS,
-    ProQ4ParameterSet,
+    CharacterMode, EqBandParams, FilterShape, LinearPhaseResolution, PROQ4_BAND_PARAMS_TOTAL,
+    PROQ4_NUM_BANDS, PROQ4_PARAMS_PER_BAND, PROQ4_TOTAL_PARAMS, ProQ4ParameterSet, ProcessingMode,
 };
-use dsp_soothe3_spectral::params_143::SOOTHE3_GLOBAL_PARAMS_COUNT;
+use dsp_soothe3_spectral::params_143::{
+    SOOTHE3_GLOBAL_PARAMS_COUNT, SOOTHE3_NUM_SC_BANDS, SOOTHE3_PARAMS_PER_SC_BAND,
+};
 use dsp_soothe3_spectral::{
-    SOOTHE3_TOTAL_PARAMS, Soothe3ParameterSet, SootheProcessMode, TimeResolutionQuality,
+    SOOTHE3_TOTAL_PARAMS, SidechainEqBandParams, SidechainFilterShape, Soothe3ParameterSet,
+    SootheProcessMode, TimeResolutionQuality,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -61,6 +63,71 @@ pub struct ProQ4BandUpdateDto {
     pub spectral_density: f32,
 }
 
+/// DTO for updating Pro-Q 4 Global Parameters (`576..601`: Phase Mode, Character, Gain Scale, Output Level, Bypass, Auto Gain, Show Collisions) from Svelte 5 UI (`[Nhóm B.4]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProQ4GlobalUpdateDto {
+    #[serde(alias = "trackIdx", default = "default_proq4_track_idx")]
+    pub track_idx: u16,
+    #[serde(alias = "slotIdx", default)]
+    pub slot_idx: u8,
+    #[serde(alias = "processingMode", default = "default_proq4_processing_mode")]
+    pub processing_mode: u8, // 0 = ZeroLatency, 1 = NaturalPhase, 2 = LinearPhase
+    #[serde(alias = "phaseMode", default)]
+    pub phase_mode: Option<String>, // Optional string alias: "ZeroLatency" | "NaturalPhase" | "LinearPhase"
+    #[serde(alias = "processingResolution", default = "default_proq4_resolution")]
+    pub processing_resolution: u8, // 0..=4
+    #[serde(default)]
+    pub character: u8, // 0 = Clean, 1 = Subtle, 2 = Warm
+    #[serde(alias = "gainScalePct", default = "default_proq4_gain_scale_pct")]
+    pub gain_scale_pct: f32, // 0..=200%
+    #[serde(alias = "outputLevelDb", default)]
+    pub output_level_db: f32, // -36..=+36 dB
+    #[serde(default)]
+    pub bypass: bool,
+    #[serde(alias = "autoGain", default = "default_true")]
+    pub auto_gain: bool,
+    #[serde(alias = "showCollisions", default = "default_true")]
+    pub show_collisions: bool,
+}
+
+fn default_proq4_track_idx() -> u16 {
+    1
+}
+
+fn default_proq4_processing_mode() -> u8 {
+    1 // NaturalPhase
+}
+
+fn default_proq4_resolution() -> u8 {
+    1 // Medium
+}
+
+fn default_proq4_gain_scale_pct() -> f32 {
+    100.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ProQ4GlobalUpdateDto {
+    fn default() -> Self {
+        Self {
+            track_idx: 1,
+            slot_idx: 0,
+            processing_mode: 1,
+            phase_mode: None,
+            processing_resolution: 1,
+            character: 0,
+            gain_scale_pct: 100.0,
+            output_level_db: 0.0,
+            bypass: false,
+            auto_gain: true,
+            show_collisions: true,
+        }
+    }
+}
+
 /// DTO for updating Soothe3 global resonance suppression parameters from Svelte 5 UI.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Soothe3UpdateDto {
@@ -77,6 +144,24 @@ pub struct Soothe3UpdateDto {
     pub linear_phase: bool,
     pub low_latency: bool,
     pub quality: u8,
+}
+
+/// DTO for updating one of Soothe3's 8 Sidechain EQ Bands (`band_idx in 0..8`, params `26..98`) (`[Nhóm B.5]`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Soothe3ScBandUpdateDto {
+    #[serde(alias = "trackIdx")]
+    pub track_idx: u16,
+    #[serde(alias = "slotIdx")]
+    pub slot_idx: u8,
+    #[serde(alias = "bandIdx")]
+    pub band_idx: u8,
+    pub enabled: bool,
+    #[serde(alias = "freqHz")]
+    pub freq_hz: f32,
+    #[serde(alias = "gainDb")]
+    pub gain_db: f32,
+    pub q: f32,
+    pub shape: u8,
 }
 
 /// Sets DAW transport play/stop state and tempo BPM.
@@ -214,6 +299,99 @@ pub fn cmd_update_soothe3_params(
             slot_index: dto.slot_idx,
             param_id: param_id as u32,
             norm_val: ps.get_normalized(param_id as u32),
+            target_sample_pos: None,
+        })?;
+    }
+    Ok(())
+}
+
+/// Updates Pro-Q 4 Global Parameters (`576..601`: Phase Mode, Resolution, Character, Gain Scale,
+/// Output Level, Bypass, Auto Gain, Show Collisions) and triggers `EngineCommand::RefreshApdc` (`[Nhóm B.4]`).
+pub fn cmd_update_proq4_global(
+    state: &DawAppState,
+    dto: ProQ4GlobalUpdateDto,
+) -> Result<(), String> {
+    if (dto.track_idx as usize) >= MAX_MIXER_TRACKS || (dto.slot_idx as usize) >= MAX_INSERT_SLOTS {
+        return Err("Track or slot index out of range".to_string());
+    }
+    let mut ps = ProQ4ParameterSet::new();
+    let fallback_mode = match dto.processing_mode {
+        0 => ProcessingMode::ZeroLatency,
+        1 => ProcessingMode::NaturalPhase,
+        _ => ProcessingMode::LinearPhase,
+    };
+    ps.global.processing_mode = match dto.phase_mode.as_deref().map(str::trim) {
+        Some(m) if m.eq_ignore_ascii_case("ZeroLatency") || m.eq_ignore_ascii_case("zero_latency") || m == "0" => {
+            ProcessingMode::ZeroLatency
+        }
+        Some(m) if m.eq_ignore_ascii_case("NaturalPhase") || m.eq_ignore_ascii_case("natural_phase") || m == "1" => {
+            ProcessingMode::NaturalPhase
+        }
+        Some(m) if m.eq_ignore_ascii_case("LinearPhase") || m.eq_ignore_ascii_case("linear_phase") || m == "2" => {
+            ProcessingMode::LinearPhase
+        }
+        _ => fallback_mode,
+    };
+    ps.global.processing_resolution = match dto.processing_resolution {
+        0 => LinearPhaseResolution::Low,
+        1 => LinearPhaseResolution::Medium,
+        2 => LinearPhaseResolution::High,
+        3 => LinearPhaseResolution::VeryHigh,
+        _ => LinearPhaseResolution::Maximum,
+    };
+    ps.global.character = match dto.character {
+        0 => CharacterMode::Clean,
+        1 => CharacterMode::Subtle,
+        _ => CharacterMode::Warm,
+    };
+    ps.global.gain_scale = (dto.gain_scale_pct * 0.01).clamp(0.0, 2.0);
+    ps.global.output_level_db = dto.output_level_db.clamp(-36.0, 36.0);
+    ps.global.bypass = dto.bypass;
+    ps.global.auto_gain = dto.auto_gain;
+    ps.global.show_collisions = dto.show_collisions;
+    ps.sync_mirror_from_structured();
+
+    for param_id in PROQ4_BAND_PARAMS_TOTAL..PROQ4_TOTAL_PARAMS {
+        state.push_command(EngineCommand::SetPluginParamNormalized {
+            track_index: dto.track_idx,
+            slot_index: dto.slot_idx,
+            param_id: param_id as u32,
+            norm_val: ps.get_normalized(param_id as u32),
+            target_sample_pos: None,
+        })?;
+    }
+    state.push_command(EngineCommand::RefreshApdc)?;
+    Ok(())
+}
+
+/// Updates one of Soothe3's 8 Sidechain EQ Bands (`band_idx in 0..8`, 9 params per band `26..98`)
+/// via the lock-free `rtrb` command queue (`[Nhóm B.5]`).
+pub fn cmd_update_soothe3_sc_band(
+    state: &DawAppState,
+    dto: Soothe3ScBandUpdateDto,
+) -> Result<(), String> {
+    if (dto.track_idx as usize) >= MAX_MIXER_TRACKS || (dto.slot_idx as usize) >= MAX_INSERT_SLOTS {
+        return Err("Track or slot index out of range".to_string());
+    }
+    let b = dto.band_idx as usize;
+    if b >= SOOTHE3_NUM_SC_BANDS {
+        return Err(format!("Soothe3 SC band index {} out of range (0..8)", b));
+    }
+    let mut band = SidechainEqBandParams::default();
+    band.used = true;
+    band.enabled = dto.enabled;
+    band.shape = SidechainFilterShape::from_u8(dto.shape.min(7));
+    band.freq_hz = dto.freq_hz.clamp(20.0, 20_000.0);
+    band.depth = (dto.gain_db / 2.4).clamp(-10.0, 10.0);
+    band.q = dto.q.clamp(0.1, 16.0);
+
+    let base = SOOTHE3_GLOBAL_PARAMS_COUNT + b * SOOTHE3_PARAMS_PER_SC_BAND;
+    for off in 0..SOOTHE3_PARAMS_PER_SC_BAND {
+        state.push_command(EngineCommand::SetPluginParamNormalized {
+            track_index: dto.track_idx,
+            slot_index: dto.slot_idx,
+            param_id: (base + off) as u32,
+            norm_val: band.get_offset_normalized(off),
             target_sample_pos: None,
         })?;
     }
@@ -361,6 +539,46 @@ pub fn cmd_update_bsrnn_stem_gains(
     Ok(())
 }
 
+/// Dispatches 4-Stem BSRNN Master Rebalance gains (`0..=3`), Solo flags (`4..=7`), and Mute flags (`8..=11`)
+/// via the lock-free `rtrb` command queue (`[Nhóm D.2]`).
+pub fn cmd_update_bsrnn_stem_state(
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    stem_gains_db: [f32; 4],
+    stem_solo: [bool; 4],
+    stem_mute: [bool; 4],
+) -> Result<(), String> {
+    if (track_idx as usize) >= MAX_MIXER_TRACKS || (slot_idx as usize) >= MAX_INSERT_SLOTS {
+        return Err("Track or slot index out of range".to_string());
+    }
+    for s in 0..4 {
+        let norm_gain = ((stem_gains_db[s].clamp(-12.0, 12.0) + 12.0) / 24.0).clamp(0.0, 1.0);
+        state.push_command(EngineCommand::SetPluginParamNormalized {
+            track_index: track_idx,
+            slot_index: slot_idx,
+            param_id: s as u32,
+            norm_val: norm_gain,
+            target_sample_pos: None,
+        })?;
+        state.push_command(EngineCommand::SetPluginParamNormalized {
+            track_index: track_idx,
+            slot_index: slot_idx,
+            param_id: (4 + s) as u32,
+            norm_val: if stem_solo[s] { 1.0 } else { 0.0 },
+            target_sample_pos: None,
+        })?;
+        state.push_command(EngineCommand::SetPluginParamNormalized {
+            track_index: track_idx,
+            slot_index: slot_idx,
+            param_id: (8 + s) as u32,
+            norm_val: if stem_mute[s] { 1.0 } else { 0.0 },
+            target_sample_pos: None,
+        })?;
+    }
+    Ok(())
+}
+
 /// Directly sets a Mixer Track's post-fader linear gain (`0..502`, including Master Track `#0`)
 /// via the lock-free command queue.
 pub fn cmd_set_track_gain(
@@ -375,6 +593,68 @@ pub fn cmd_set_track_gain(
         track_index: track_idx,
         gain_linear: gain_linear.clamp(0.0, 4.0),
     })
+}
+
+fn would_create_mixer_cycle(
+    engine: &daw_core_graph::MixerEngine,
+    src_track: usize,
+    dst_track: usize,
+) -> bool {
+    if src_track == dst_track {
+        return true;
+    }
+    let mut visited = [false; MAX_MIXER_TRACKS];
+    let mut stack = Vec::with_capacity(32);
+    stack.push(dst_track);
+    while let Some(curr) = stack.pop() {
+        if curr == src_track {
+            return true;
+        }
+        if curr < MAX_MIXER_TRACKS && !visited[curr] {
+            visited[curr] = true;
+            for route in &engine.tracks[curr].sends {
+                if route.dest_track_index < MAX_MIXER_TRACKS {
+                    stack.push(route.dest_track_index);
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Routes `src_track -> dst_track` (with `gain` and `is_sidechain`) directly on `MixerEngine`,
+/// rejecting directed cycles via DFS and rebuilding the 5-Point APDC topological schedule (`[Nhóm B.7]`).
+pub fn cmd_route_mixer_track_on_engine(
+    engine: &mut daw_core_graph::MixerEngine,
+    _state: &DawAppState,
+    src_track: u16,
+    dst_track: u16,
+    gain: f32,
+    is_sidechain: bool,
+) -> Result<(), String> {
+    let src = src_track as usize;
+    let dst = dst_track as usize;
+    if src >= MAX_MIXER_TRACKS || dst >= MAX_MIXER_TRACKS {
+        return Err("Mixer track index out of range (0..502)".to_string());
+    }
+    if would_create_mixer_cycle(engine, src, dst) {
+        return Err(format!(
+            "Routing track {} -> {} would create a cycle in the 502-Track Mixer DAG",
+            src, dst
+        ));
+    }
+    let clamped_gain = gain.clamp(0.0, 4.0);
+    if let Some(existing) = engine.tracks[src]
+        .sends
+        .iter_mut()
+        .find(|s| s.dest_track_index == dst && s.is_sidechain_only == is_sidechain)
+    {
+        existing.gain = clamped_gain;
+    } else {
+        engine.tracks[src].add_send(dst, clamped_gain, is_sidechain);
+    }
+    engine.rebuild_graph().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Adjusts a Mixer Track's post-fader linear gain and validates non-self-loop routing via the lock-free command queue.
@@ -424,6 +704,268 @@ pub fn cmd_poll_binary_telemetry_frame(
     streamer: &mut ShmTelemetryServer,
 ) -> &[u8; VISUAL_TELEMETRY_FRAME_BYTES] {
     streamer.poll_latest_bytes()
+}
+
+/// Request DTO for full-length UVR5 3-Model Spectral Ensemble separation (`[Nhóm B.10, C.3]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Uvr5SeparationRequestDto {
+    #[serde(alias = "audioPath")]
+    pub audio_path: String,
+    #[serde(
+        alias = "model_profile",
+        alias = "modelProfile",
+        alias = "modelHash",
+        default = "default_uvr5_model_hash"
+    )]
+    pub model_hash: String,
+    #[serde(alias = "ensembleMode", default = "default_ensemble_mode")]
+    pub ensemble_mode: String,
+    #[serde(default = "default_ensemble_weights")]
+    pub weights: [f32; 3],
+    #[serde(alias = "enableDenoise2pass", default = "default_true")]
+    pub enable_denoise_2pass: bool,
+    #[serde(alias = "vrAggressiveness", default = "default_aggressiveness")]
+    pub vr_aggressiveness: f32,
+    #[serde(
+        alias = "phaseDenoiseStrength",
+        default = "default_phase_denoise_strength"
+    )]
+    pub phase_denoise_strength: f32,
+    #[serde(alias = "invertInstrumental", default = "default_true")]
+    pub invert_instrumental: bool,
+    #[serde(alias = "bounceToMixer", default = "default_true")]
+    pub bounce_to_mixer: bool,
+}
+
+fn default_uvr5_model_hash() -> String {
+    "ensemble_3model".to_string()
+}
+
+fn default_ensemble_mode() -> String {
+    "Weighted".to_string()
+}
+
+fn default_ensemble_weights() -> [f32; 3] {
+    [0.45, 0.35, 0.20]
+}
+
+fn default_aggressiveness() -> f32 {
+    0.15
+}
+
+fn default_phase_denoise_strength() -> f32 {
+    0.20
+}
+
+impl Default for Uvr5SeparationRequestDto {
+    fn default() -> Self {
+        Self {
+            audio_path: String::new(),
+            model_hash: default_uvr5_model_hash(),
+            ensemble_mode: default_ensemble_mode(),
+            weights: default_ensemble_weights(),
+            enable_denoise_2pass: true,
+            vr_aggressiveness: default_aggressiveness(),
+            phase_denoise_strength: default_phase_denoise_strength(),
+            invert_instrumental: true,
+            bounce_to_mixer: true,
+        }
+    }
+}
+
+fn sanitize_model_tag_for_filename(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(48));
+    let mut prev_underscore = false;
+    for ch in raw.chars() {
+        if out.len() >= 48 {
+            break;
+        }
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            out.push(ch);
+            prev_underscore = false;
+        } else if !prev_underscore && !out.is_empty() {
+            out.push('_');
+            prev_underscore = true;
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "ensemble_3model".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// Result DTO returned by `run_uvr5_separation_full_engine` (`[Nhóm B.10, C.3]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Uvr5SeparationResultDto {
+    #[serde(alias = "stem_files")]
+    pub stem_paths: Vec<String>,
+    pub stem_peak_dbfs: [f32; 4],
+    pub stem_rms_dbfs: [f32; 4],
+    pub separated_frames: usize,
+    pub sample_rate_hz: u32,
+    pub bounced_mixer_tracks: [u16; 4],
+}
+
+/// Executes full-length UVR5 3-Model Spectral Ensemble separation (`Mdx23cSeparator` + `HTDemucs4` +
+/// `CascadedASPPNet` + `SpectralEnsembler`) across 100% of `mix_frames`, encodes 4 `.wav` buffers
+/// (`[Vocals, Drums, Bass, InvInst/Other]`), writes them to disk, and returns `(Uvr5SeparationResultDto, [Vec<StereoFrame>; 4], [Vec<u8>; 4])`.
+pub fn execute_uvr5_separation_dsp(
+    mix_frames: &[daw_core_graph::StereoFrame],
+    sample_rate_hz: u32,
+    req: &Uvr5SeparationRequestDto,
+) -> Result<
+    (
+        Uvr5SeparationResultDto,
+        [Vec<daw_core_graph::StereoFrame>; 4],
+        [Vec<u8>; 4],
+    ),
+    String,
+> {
+    if req.audio_path.trim().is_empty() {
+        return Err("audio_path must not be empty".to_string());
+    }
+    let path = PathBuf::from(&req.audio_path);
+    let stem_dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty() && p.exists())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::env::temp_dir().join("toneforge_uvr5_stems"));
+    let _ = std::fs::create_dir_all(&stem_dir);
+    let stem_prefix = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio");
+    let safe_model_tag = sanitize_model_tag_for_filename(&req.model_hash);
+
+    let mode = match req.ensemble_mode.to_ascii_uppercase().as_str() {
+        "MAX_SPEC" | "MAXSPEC" => ai_uvr5_stem_engine::SpectralEnsembleMode::MaxSpec,
+        "MIN_SPEC" | "MINSPEC" => ai_uvr5_stem_engine::SpectralEnsembleMode::MinSpec,
+        "AVERAGE" => ai_uvr5_stem_engine::SpectralEnsembleMode::Average,
+        "MEDIAN" => ai_uvr5_stem_engine::SpectralEnsembleMode::Median,
+        _ => ai_uvr5_stem_engine::SpectralEnsembleMode::Weighted,
+    };
+
+    let source_mix: Vec<daw_core_graph::StereoFrame> = if !mix_frames.is_empty() {
+        mix_frames.to_vec()
+    } else if path.exists() {
+        crate::offline_render_engine::read_wav_file(&path)
+            .map(|d| d.frames)
+            .unwrap_or_else(|_| make_fallback_reference_mix(4096, sample_rate_hz as f64))
+    } else {
+        make_fallback_reference_mix(4096, sample_rate_hz as f64)
+    };
+
+    let len = source_mix.len();
+    let mut mdx = ai_uvr5_stem_engine::Mdx23cSeparator::new(512, 128, 1024, 0.5);
+    mdx.enable_denoise_2pass = req.enable_denoise_2pass;
+    let (mdx_vocals, _mdx_inst) = mdx.separate_offline(&source_mix);
+
+    let demucs = ai_uvr5_stem_engine::HTDemucs4::new(512, 128, 16, 4, 2);
+    let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
+        demucs.separate_4stems(&source_mix);
+
+    let vr = ai_uvr5_stem_engine::CascadedASPPNet::new(
+        512,
+        128,
+        req.vr_aggressiveness.clamp(-1.0, 1.0),
+    );
+    let (vr_vocals, _vr_inst) = vr.separate_vocal_instrumental(&source_mix);
+
+    let mut ensembler = ai_uvr5_stem_engine::SpectralEnsembler::new(512, 128, mode);
+    ensembler.phase_denoise_strength = req.phase_denoise_strength.clamp(0.0, 1.0);
+    let vocals = ensembler.ensemble_waveforms(
+        &[&mdx_vocals, &demucs_vocals, &vr_vocals],
+        Some(&req.weights),
+    );
+
+    let inv_inst =
+        ai_uvr5_stem_engine::SpectralEnsembler::invert_audio_waveform(&source_mix, &vocals);
+    let mut drums = vec![[0.0f32; 2]; len];
+    let mut bass = vec![[0.0f32; 2]; len];
+    for i in 0..len {
+        drums[i] = [demucs_drums[i][0] * 0.75, demucs_drums[i][1] * 0.75];
+        bass[i] = [demucs_bass[i][0] * 0.75, demucs_bass[i][1] * 0.75];
+    }
+    let fourth_stem = if req.invert_instrumental {
+        inv_inst
+    } else {
+        demucs_other
+    };
+    let fourth_suffix = if req.invert_instrumental {
+        "inv_inst"
+    } else {
+        "other"
+    };
+
+    let stems = [vocals, drums, bass, fourth_stem];
+    let stem_suffixes = ["vocals", "drums", "bass", fourth_suffix];
+    let render_sr = crate::offline_render_engine::RenderSampleRate::from_hz(sample_rate_hz.max(44_100));
+
+    let mut stem_paths = Vec::with_capacity(4);
+    let mut stem_peak_dbfs = [-144.0f32; 4];
+    let mut stem_rms_dbfs = [-144.0f32; 4];
+    let mut wav_buffers: [Vec<u8>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+
+    for s in 0..4 {
+        let mut peak = 1e-9f32;
+        let mut sum_sq = 0.0f64;
+        for f in &stems[s] {
+            peak = peak.max(f[0].abs()).max(f[1].abs());
+            sum_sq += (f[0] as f64) * (f[0] as f64) + (f[1] as f64) * (f[1] as f64);
+        }
+        let rms = (sum_sq / ((stems[s].len().max(1) * 2) as f64)).sqrt() as f32;
+        stem_peak_dbfs[s] = (20.0 * peak.max(1e-7).log10() * 10.0).round() / 10.0;
+        stem_rms_dbfs[s] = (20.0 * rms.max(1e-7).log10() * 10.0).round() / 10.0;
+
+        let wav_bytes = crate::offline_render_engine::encode_wav_bytes(
+            &stems[s],
+            render_sr,
+            crate::offline_render_engine::WavBitDepth::Pcm16MbitPlus,
+            true,
+        );
+        let file_path = stem_dir.join(format!(
+            "{}_{}_{}.wav",
+            stem_prefix, safe_model_tag, stem_suffixes[s]
+        ));
+        let _ = std::fs::write(&file_path, &wav_bytes);
+        stem_paths.push(file_path.display().to_string());
+        wav_buffers[s] = wav_bytes;
+    }
+
+    Ok((
+        Uvr5SeparationResultDto {
+            stem_paths,
+            stem_peak_dbfs,
+            stem_rms_dbfs,
+            separated_frames: len,
+            sample_rate_hz: render_sr.as_u32(),
+            bounced_mixer_tracks: if req.bounce_to_mixer {
+                [1, 2, 3, 4]
+            } else {
+                [0, 0, 0, 0]
+            },
+        },
+        stems,
+        wav_buffers,
+    ))
+}
+
+fn make_fallback_reference_mix(
+    frames: usize,
+    sample_rate: f64,
+) -> Vec<daw_core_graph::StereoFrame> {
+    let mut out = Vec::with_capacity(frames);
+    for n in 0..frames {
+        let t = (n as f32) / (sample_rate.max(8000.0) as f32);
+        let bass = 0.28 * (std::f32::consts::TAU * 65.0 * t).sin();
+        let vocal = 0.24 * (std::f32::consts::TAU * 440.0 * t).sin()
+            + 0.14 * (std::f32::consts::TAU * 880.0 * t).cos();
+        let hats = 0.10 * (std::f32::consts::TAU * 4200.0 * t).sin();
+        out.push([bass + vocal + hats, bass + vocal * 0.92 - hats * 0.85]);
+    }
+    out
 }
 
 /// Validates and dispatches an offline UVR5 4-stem separation job.
@@ -650,4 +1192,161 @@ pub fn cmd_load_uvr5_model_profile(
     crate::preset_library::load_uvr5_model_profile(profile_query)
 }
 
+/// Interactive Patcher canvas node DTO sent from `PatcherNodeCanvas.svelte` (`[Nhóm B.9]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatcherCanvasNodeDto {
+    #[serde(alias = "nodeIndex")]
+    pub node_index: usize,
+    #[serde(default)]
+    pub label: String,
+    #[serde(alias = "pluginKind", default)]
+    pub plugin_kind: String,
+    #[serde(alias = "latencySamples", default)]
+    pub latency_samples: usize,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(alias = "xPx", default)]
+    pub x_px: f32,
+    #[serde(alias = "yPx", default)]
+    pub y_px: f32,
+}
 
+/// Interactive Patcher canvas audio cord DTO sent from `PatcherNodeCanvas.svelte` (`[Nhóm B.9]`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PatcherCanvasEdgeDto {
+    #[serde(alias = "fromNode")]
+    pub from_node: usize,
+    #[serde(alias = "toNode")]
+    pub to_node: usize,
+    #[serde(default = "default_edge_gain")]
+    pub gain: f32,
+}
+
+fn default_edge_gain() -> f32 {
+    1.0
+}
+
+/// Interactive Patcher sub-DAG update payload (`[Nhóm B.9]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatcherCanvasUpdateDto {
+    #[serde(alias = "trackIdx", default = "default_proq4_track_idx")]
+    pub track_idx: u16,
+    #[serde(alias = "slotIdx", default = "default_patcher_slot_idx")]
+    pub slot_idx: u8,
+    pub nodes: Vec<PatcherCanvasNodeDto>,
+    pub edges: Vec<PatcherCanvasEdgeDto>,
+}
+
+fn default_patcher_slot_idx() -> u8 {
+    2
+}
+
+/// Reconstructs and hot-swaps a live [`daw_core_graph::PatcherGraphNode`] on `engine.tracks[track_idx].slots[slot_idx]`
+/// from the interactive `PatcherNodeCanvas.svelte` state (`nodes` enable/bypass, `(x_px, y_px)`, and `edges` cord weights),
+/// rejecting cycles and rebuilding both internal `TMultiBufferDelay` APDC and global 502-Track APDC (`[Nhóm B.9]`).
+pub fn cmd_update_patcher_graph(
+    engine: &mut daw_core_graph::MixerEngine,
+    dto: &PatcherCanvasUpdateDto,
+) -> Result<usize, String> {
+    let track = dto.track_idx as usize;
+    let slot = dto.slot_idx as usize;
+    if track >= MAX_MIXER_TRACKS {
+        return Err(format!("Mixer track index {} out of range (0..502)", track));
+    }
+    if slot >= MAX_INSERT_SLOTS {
+        return Err(format!("Insert slot index {} out of range (0..10)", slot));
+    }
+
+    let sr = engine.slicer.sample_rate.max(8_000.0);
+    let blk = daw_core_graph::MAX_BLOCK_SIZE;
+    let mut patcher = daw_core_graph::PatcherGraphNode::new();
+    patcher.prepare(sr, blk);
+
+    let mut id_map = std::collections::HashMap::<usize, usize>::with_capacity(dto.nodes.len() + 2);
+    id_map.insert(
+        daw_core_graph::PATCHER_HOST_INPUT_NODE,
+        daw_core_graph::PATCHER_HOST_INPUT_NODE,
+    );
+    id_map.insert(
+        daw_core_graph::PATCHER_HOST_OUTPUT_NODE,
+        daw_core_graph::PATCHER_HOST_OUTPUT_NODE,
+    );
+
+    let mut host_in_enabled = true;
+    let mut host_out_enabled = true;
+
+    for node in &dto.nodes {
+        let has_outgoing = dto.edges.iter().any(|e| e.from_node == node.node_index);
+        if node.plugin_kind == "HostIn" {
+            host_in_enabled = node.enabled;
+            id_map.insert(node.node_index, daw_core_graph::PATCHER_HOST_INPUT_NODE);
+        } else if node.plugin_kind == "HostOut"
+            || (node.plugin_kind == "Ozone12" && !has_outgoing)
+        {
+            host_out_enabled = node.enabled;
+            id_map.insert(node.node_index, daw_core_graph::PATCHER_HOST_OUTPUT_NODE);
+        } else {
+            let eff_latency = if node.enabled {
+                node.latency_samples.min(8_192)
+            } else {
+                0
+            };
+            let dsp = Box::new(daw_core_graph::FixedLatencyTransformNode::new(
+                eff_latency,
+                1.0,
+                false,
+            ));
+            let internal_idx = patcher.add_node(dsp);
+            id_map.insert(node.node_index, internal_idx);
+        }
+    }
+
+    for edge in &dto.edges {
+        let Some(&from_resolved) = id_map.get(&edge.from_node) else {
+            return Err(format!(
+                "Unknown source node_index {} in Patcher edge",
+                edge.from_node
+            ));
+        };
+        let Some(&to_resolved) = id_map.get(&edge.to_node) else {
+            return Err(format!(
+                "Unknown destination node_index {} in Patcher edge",
+                edge.to_node
+            ));
+        };
+        let clamped_gain = if edge.gain.is_finite() {
+            edge.gain.clamp(0.0, 4.0)
+        } else {
+            0.0
+        };
+        if !patcher.add_audio_connection(from_resolved, to_resolved, clamped_gain) {
+            return Err(format!(
+                "Cycle or invalid audio connection in Patcher DAG: {} -> {}",
+                edge.from_node, edge.to_node
+            ));
+        }
+    }
+
+    if dto.edges.is_empty() {
+        let _ = patcher.add_audio_connection(
+            daw_core_graph::PATCHER_HOST_INPUT_NODE,
+            daw_core_graph::PATCHER_HOST_OUTPUT_NODE,
+            0.0,
+        );
+    }
+
+    let total_patcher_latency = if host_in_enabled && host_out_enabled {
+        use daw_core_graph::UnifiedDspNode;
+        patcher.latency_samples()
+    } else {
+        0
+    };
+
+    let installed_slot = engine.tracks[track]
+        .set_or_replace_plugin_slot(slot, Box::new(patcher), 1.0, sr, blk)
+        .map_err(|e| e.to_string())?;
+    engine.tracks[track].slots[installed_slot].enabled = host_in_enabled && host_out_enabled;
+    engine.rebuild_graph().map_err(|e| e.to_string())?;
+
+    Ok(total_patcher_latency)
+}

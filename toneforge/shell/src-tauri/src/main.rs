@@ -14,13 +14,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use daw_core_graph::{
-    MixerEngine, ProAudioThreadGuard, WasapiAsioBlockAdapter, asio_planar_f32_to_int32_lsb,
-    stereo_frames_to_wasapi_interleaved,
+    MixerEngine, ProAudioThreadGuard, StereoFrame, WasapiAsioBlockAdapter,
+    asio_planar_f32_to_int32_lsb, stereo_frames_to_wasapi_interleaved,
 };
 use daw_tauri_host::{
     AudioStreamController, AutomationClipStateDto, DawAppState, OfflineRenderConfig,
-    OfflineRenderResult, Ozone12MasterConfigDto, PianoRollPatternDto, PlaylistClipDto,
-    ProQ4BandUpdateDto, Soothe3UpdateDto, ZeroCopyBinaryTelemetryStreamer,
+    OfflineRenderResult, Ozone12MasterConfigDto, PatcherCanvasUpdateDto, PianoRollPatternDto,
+    PlaylistClipDto, ProQ4BandUpdateDto, ProQ4GlobalUpdateDto, Soothe3ScBandUpdateDto,
+    Soothe3UpdateDto, Uvr5SeparationRequestDto, Uvr5SeparationResultDto,
+    ZeroCopyBinaryTelemetryStreamer,
 };
 use parking_lot::Mutex;
 use tauri::{RunEvent, State};
@@ -29,6 +31,10 @@ struct SharedDawController {
     app_state: DawAppState,
     telemetry_streamer: Mutex<ZeroCopyBinaryTelemetryStreamer>,
     mixer_engine: Arc<Mutex<Box<MixerEngine>>>,
+    custom_audio_pcm: Arc<Mutex<Vec<StereoFrame>>>,
+    custom_audio_sr: Arc<Mutex<u32>>,
+    custom_audio_active: AtomicBool,
+    uvr5_stem_wavs: Arc<Mutex<[Vec<u8>; 4]>>,
 }
 
 #[tauri::command]
@@ -65,11 +71,27 @@ fn cmd_update_proq4_band(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+fn cmd_update_proq4_global(
+    state: State<'_, SharedDawController>,
+    dto: ProQ4GlobalUpdateDto,
+) -> Result<(), String> {
+    daw_tauri_host::cmd_update_proq4_global(&state.app_state, dto)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 fn cmd_update_soothe3_params(
     state: State<'_, SharedDawController>,
     dto: Soothe3UpdateDto,
 ) -> Result<(), String> {
     daw_tauri_host::cmd_update_soothe3_params(&state.app_state, dto)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_update_soothe3_sc_band(
+    state: State<'_, SharedDawController>,
+    dto: Soothe3ScBandUpdateDto,
+) -> Result<(), String> {
+    daw_tauri_host::cmd_update_soothe3_sc_band(&state.app_state, dto)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -89,7 +111,31 @@ fn cmd_update_bsrnn_stem_gains(
     slot_idx: u8,
     stem_gains_db: [f32; 4],
 ) -> Result<(), String> {
-    daw_tauri_host::cmd_update_bsrnn_stem_gains(&state.app_state, track_idx, slot_idx, stem_gains_db)
+    daw_tauri_host::cmd_update_bsrnn_stem_gains(
+        &state.app_state,
+        track_idx,
+        slot_idx,
+        stem_gains_db,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_update_bsrnn_stem_state(
+    state: State<'_, SharedDawController>,
+    track_idx: u16,
+    slot_idx: u8,
+    stem_gains_db: [f32; 4],
+    stem_solo: [bool; 4],
+    stem_mute: [bool; 4],
+) -> Result<(), String> {
+    daw_tauri_host::cmd_update_bsrnn_stem_state(
+        &state.app_state,
+        track_idx,
+        slot_idx,
+        stem_gains_db,
+        stem_solo,
+        stem_mute,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -109,7 +155,15 @@ fn cmd_route_mixer_track(
     gain: f32,
     is_sidechain: bool,
 ) -> Result<(), String> {
-    daw_tauri_host::cmd_route_mixer_track(&state.app_state, src_track, dst_track, gain, is_sidechain)
+    let mut engine = state.mixer_engine.lock();
+    daw_tauri_host::cmd_route_mixer_track_on_engine(
+        &mut engine,
+        &state.app_state,
+        src_track,
+        dst_track,
+        gain,
+        is_sidechain,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -121,9 +175,204 @@ fn cmd_set_internal_controller_norm(
     daw_tauri_host::cmd_set_internal_controller_norm(&state.app_state, controller_id, norm_val)
 }
 
+fn build_demo_harmonic_stem() -> Vec<StereoFrame> {
+    let mut demo_stem = Vec::with_capacity(4096);
+    let mut lfsr: u32 = 0xACE1_u32;
+    let mut pink_state = 0.0f32;
+    for n in 0..4096 {
+        let t = (n as f32) / 48_000.0;
+        lfsr ^= lfsr << 13;
+        lfsr ^= lfsr >> 17;
+        lfsr ^= lfsr << 5;
+        let white = ((lfsr as f32) / (u32::MAX as f32)) * 2.0 - 1.0;
+        pink_state = 0.92 * pink_state + 0.08 * white;
+        let bass = 0.26 * (std::f32::consts::TAU * 55.0 * t).sin()
+            + 0.16 * (std::f32::consts::TAU * 110.0 * t).sin();
+        let lead = 0.22 * (std::f32::consts::TAU * 440.0 * t).sin()
+            + 0.14 * (std::f32::consts::TAU * 880.0 * t).cos();
+        let air = 0.08 * (std::f32::consts::TAU * 3520.0 * t).sin() + 0.12 * pink_state;
+        demo_stem.push([bass + lead + air, bass + lead * 0.92 - air * 0.85]);
+    }
+    demo_stem
+}
+
 #[tauri::command(rename_all = "camelCase")]
-fn cmd_run_uvr5_separation(audio_path: String, model_hash: String) -> Result<Vec<String>, String> {
-    daw_tauri_host::cmd_run_uvr5_separation(audio_path, model_hash)
+fn cmd_begin_custom_audio_upload(
+    state: State<'_, SharedDawController>,
+    sample_rate: u32,
+    total_frames: usize,
+    _file_name: Option<String>,
+) -> Result<(), String> {
+    let mut pcm = state.custom_audio_pcm.lock();
+    pcm.clear();
+    pcm.reserve(total_frames.min(48_000 * 60 * 25)); // reserve up to 25 minutes safely
+    *state.custom_audio_sr.lock() = sample_rate.max(8_000);
+    *state.uvr5_stem_wavs.lock() = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_append_custom_audio_chunk(
+    state: State<'_, SharedDawController>,
+    left_chunk: Vec<f32>,
+    right_chunk: Vec<f32>,
+) -> Result<usize, String> {
+    let n = left_chunk.len().min(right_chunk.len());
+    let mut pcm = state.custom_audio_pcm.lock();
+    pcm.reserve(n);
+    for i in 0..n {
+        pcm.push([left_chunk[i], right_chunk[i]]);
+    }
+    Ok(pcm.len())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_finalize_custom_audio_upload(state: State<'_, SharedDawController>) -> Result<usize, String> {
+    let src_sr = (*state.custom_audio_sr.lock()).max(8_000) as f64;
+    let raw_frames = {
+        let pcm = state.custom_audio_pcm.lock();
+        if pcm.is_empty() {
+            return Err("Uploaded custom audio buffer is empty".to_string());
+        }
+        pcm.clone()
+    };
+
+    let mut engine = state.mixer_engine.lock();
+    let dst_sr = engine.slicer.sample_rate.max(8_000.0);
+    let engine_frames: Vec<StereoFrame> = if (src_sr - dst_sr).abs() < 1.0 {
+        raw_frames
+    } else {
+        let ratio = src_sr / dst_sr;
+        let out_len = ((raw_frames.len() as f64) / ratio).round() as usize;
+        let mut resampled = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let src_pos = (i as f64) * ratio;
+            let idx0 = (src_pos.floor() as usize).min(raw_frames.len() - 1);
+            let idx1 = (idx0 + 1).min(raw_frames.len() - 1);
+            let frac = (src_pos - idx0 as f64) as f32;
+            let f0 = raw_frames[idx0];
+            let f1 = raw_frames[idx1];
+            resampled.push([
+                f0[0] + frac * (f1[0] - f0[0]),
+                f0[1] + frac * (f1[1] - f0[1]),
+            ]);
+        }
+        *state.custom_audio_pcm.lock() = resampled.clone();
+        *state.custom_audio_sr.lock() = dst_sr as u32;
+        resampled
+    };
+
+    let total_len = engine_frames.len();
+    engine
+        .replace_with_custom_audio_stem(engine_frames, true)
+        .map_err(|e| e.to_string())?;
+    state.custom_audio_active.store(true, Ordering::SeqCst);
+    Ok(total_len)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_switch_to_piano_roll_source(state: State<'_, SharedDawController>) -> Result<(), String> {
+    state.custom_audio_active.store(false, Ordering::SeqCst);
+    let demo_stem = build_demo_harmonic_stem();
+    let mut engine = state.mixer_engine.lock();
+    let engine_sr = engine.slicer.sample_rate;
+    let _ = AudioStreamController::bounce_stems_to_engine(
+        &mut engine,
+        &[
+            demo_stem.clone(),
+            demo_stem.clone(),
+            demo_stem.clone(),
+            demo_stem,
+        ],
+        &[1, 2, 3, 4],
+        engine_sr,
+        256,
+    )?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_run_uvr5_separation(
+    state: State<'_, SharedDawController>,
+    req: Uvr5SeparationRequestDto,
+) -> Result<Uvr5SeparationResultDto, String> {
+    let mix_frames = state.custom_audio_pcm.lock().clone();
+    let sr = (*state.custom_audio_sr.lock()).max(44_100);
+    let req_cloned = req.clone();
+
+    let (result_dto, stems, wav_buffers) = tauri::async_runtime::spawn_blocking(move || {
+        daw_tauri_host::execute_uvr5_separation_dsp(&mix_frames, sr, &req_cloned)
+    })
+    .await
+    .map_err(|e| format!("UVR5 separation worker join error: {e}"))??;
+
+    {
+        let mut stored_wavs = state.uvr5_stem_wavs.lock();
+        *stored_wavs = wav_buffers;
+    }
+
+    if req.bounce_to_mixer {
+        let mut engine = state.mixer_engine.lock();
+        let engine_sr = engine.slicer.sample_rate;
+        let _ = AudioStreamController::bounce_stems_to_engine(
+            &mut engine,
+            &stems,
+            &[1, 2, 3, 4],
+            engine_sr,
+            256,
+        )?;
+        if !state.custom_audio_pcm.lock().is_empty() {
+            state.custom_audio_active.store(true, Ordering::SeqCst);
+        }
+    }
+
+    Ok(result_dto)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_fetch_uvr5_stem_wav(
+    state: State<'_, SharedDawController>,
+    stem_idx: usize,
+) -> Result<tauri::ipc::Response, String> {
+    if stem_idx >= 4 {
+        return Err(format!("stem_idx {} out of range (0..4)", stem_idx));
+    }
+    let wavs = state.uvr5_stem_wavs.lock();
+    if wavs[stem_idx].is_empty() {
+        return Err(format!("UVR5 stem {} has not been separated yet", stem_idx));
+    }
+    Ok(tauri::ipc::Response::new(wavs[stem_idx].clone()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_fetch_fl26_sample_wav(
+    kit_query: Option<String>,
+    sample_idx: Option<usize>,
+    file_name: Option<String>,
+) -> Result<tauri::ipc::Response, String> {
+    if let (Some(kq), Some(idx)) = (kit_query, sample_idx) {
+        let bytes = daw_tauri_host::read_fl26_sample_kit_wav_bytes(&kq, idx)?;
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
+    if let Some(fname) = file_name {
+        let safe_name = std::path::Path::new(&fname)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Invalid sample file_name".to_string())?;
+        let sample_path = daw_tauri_host::resolve_assets_root()
+            .join("flstudio26")
+            .join("samples")
+            .join(safe_name);
+        let bytes = std::fs::read(&sample_path).map_err(|e| {
+            format!(
+                "Failed reading FL26 sample WAV '{}': {e}",
+                sample_path.display()
+            )
+        })?;
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
+    Err("cmd_fetch_fl26_sample_wav requires (kitQuery, sampleIdx) or fileName".to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -162,8 +411,20 @@ fn cmd_update_automation_spline(
 #[tauri::command(rename_all = "camelCase")]
 fn cmd_execute_offline_render(
     state: State<'_, SharedDawController>,
-    config: OfflineRenderConfig,
+    mut config: OfflineRenderConfig,
 ) -> Result<OfflineRenderResult, String> {
+    if state.custom_audio_active.load(Ordering::SeqCst) {
+        let custom_len = state.custom_audio_pcm.lock().len();
+        let custom_sr = (*state.custom_audio_sr.lock()).max(8_000) as f64;
+        if custom_len > 0 {
+            let target_sr = config.sample_rate.as_f64();
+            let full_song_frames =
+                ((custom_len as f64) * (target_sr / custom_sr)).round() as usize;
+            if full_song_frames > config.duration_frames {
+                config.duration_frames = full_song_frames;
+            }
+        }
+    }
     let mut engine = state.mixer_engine.lock();
     daw_tauri_host::cmd_execute_offline_render(&mut engine, &config)
 }
@@ -246,7 +507,14 @@ fn cmd_load_fl26_fx_preset(
     slot_idx: u8,
     preset_query: String,
 ) -> Result<daw_tauri_host::Fl26FxPresetDto, String> {
-    daw_tauri_host::cmd_load_fl26_fx_preset(&state.app_state, track_idx, slot_idx, &preset_query)
+    let mut engine = state.mixer_engine.lock();
+    daw_tauri_host::apply_fl26_fx_preset_to_engine(
+        &mut engine,
+        &state.app_state,
+        track_idx,
+        slot_idx,
+        &preset_query,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -254,6 +522,15 @@ fn cmd_load_uvr5_model_profile(
     profile_query: String,
 ) -> Result<daw_tauri_host::Uvr5ModelProfileDto, String> {
     daw_tauri_host::cmd_load_uvr5_model_profile(&profile_query)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_update_patcher_graph(
+    state: State<'_, SharedDawController>,
+    dto: PatcherCanvasUpdateDto,
+) -> Result<usize, String> {
+    let mut engine = state.mixer_engine.lock();
+    daw_tauri_host::cmd_update_patcher_graph(&mut engine, &dto)
 }
 
 fn clean_webview_cache() {
@@ -289,23 +566,7 @@ fn main() {
             let _ = ctrl.add_polyphonic_synth_channel(1, 1, 64);
 
             // Seed rich harmonic test stems on Tracks 1..4 so Track 1 (Pro-Q 4 + Soothe3) and Master are live
-            let mut demo_stem = Vec::with_capacity(4096);
-            let mut lfsr: u32 = 0xACE1_u32;
-            let mut pink_state = 0.0f32;
-            for n in 0..4096 {
-                let t = (n as f32) / 48_000.0;
-                lfsr ^= lfsr << 13;
-                lfsr ^= lfsr >> 17;
-                lfsr ^= lfsr << 5;
-                let white = ((lfsr as f32) / (u32::MAX as f32)) * 2.0 - 1.0;
-                pink_state = 0.92 * pink_state + 0.08 * white;
-                let bass = 0.26 * (std::f32::consts::TAU * 55.0 * t).sin()
-                    + 0.16 * (std::f32::consts::TAU * 110.0 * t).sin();
-                let lead = 0.22 * (std::f32::consts::TAU * 440.0 * t).sin()
-                    + 0.14 * (std::f32::consts::TAU * 880.0 * t).cos();
-                let air = 0.08 * (std::f32::consts::TAU * 3520.0 * t).sin() + 0.12 * pink_state;
-                demo_stem.push([bass + lead + air, bass + lead * 0.92 - air * 0.85]);
-            }
+            let demo_stem = build_demo_harmonic_stem();
             let _ = ctrl.bounce_stems_to_mixer_tracks(
                 &[demo_stem.clone(), demo_stem.clone(), demo_stem.clone(), demo_stem],
                 &[1, 2, 3, 4],
@@ -373,19 +634,37 @@ fn main() {
             app_state,
             telemetry_streamer: Mutex::new(telemetry_streamer),
             mixer_engine: shared_engine,
+            custom_audio_pcm: Arc::new(Mutex::new(Vec::new())),
+            custom_audio_sr: Arc::new(Mutex::new(48_000)),
+            custom_audio_active: AtomicBool::new(false),
+            uvr5_stem_wavs: Arc::new(Mutex::new([
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ])),
         })
         .invoke_handler(tauri::generate_handler![
             cmd_poll_binary_telemetry_frame,
             cmd_set_transport,
             cmd_seek_transport,
             cmd_update_proq4_band,
+            cmd_update_proq4_global,
             cmd_update_soothe3_params,
+            cmd_update_soothe3_sc_band,
             cmd_update_ozone12_master,
             cmd_update_bsrnn_stem_gains,
+            cmd_update_bsrnn_stem_state,
             cmd_set_track_gain,
             cmd_route_mixer_track,
             cmd_set_internal_controller_norm,
+            cmd_begin_custom_audio_upload,
+            cmd_append_custom_audio_chunk,
+            cmd_finalize_custom_audio_upload,
+            cmd_switch_to_piano_roll_source,
             cmd_run_uvr5_separation,
+            cmd_fetch_uvr5_stem_wav,
+            cmd_fetch_fl26_sample_wav,
             cmd_set_ppq_resolution,
             cmd_upsert_piano_roll_pattern,
             cmd_upsert_playlist_clip,
@@ -399,6 +678,7 @@ fn main() {
             cmd_load_fl26_sample_kit,
             cmd_load_fl26_fx_preset,
             cmd_load_uvr5_model_profile,
+            cmd_update_patcher_graph,
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build ToneForge Studio Tauri application");

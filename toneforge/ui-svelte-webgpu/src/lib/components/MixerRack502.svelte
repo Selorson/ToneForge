@@ -174,7 +174,7 @@
                 value={pt.y}
                 oninput={(e) => {
                   const v = parseFloat((e.currentTarget as HTMLInputElement).value);
-                  telemetry.tensionSplinePoints[idx].y = v;
+                  telemetry.updateTensionSplinePoint(idx, { y: v });
                   telemetry.setInternalControllerNorm(telemetry.activeControllerId, v);
                 }}
               />
@@ -188,9 +188,8 @@
                 step="0.05"
                 value={pt.tension}
                 oninput={(e) => {
-                  telemetry.tensionSplinePoints[idx].tension = parseFloat(
-                    (e.currentTarget as HTMLInputElement).value
-                  );
+                  const tVal = parseFloat((e.currentTarget as HTMLInputElement).value);
+                  telemetry.updateTensionSplinePoint(idx, { tension: tVal });
                 }}
               />
             </label>

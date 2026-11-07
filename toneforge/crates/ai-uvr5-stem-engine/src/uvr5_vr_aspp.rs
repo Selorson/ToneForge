@@ -202,9 +202,7 @@ impl CascadedASPPNet {
         mask
     }
 
-    /// Separates stereo audio into `(vocal_stem, instrumental_stem)` using the 3-Stage `CascadedASPPNet`
-    /// and preserves exact mixture complex phase.
-    pub fn separate_vocal_instrumental(
+    fn separate_vocal_instrumental_segment(
         &self,
         mix: &[StereoFrame],
     ) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
@@ -302,6 +300,33 @@ impl CascadedASPPNet {
             instrumental[i] = [mix[i][0] - vl, mix[i][1] - vr];
         }
 
+        (vocals, instrumental)
+    }
+
+    /// Separates stereo audio into `(vocal_stem, instrumental_stem)` using the 3-Stage `CascadedASPPNet`
+    /// and preserves exact mixture complex phase.
+    ///
+    /// Processes long buffers (`> 32,768` samples) in bounded chunks to guarantee linear $O(N)$ speed.
+    pub fn separate_vocal_instrumental(
+        &self,
+        mix: &[StereoFrame],
+    ) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
+        let len = mix.len();
+        if len <= 32_768 {
+            return self.separate_vocal_instrumental_segment(mix);
+        }
+
+        let mut vocals = Vec::with_capacity(len);
+        let mut instrumental = Vec::with_capacity(len);
+        const SEGMENT_LEN: usize = 32_768;
+        let mut cursor = 0usize;
+        while cursor < len {
+            let end = (cursor + SEGMENT_LEN).min(len);
+            let (v_seg, i_seg) = self.separate_vocal_instrumental_segment(&mix[cursor..end]);
+            vocals.extend_from_slice(&v_seg);
+            instrumental.extend_from_slice(&i_seg);
+            cursor = end;
+        }
         (vocals, instrumental)
     }
 }

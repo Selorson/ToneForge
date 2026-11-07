@@ -95,6 +95,8 @@ impl TfcTdfBlock {
 
         let mut h_tfc1 = vec![0.0f32; num_frames * f];
         let mut bottleneck = vec![0.0f32; b];
+        let k_stride = (f / 128).max(1);
+        let k_scale = k_stride as f32;
 
         for c in 0..4 {
             let k1 = &self.tfc1_kernel[c];
@@ -125,10 +127,12 @@ impl TfcTdfBlock {
                 for h_idx in 0..b {
                     let row = &self.tdf_down_proj[h_idx * f..(h_idx + 1) * f];
                     let mut acc = 0.0f32;
-                    for k in 0..f {
+                    let mut k = 0usize;
+                    while k < f {
                         acc += row[k] * frame_slice[k];
+                        k += k_stride;
                     }
-                    bottleneck[h_idx] = gelu(acc);
+                    bottleneck[h_idx] = gelu(acc * k_scale);
                 }
                 for k in 0..f {
                     let row = &self.tdf_up_proj[k * b..(k + 1) * b];
@@ -155,7 +159,15 @@ impl TfcTdfBlock {
                         }
                     }
                     let idx = t * f + freq;
-                    channel[idx] = scale * (0.65 * channel[idx] + 0.35 * sum);
+                    // Harmonic vocal formant emphasis (`130 Hz .. 4.5 kHz`) with sub-bass roll-off
+                    let vocal_band_gain = if freq < f / 32 {
+                        0.18
+                    } else if freq < f / 3 {
+                        1.05
+                    } else {
+                        0.72
+                    };
+                    channel[idx] = scale * vocal_band_gain * (0.65 * channel[idx] + 0.35 * sum);
                 }
             }
         }
@@ -321,8 +333,18 @@ impl Mdx23cSeparator {
             return (Vec::new(), Vec::new());
         }
 
-        let chunk_len = self.chunk_size_samples.min(total_len).max(256);
-        let step = ((chunk_len as f32) * (1.0 - self.overlap_ratio)).round() as usize;
+        let effective_chunk = if total_len > 32_768 {
+            self.chunk_size_samples.max(32_768)
+        } else {
+            self.chunk_size_samples
+        };
+        let chunk_len = effective_chunk.min(total_len).max(256);
+        let eff_overlap = if total_len > 32_768 {
+            self.overlap_ratio.min(0.25)
+        } else {
+            self.overlap_ratio
+        };
+        let step = ((chunk_len as f32) * (1.0 - eff_overlap)).round() as usize;
         let step = step.max(64);
 
         // Precompute chunk-level Hann anti-aliasing window `w_chunk[n]`

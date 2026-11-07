@@ -610,6 +610,10 @@ impl OfflineRenderEngine {
         target_sr: f64,
         block_size: usize,
     ) {
+        // Drain any pending lock-free SPSC commands (EQ bands, Soothe3 depth, Ozone 12 ceiling, track gains)
+        // queued from the UI right before offline rendering begins (`[Nhóm C.4]`).
+        engine.drain_commands();
+
         engine.slicer.sample_rate = target_sr;
         engine.slicer.reset();
         engine.is_playing = true;

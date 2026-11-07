@@ -122,13 +122,19 @@
 
     <div class="uvr5-card">
       <h3>Separated Stems Output (Bounced to Tracks 1..4)</h3>
-      <ul class="stem-list">
-        {#each telemetry.uvr5SeparatedStems as stemPath, idx}
-          <li>
-            <strong>Insert Track {idx + 1}:</strong> <code>{stemPath}</code>
-          </li>
-        {/each}
-      </ul>
+      {#if telemetry.uvr5SeparatedStems.length === 0}
+        <p class="empty-stems-hint">
+          Đã nạp file gốc <code>{telemetry.uvr5AudioPath}</code>. Bấm <strong>Run Ensemble &amp; Bounce to Mixer 1..4</strong> để tách 4 file stem <code>.wav</code> thật.
+        </p>
+      {:else}
+        <ul class="stem-list">
+          {#each telemetry.uvr5SeparatedStems as stemPath, idx}
+            <li>
+              <strong>Insert Track {idx + 1}:</strong> <code>{stemPath}</code>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   </div>
 </section>
@@ -152,5 +158,6 @@
   .uvr5-card input[type="text"], .uvr5-card select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%; margin-top: 2px; }
   h3 { margin: 0 0 4px 0; font-size: 0.82rem; color: var(--accent); font-weight: 600; }
   .stem-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .empty-stems-hint { margin: 4px 0 0 0; color: var(--muted); line-height: 1.45; }
 </style>
 

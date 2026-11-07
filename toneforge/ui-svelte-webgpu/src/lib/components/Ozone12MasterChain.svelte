@@ -220,6 +220,22 @@
       {#each STEM_NAMES as stemName, sIdx}
         <div class="band-row">
           <span>{stemName} ({telemetry.ozone12StemRmsDb[sIdx]?.toFixed(1) ?? '-12.0'} dB)</span>
+          <div class="stem-sm-btns">
+            <button
+              class="sm-btn solo {telemetry.bsrnnStemSolo[sIdx] ? 'active' : ''}"
+              onclick={() => telemetry.toggleBsrnnStemSolo(sIdx)}
+              title="Solo {stemName} Stem"
+            >
+              S
+            </button>
+            <button
+              class="sm-btn mute {telemetry.bsrnnStemMute[sIdx] ? 'active' : ''}"
+              onclick={() => telemetry.toggleBsrnnStemMute(sIdx)}
+              title="Mute {stemName} Stem"
+            >
+              M
+            </button>
+          </div>
           <input
             type="range"
             min="-12"
@@ -255,5 +271,8 @@
   .module-card select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
   h3 { margin: 0 0 4px 0; font-size: 0.82rem; font-family: var(--font-sans); color: var(--accent); font-weight: 600; }
   .band-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .stem-sm-btns { display: flex; gap: 3px; }
+  .sm-btn { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 2px 5px; font-size: 0.68rem; font-weight: 700; cursor: pointer; font-family: var(--font-mono); }
+  .sm-btn.solo.active { background: var(--warn); color: #0b2b1e; border-color: var(--warn); }
+  .sm-btn.mute.active { background: var(--err); color: #0b2b1e; border-color: var(--err); }
 </style>
-

@@ -207,6 +207,35 @@ impl MixerTrack {
         Ok(idx)
     }
 
+    /// Inserts or replaces an FX plugin in the track's 10-slot rack (`+0x134c`) at `slot_index` (`0..10`),
+    /// preparing its internal buffers for `sample_rate` and `max_block_size`.
+    pub fn set_or_replace_plugin_slot(
+        &mut self,
+        slot_index: usize,
+        mut plugin: Box<dyn UnifiedDspNode>,
+        wet_mix: f32,
+        sample_rate: f64,
+        max_block_size: usize,
+    ) -> Result<usize, &'static str> {
+        if slot_index >= MAX_INSERT_SLOTS {
+            return Err("slot_index out of range (0..10)");
+        }
+        let cap = max_block_size.max(MAX_BLOCK_SIZE);
+        plugin.prepare(sample_rate, cap);
+        let mut rack_slot = PluginRackSlot::new(plugin, wet_mix);
+        rack_slot.prepare(sample_rate, cap);
+        if slot_index < self.slots.len() {
+            self.slots[slot_index] = rack_slot;
+            Ok(slot_index)
+        } else if self.slots.len() < MAX_INSERT_SLOTS {
+            let idx = self.slots.len();
+            self.slots.push(rack_slot);
+            Ok(idx)
+        } else {
+            Err("MixerTrack already has MAX_INSERT_SLOTS (10) plugins")
+        }
+    }
+
     /// Adds a Send or Sidechain route from this track to `dest_track_index`.
     pub fn add_send(&mut self, dest_track_index: usize, gain: f32, is_sidechain_only: bool) {
         if dest_track_index < MAX_MIXER_TRACKS && dest_track_index != self.index {
@@ -1171,6 +1200,53 @@ impl MixerEngine {
     ) -> Result<usize, GraphCycleError> {
         let idx = self.channels.len();
         self.channels.push(channel);
+        self.rebuild_graph()?;
+        Ok(idx)
+    }
+
+    /// Removes any stem playback generators (`UVR5 Separated Stem Playback Generator`, `Custom Audio Stem`,
+    /// `Vocals`, `Drums`, `Bass`, `Other`, `FL26 Sample Kit`) targeting `target_tracks` while preserving
+    /// `PolyphonicSynthGeneratorNode` channels.
+    pub fn remove_stem_channels_on_tracks(&mut self, target_tracks: &[usize]) {
+        self.channels.retain(|ch| {
+            if !target_tracks.contains(&ch.target_mixer_track) {
+                return true;
+            }
+            let name = ch.generator.name();
+            !matches!(
+                name,
+                "UVR5 Separated Stem Playback Generator"
+                    | "Custom Audio Stem"
+                    | "Vocals"
+                    | "Drums"
+                    | "Bass"
+                    | "Other"
+                    | "FL26 Sample Kit"
+            )
+        });
+    }
+
+    /// Replaces any startup `demo_stem` or previous UVR5 stem generators on Insert Tracks `1..=4`
+    /// with a single full-length custom audio stem on Track 1 (`FIRST_INSERT_TRACK_INDEX`), ensuring
+    /// Track 1 routes to Master Track `0` and rebuilding the 5-Point APDC graph.
+    pub fn replace_with_custom_audio_stem(
+        &mut self,
+        frames: Vec<StereoFrame>,
+        loop_playback: bool,
+    ) -> Result<usize, GraphCycleError> {
+        self.remove_stem_channels_on_tracks(&[1, 2, 3, 4]);
+        let mut player =
+            crate::sequencer_pianoroll::AudioStemClipPlayerNode::new(900, "Custom Audio Stem", frames);
+        player.continuous_mode = true;
+        player.loop_enabled = loop_playback;
+        player.prepare(self.slicer.sample_rate, MAX_BLOCK_SIZE);
+
+        let mut ch = ChannelGenerator::new(900, FIRST_INSERT_TRACK_INDEX, Box::new(player));
+        ch.prepare(self.slicer.sample_rate, MAX_BLOCK_SIZE);
+        let idx = self.channels.len();
+        self.channels.push(ch);
+        self.tracks[FIRST_INSERT_TRACK_INDEX].add_send(MASTER_TRACK_INDEX, 1.0, false);
+        self.slicer.reset();
         self.rebuild_graph()?;
         Ok(idx)
     }

@@ -25,16 +25,20 @@ pub use audio_stream_controller::{
     AudioStreamController, StemPlaybackGeneratorNode, Uvr5EnsembleStudioOutput,
 };
 pub use ipc_commands::{
-    DawAppState, ProQ4BandUpdateDto, Soothe3UpdateDto, cmd_apply_proq4_ffp_preset,
+    DawAppState, PatcherCanvasEdgeDto, PatcherCanvasNodeDto, PatcherCanvasUpdateDto,
+    ProQ4BandUpdateDto, ProQ4GlobalUpdateDto, Soothe3ScBandUpdateDto, Soothe3UpdateDto,
+    Uvr5SeparationRequestDto, Uvr5SeparationResultDto, cmd_apply_proq4_ffp_preset,
     cmd_apply_soothe3_factory_preset, cmd_execute_offline_render, cmd_load_fl26_fx_preset,
     cmd_load_fl26_sample_kit, cmd_load_fl26_score, cmd_load_ozone12_genre_or_xml_preset,
     cmd_load_proq4_preset, cmd_load_soothe3_preset_json, cmd_load_uvr5_model_profile,
-    cmd_poll_binary_telemetry_frame, cmd_route_mixer_track, cmd_run_ozone12_ai_master_assistant,
-    cmd_run_uvr5_separation, cmd_seek_transport, cmd_set_internal_controller_norm,
-    cmd_set_ppq_resolution, cmd_set_track_gain, cmd_set_transport, cmd_trigger_piano_roll_note,
-    cmd_update_automation_spline, cmd_update_bsrnn_stem_gains, cmd_update_ozone12_master,
-    cmd_update_proq4_band, cmd_update_soothe3_params, cmd_upsert_piano_roll_pattern,
-    cmd_upsert_playlist_clip,
+    cmd_poll_binary_telemetry_frame, cmd_route_mixer_track, cmd_route_mixer_track_on_engine,
+    cmd_run_ozone12_ai_master_assistant, cmd_run_uvr5_separation, cmd_seek_transport,
+    cmd_set_internal_controller_norm, cmd_set_ppq_resolution, cmd_set_track_gain, cmd_set_transport,
+    cmd_trigger_piano_roll_note, cmd_update_automation_spline, cmd_update_bsrnn_stem_gains,
+    cmd_update_bsrnn_stem_state, cmd_update_ozone12_master, cmd_update_patcher_graph,
+    cmd_update_proq4_band, cmd_update_proq4_global, cmd_update_soothe3_params,
+    cmd_update_soothe3_sc_band, cmd_upsert_piano_roll_pattern, cmd_upsert_playlist_clip,
+    execute_uvr5_separation_dsp,
 };
 pub use offline_render_engine::{
     DecodedWavFile, ExportedTrackWav, OfflineRenderConfig, OfflineRenderEngine,
@@ -45,11 +49,12 @@ pub use offline_render_engine::{
 pub use preset_library::{
     Fl26FxPresetDto, Fl26SampleKitDto, Fl26SampleVoiceDto, Ozone12AssistantPresetDto,
     ProQ4PresetStateDto, ProQ4UiBandDto, Soothe3PresetStateDto, Soothe3ScBandUiDto,
-    Uvr5ModelProfileDto, apply_fl26_sample_kit_to_engine, apply_proq4_preset,
-    apply_soothe3_preset, load_fl26_fx_preset, load_fl26_sample_kit, load_fl26_score_preset,
-    load_ozone12_genre_preset, load_ozone12_global_xml_preset, load_uvr5_model_profile,
-    parse_fl26_fsc_bytes, parse_proq4_ffp, parse_soothe3_preset, resolve_assets_root,
-    resolve_proq4_ffp_path, resolve_soothe3_preset_path, run_ozone12_master_assistant,
+    Uvr5ModelProfileDto, apply_fl26_fx_preset_to_engine, apply_fl26_sample_kit_to_engine,
+    apply_proq4_preset, apply_soothe3_preset, load_fl26_fx_preset, load_fl26_sample_kit,
+    load_fl26_score_preset, load_ozone12_genre_preset, load_ozone12_global_xml_preset,
+    load_uvr5_model_profile, parse_fl26_fsc_bytes, parse_proq4_ffp, parse_soothe3_preset,
+    read_fl26_sample_kit_wav_bytes, resolve_assets_root, resolve_proq4_ffp_path,
+    resolve_soothe3_preset_path, run_ozone12_master_assistant,
 };
 pub use project_state::{
     AutomationClipStateDto, BsrnnStemStateDto, ControllerLinkStateDto, LfoModulatorDto,
@@ -474,6 +479,184 @@ mod tests {
                 .expect("Uvr5EnsembleStudio.svelte");
             assert!(uv.contains("UVR5 Model Profile (143 Real Configs):"));
         }
+    }
+
+    #[test]
+    fn test_audit_remediation_ipc_routing_fst_uvr5_and_custom_audio() {
+        let mut ctrl = AudioStreamController::with_mastering_template(48_000.0, 256)
+            .expect("create mastering controller");
+
+        // 1. Seed 4 startup demo_stems on Tracks 1..=4, then replace with custom_audio_stem on Track 1
+        let demo = vec![[0.25f32, -0.25f32]; 512];
+        ctrl.bounce_stems_to_mixer_tracks(
+            &[demo.clone(), demo.clone(), demo.clone(), demo],
+            &[1, 2, 3, 4],
+        )
+        .expect("seed 4 demo stems");
+        assert_eq!(ctrl.mixer_engine.channels.len(), 4);
+
+        let custom_song = vec![[0.4f32, 0.35f32]; 1024];
+        ctrl.mixer_engine
+            .replace_with_custom_audio_stem(custom_song.clone(), true)
+            .expect("replace demo stems with custom audio stem on Track 1");
+        assert_eq!(
+            ctrl.mixer_engine.channels.len(),
+            1,
+            "Startup demo_stem channels on Tracks 1..4 must be replaced by single Custom Audio Stem on Track 1"
+        );
+        assert_eq!(ctrl.mixer_engine.channels[0].target_mixer_track, 1);
+
+        // 2. Pro-Q 4 Global update (LinearPhase + RefreshApdc) & Soothe3 Sidechain EQ band update
+        cmd_update_proq4_global(
+            &ctrl.app_state,
+            ProQ4GlobalUpdateDto {
+                track_idx: 1,
+                slot_idx: 0,
+                processing_mode: 2, // LinearPhase
+                processing_resolution: 1,
+                character: 2, // Warm
+                gain_scale_pct: 110.0,
+                output_level_db: 1.5,
+                bypass: false,
+                auto_gain: true,
+                ..Default::default()
+            },
+        )
+        .expect("cmd_update_proq4_global");
+
+        cmd_update_soothe3_sc_band(
+            &ctrl.app_state,
+            Soothe3ScBandUpdateDto {
+                track_idx: 1,
+                slot_idx: 1,
+                band_idx: 2,
+                enabled: true,
+                freq_hz: 4200.0,
+                gain_db: 8.5,
+                q: 2.4,
+                shape: 2,
+            },
+        )
+        .expect("cmd_update_soothe3_sc_band");
+
+        // 3. BSRNN 4-Stem Solo/Mute state via IPC
+        cmd_update_bsrnn_stem_state(
+            &ctrl.app_state,
+            0,
+            0,
+            [2.0, -1.5, 1.0, 0.0],
+            [true, false, false, false],
+            [false, false, false, true],
+        )
+        .expect("cmd_update_bsrnn_stem_state");
+
+        // 4. Real Mixer DAG routing (`cmd_route_mixer_track_on_engine`) + Cycle Rejection
+        cmd_route_mixer_track_on_engine(&mut ctrl.mixer_engine, &ctrl.app_state, 5, 6, 0.85, false)
+            .expect("route 5 -> 6");
+        cmd_route_mixer_track_on_engine(&mut ctrl.mixer_engine, &ctrl.app_state, 6, 7, 0.90, true)
+            .expect("sidechain route 6 -> 7");
+        ctrl.mixer_engine.drain_commands();
+        assert!(
+            (ctrl.mixer_engine.tracks[5].gain - 1.0).abs() < 1e-6,
+            "cmd_route_mixer_track_on_engine must not overwrite src_track fader gain"
+        );
+        assert!(
+            cmd_route_mixer_track_on_engine(
+                &mut ctrl.mixer_engine,
+                &ctrl.app_state,
+                7,
+                5,
+                1.0,
+                false
+            )
+            .is_err(),
+            "Cycle 7 -> 5 must be rejected by cmd_route_mixer_track_on_engine"
+        );
+
+        // 5. Real FL26 Native FX `.fst` instantiation on `MixerEngine` (`apply_fl26_fx_preset_to_engine`)
+        for (slot_idx, fst_query, expected_node_substr) in [
+            (0u8, "Maximus: Clear Master.fst", "Maximus"),
+            (1u8, "Emphasis: Pop (heavy).fst", "Emphasis"),
+            (2u8, "Fruity Limiter: Drum compression 1.fst", "Sparse"),
+            (3u8, "Gross Beat: 1/2 Gate.fst", "Gross Beat"),
+            (4u8, "LuxeVerb: Shimmer Cathedral.fst", "LuxeVerb"),
+        ] {
+            let dto = apply_fl26_fx_preset_to_engine(
+                &mut ctrl.mixer_engine,
+                &ctrl.app_state,
+                5,
+                slot_idx,
+                fst_query,
+            )
+            .expect("apply_fl26_fx_preset_to_engine");
+            assert!(!dto.plugin_name.is_empty());
+            let loaded_name = ctrl.mixer_engine.tracks[5].slots[slot_idx as usize]
+                .plugin
+                .name();
+            assert!(
+                loaded_name.contains(expected_node_substr),
+                "Expected slot {} plugin '{}' to contain '{}'",
+                slot_idx,
+                loaded_name,
+                expected_node_substr
+            );
+        }
+
+        // 6. Real FL26 Sample Kit discrete voices + raw WAV fetch (`read_fl26_sample_kit_wav_bytes`)
+        let kit_dto =
+            apply_fl26_sample_kit_to_engine(&mut ctrl.mixer_engine, "808 Studio Kit (Real .wav)")
+                .expect("apply 808 Studio Kit");
+        assert_eq!(kit_dto.voices.len(), 4);
+        let kick_wav = read_fl26_sample_kit_wav_bytes("808 Studio Kit (Real .wav)", 0)
+            .expect("read 808 Kick WAV bytes");
+        assert!(kick_wav.starts_with(b"RIFF"));
+
+        // 7. Full-length UVR5 3-Model Spectral Ensemble separation + bounce replacement onto Tracks 1..=4
+        let uvr_req = Uvr5SeparationRequestDto {
+            audio_path: "custom_song.wav".to_string(),
+            model_hash: "ensemble_3model".to_string(),
+            ensemble_mode: "Weighted".to_string(),
+            weights: [0.45, 0.35, 0.20],
+            vr_aggressiveness: 0.15,
+            ..Default::default()
+        };
+        let (uvr_res, stems, wav_bufs) =
+            execute_uvr5_separation_dsp(&custom_song, 48_000, &uvr_req)
+                .expect("execute_uvr5_separation_dsp");
+        assert_eq!(uvr_res.separated_frames, custom_song.len());
+        assert_eq!(uvr_res.stem_paths.len(), 4);
+        for wb in &wav_bufs {
+            assert!(wb.starts_with(b"RIFF") && wb.len() > 44);
+        }
+        AudioStreamController::bounce_stems_to_engine(
+            &mut ctrl.mixer_engine,
+            &stems,
+            &[1, 2, 3, 4],
+            48_000.0,
+            256,
+        )
+        .expect("bounce separated stems to tracks 1..4");
+
+        // 8. Verify OfflineRenderEngine drains pending SPSC commands before rendering
+        cmd_set_track_gain(&ctrl.app_state, 0, 0.88).expect("queue master gain via SPSC");
+        let render_res = OfflineRenderEngine::execute_render(
+            &mut ctrl.mixer_engine,
+            &OfflineRenderConfig {
+                mode: RenderMode::Master,
+                sample_rate: RenderSampleRate::Hz48000,
+                bit_depth: WavBitDepth::Pcm24MbitPlus,
+                enable_mbit_plus_noise_shaping: true,
+                trim_apdc_latency: true,
+                duration_frames: 512,
+                block_size: 256,
+                split_track_indices: Vec::new(),
+                output_dir: None,
+                file_prefix: "AuditVerify".to_string(),
+            },
+        )
+        .expect("offline render after SPSC queue");
+        assert!((ctrl.mixer_engine.tracks[0].gain - 0.88).abs() < 1e-4);
+        assert_eq!(render_res.master_wav.frames.len(), 512);
     }
 }
 

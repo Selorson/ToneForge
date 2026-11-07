@@ -1057,16 +1057,32 @@ impl AudioStreamController {
     }
 
     /// Bounces separated stereo stems directly onto Mixer Insert Tracks (`target_tracks`) as
-    /// zero-allocation `StemPlaybackGeneratorNode` channels, routes those tracks to Master (`0`),
-    /// and rebuilds the 5-Point APDC topological schedule.
+    /// zero-allocation `StemPlaybackGeneratorNode` channels (replacing any prior stem channels on those tracks),
+    /// routes those tracks to Master (`0`), and rebuilds the 5-Point APDC topological schedule.
     pub fn bounce_stems_to_mixer_tracks(
         &mut self,
         stems: &[Vec<StereoFrame>],
         target_tracks: &[usize],
     ) -> Result<Vec<usize>, String> {
-        let count = stems.len().min(target_tracks.len());
-        let mut channel_indices = Vec::with_capacity(count);
+        Self::bounce_stems_to_engine(
+            &mut self.mixer_engine,
+            stems,
+            target_tracks,
+            self.sample_rate,
+            self.max_block_size,
+        )
+    }
 
+    /// Replaces any existing stem channels on `target_tracks` (and clears any prior custom audio stem on Track 1 when
+    /// bouncing to Tracks 1..4) and attaches new `StemPlaybackGeneratorNode` channels onto `engine`.
+    pub fn bounce_stems_to_engine(
+        engine: &mut MixerEngine,
+        stems: &[Vec<StereoFrame>],
+        target_tracks: &[usize],
+        sample_rate: f64,
+        max_block_size: usize,
+    ) -> Result<Vec<usize>, String> {
+        let count = stems.len().min(target_tracks.len());
         for i in 0..count {
             let trk = target_tracks[i];
             if trk == 0 || trk >= MAX_MIXER_TRACKS {
@@ -1075,19 +1091,27 @@ impl AudioStreamController {
                     trk, MAX_MIXER_TRACKS
                 ));
             }
+        }
+        engine.remove_stem_channels_on_tracks(&target_tracks[..count]);
+
+        let mut channel_indices = Vec::with_capacity(count);
+        for i in 0..count {
+            let trk = target_tracks[i];
             let gen_node = Box::new(StemPlaybackGeneratorNode::new(stems[i].clone(), true));
-            let ch_id = (self.mixer_engine.channels.len() as u32) + 1;
+            let ch_id = 100 + (trk as u32);
             let mut ch = ChannelGenerator::new(ch_id, trk, gen_node);
-            ch.prepare(self.sample_rate, self.max_block_size);
-            let ch_idx = self
-                .mixer_engine
+            ch.prepare(sample_rate, max_block_size);
+            let ch_idx = engine
                 .add_channel_generator(ch)
                 .map_err(|e| e.to_string())?;
             channel_indices.push(ch_idx);
 
-            // Ensure target insert track routes to Master Track 0
-            self.route_mixer_track(trk as u16, MASTER_TRACK_INDEX as u16, 1.0, false)?;
+            // Ensure target insert track routes to Master Track 0 if no route exists yet
+            if engine.tracks[trk].sends.is_empty() {
+                engine.tracks[trk].add_send(MASTER_TRACK_INDEX, 1.0, false);
+            }
         }
+        engine.rebuild_graph().map_err(|e| e.to_string())?;
 
         Ok(channel_indices)
     }

@@ -83,7 +83,10 @@
     const _bandQ = activeBand.q;
     const _bandShape = activeBand.shape;
     const _bandSlope = activeBand.slopeDbOct;
+    const _bandEnabled = activeBand.enabled;
     const _scale = telemetry.proq4GainScalePct;
+    const _bypass = telemetry.proq4Bypass;
+    const _collisions = telemetry.proq4ShowCollisions;
     if (renderer) {
       renderer.renderFrame(telemetry);
     }
@@ -128,7 +131,7 @@
       {#each ['ZeroLatency', 'NaturalPhase', 'LinearPhase'] as mode}
         <button
           class={telemetry.proq4PhaseMode === mode ? 'active' : ''}
-          onclick={() => (telemetry.proq4PhaseMode = mode as any)}
+          onclick={() => telemetry.setProQ4PhaseMode(mode as 'ZeroLatency' | 'NaturalPhase' | 'LinearPhase')}
         >
           {mode}
         </button>
@@ -292,6 +295,45 @@
           })}
       />
       Spectral Dynamics
+    </label>
+
+    <label>
+      Scale: {telemetry.proq4GainScalePct.toFixed(0)}%
+      <input
+        type="range"
+        min="0"
+        max="200"
+        step="5"
+        value={telemetry.proq4GainScalePct}
+        oninput={(e) => {
+          telemetry.proq4GainScalePct = parseFloat((e.currentTarget as HTMLInputElement).value);
+          telemetry.syncProQ4GlobalToEngine();
+        }}
+      />
+    </label>
+
+    <label>
+      <input
+        type="checkbox"
+        checked={telemetry.proq4AutoGain}
+        onchange={(e) => {
+          telemetry.proq4AutoGain = (e.currentTarget as HTMLInputElement).checked;
+          telemetry.syncProQ4GlobalToEngine();
+        }}
+      />
+      Auto Gain
+    </label>
+
+    <label>
+      <input
+        type="checkbox"
+        checked={telemetry.proq4ShowCollisions}
+        onchange={(e) => {
+          telemetry.proq4ShowCollisions = (e.currentTarget as HTMLInputElement).checked;
+          telemetry.syncProQ4GlobalToEngine();
+        }}
+      />
+      Collisions
     </label>
   </div>
 </section>

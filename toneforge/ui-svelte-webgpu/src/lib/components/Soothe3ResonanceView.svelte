@@ -22,6 +22,7 @@
     const _detail = telemetry.soothe3Detail;
     const _hard = telemetry.soothe3HardMode;
     const _delta = telemetry.soothe3DeltaSolo;
+    const _sc = telemetry.soothe3ScBands.map((b) => `${b.enabled}:${b.freqHz}:${b.depth}:${b.q}`).join('|');
     if (renderer) {
       renderer.renderFrame(telemetry);
     }
@@ -169,10 +170,66 @@
   </div>
 
   <div class="sc-bands-strip">
-    {#each telemetry.soothe3ScBands.slice(0, 5) as sc (sc.bandIdx)}
-      <div class="sc-card">
-        <strong>SC Band {sc.bandIdx + 1}</strong>
-        <span>{sc.freqHz.toFixed(0)} Hz · Sens {sc.depth.toFixed(1)}</span>
+    {#each telemetry.soothe3ScBands.slice(0, 6) as sc (sc.bandIdx)}
+      <div class="sc-card {sc.enabled ? '' : 'disabled'}">
+        <div class="sc-card-head">
+          <strong>SC Band {sc.bandIdx + 1}</strong>
+          <input
+            type="checkbox"
+            checked={sc.enabled}
+            onchange={(e) =>
+              telemetry.updateSoothe3ScBand(sc.bandIdx, {
+                enabled: (e.currentTarget as HTMLInputElement).checked,
+              })}
+            title="Enable/Disable Sidechain EQ Band {sc.bandIdx + 1}"
+          />
+        </div>
+        <span>{sc.freqHz.toFixed(0)} Hz · Sens {sc.depth.toFixed(1)} · Q {sc.q.toFixed(1)}</span>
+        <label class="sc-mini-row">
+          Hz
+          <input
+            type="range"
+            min="40"
+            max="18000"
+            step="10"
+            value={sc.freqHz}
+            oninput={(e) =>
+              telemetry.updateSoothe3ScBand(sc.bandIdx, {
+                enabled: true,
+                freqHz: parseFloat((e.currentTarget as HTMLInputElement).value),
+              })}
+          />
+        </label>
+        <label class="sc-mini-row">
+          Sens
+          <input
+            type="range"
+            min="-10"
+            max="10"
+            step="0.2"
+            value={sc.depth}
+            oninput={(e) =>
+              telemetry.updateSoothe3ScBand(sc.bandIdx, {
+                enabled: true,
+                depth: parseFloat((e.currentTarget as HTMLInputElement).value),
+              })}
+          />
+        </label>
+        <label class="sc-mini-row">
+          Q
+          <input
+            type="range"
+            min="0.4"
+            max="8.0"
+            step="0.1"
+            value={sc.q}
+            oninput={(e) =>
+              telemetry.updateSoothe3ScBand(sc.bandIdx, {
+                enabled: true,
+                q: parseFloat((e.currentTarget as HTMLInputElement).value),
+              })}
+          />
+        </label>
       </div>
     {/each}
   </div>
@@ -196,8 +253,12 @@
   .mode-toggles button.active.delta { background: var(--warn); color: #0b2b1e; border-color: var(--warn); }
   .soothe3-canvas { width: 100%; height: 220px; background: var(--sub-surface); border-radius: var(--radius); border: 1px solid var(--border); display: block; }
   .soothe-controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--sub-surface-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius); }
-  .sc-bands-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 8px; }
-  .sc-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 0.72rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; }
+  .sc-bands-strip { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 8px; }
+  .sc-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 0.70rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 3px; }
+  .sc-card.disabled { opacity: 0.55; }
+  .sc-card-head { display: flex; justify-content: space-between; align-items: center; }
   .sc-card strong { color: var(--accent); }
+  .sc-mini-row { display: flex; justify-content: space-between; align-items: center; gap: 4px; font-size: 0.66rem; color: var(--muted); }
+  .sc-mini-row input[type="range"] { width: 72%; }
 </style>
 

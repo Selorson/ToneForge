@@ -27,7 +27,7 @@ use crate::offline_render_engine::read_wav_file;
 use crate::project_state::{Ozone12MasterConfigDto, PianoRollNoteDto, PianoRollPatternDto};
 use ai_uvr5_stem_engine::npz_gru_legacy::{GenreCnnClassifier, InstrumentCnnClassifier};
 use daw_core_graph::telemetry_shm::EngineCommand;
-use daw_core_graph::{AudioStemClipPlayerNode, ChannelGenerator};
+use daw_core_graph::ChannelGenerator;
 use dsp_proq4_eq::params_601::norm_to_q_ui;
 use dsp_proq4_eq::{
     EqBandParams, FilterShape, LinearPhaseResolution, PROQ4_NUM_BANDS, ProQ4ParameterSet,
@@ -120,11 +120,17 @@ pub struct ProQ4PresetStateDto {
     pub description: String,
     pub tags: String,
     pub phase_mode: String, // "ZeroLatency" | "NaturalPhase" | "LinearPhase"
+    #[serde(default = "default_proq4_preset_proc_res")]
+    pub processing_resolution: u8,
     pub gain_scale_pct: f32,
     pub auto_gain: bool,
     pub show_collisions: bool,
     pub bands: Vec<ProQ4UiBandDto>,
     pub total_catalog_presets: usize,
+}
+
+fn default_proq4_preset_proc_res() -> u8 {
+    1
 }
 
 /// Parses a FabFilter Pro-Q 4 `.ffp` text string into a (`ProQ4ParameterSet`, `ProQ4PresetStateDto`) pair.
@@ -404,6 +410,7 @@ pub fn parse_proq4_ffp(
         description,
         tags,
         phase_mode: phase_mode_str,
+        processing_resolution: proc_res_idx,
         gain_scale_pct,
         auto_gain: ps.global.auto_gain,
         show_collisions: ps.global.show_collisions,
@@ -1046,6 +1053,24 @@ pub fn load_ozone12_genre_preset(
     })
 }
 
+fn parse_xml_band_index(elem_low: &str, sub_low: &str, pid_low: &str) -> Option<usize> {
+    for token in [elem_low, sub_low, pid_low] {
+        if token.contains("band0") || token.contains("band 1") || token.contains("band_0") {
+            return Some(0);
+        }
+        if token.contains("band1") || token.contains("band 2") || token.contains("band_1") {
+            return Some(1);
+        }
+        if token.contains("band2") || token.contains("band 3") || token.contains("band_2") {
+            return Some(2);
+        }
+        if token.contains("band3") || token.contains("band 4") || token.contains("band_3") {
+            return Some(3);
+        }
+    }
+    None
+}
+
 fn overlay_ozone12_xml_params(cfg: &mut Ozone12MasterConfigDto, xml_text: &str) {
     for line in xml_text.lines() {
         let trimmed = line.trim();
@@ -1053,10 +1078,15 @@ fn overlay_ozone12_xml_params(cfg: &mut Ozone12MasterConfigDto, xml_text: &str) 
             continue;
         }
         let elem = extract_xml_attr(trimmed, "ElementID").unwrap_or_default();
+        let sub_elem = extract_xml_attr(trimmed, "SubElementID").unwrap_or_default();
         let pid = extract_xml_attr(trimmed, "ParamID").unwrap_or_default();
         let val_f = extract_xml_attr(trimmed, "Value").and_then(|v| v.parse::<f32>().ok());
         if let Some(val) = val_f {
             let elem_low = elem.to_ascii_lowercase();
+            let sub_low = sub_elem.to_ascii_lowercase();
+            let pid_low = pid.to_ascii_lowercase();
+            let band_opt = parse_xml_band_index(&elem_low, &sub_low, &pid_low);
+
             if elem_low.contains("maximizer") {
                 match pid {
                     "Threshold" | "Gain" => {
@@ -1068,20 +1098,107 @@ fn overlay_ozone12_xml_params(cfg: &mut Ozone12MasterConfigDto, xml_text: &str) 
                         cfg.maximizer_ceiling_dbtp = val.clamp(-6.0, 0.0);
                     }
                     "Mode" | "IRCMode" => {
-                        cfg.maximizer_irc_mode = (val.round() as u8).min(5);
+                        cfg.maximizer_irc_mode = (val.round() as u8).min(8);
+                    }
+                    "TruePeak" => {
+                        cfg.maximizer_true_peak = val >= 0.5;
+                    }
+                    "SoftClip" | "SoftClipEnabled" => {
+                        cfg.maximizer_soft_clip_enabled = val >= 0.5;
+                    }
+                    "SoftClipAmount" | "SoftClipMix" => {
+                        cfg.maximizer_soft_clip_mix =
+                            (if val > 1.0 { val * 0.01 } else { val }).clamp(0.0, 1.0);
+                    }
+                    "UpwardCompress" | "UpwardComp" => {
+                        cfg.maximizer_upward_comp_wet =
+                            (if val > 1.0 { val * 0.01 } else { val }).clamp(0.0, 1.0);
+                    }
+                    "TransientEmphasis" | "Transient" => {
+                        cfg.maximizer_transient_shaping = val.clamp(-1.0, 1.0);
                     }
                     _ => {}
                 }
-            } else if elem_low.contains("exciter") && pid.contains("Drive") {
-                let d = val.clamp(5.0, 65.0);
-                cfg.exciter_band_drives_pct = [d * 0.8, d, d * 1.1, d * 0.9];
-            } else if elem_low.contains("imager") && pid.contains("Width") {
-                let w = val.clamp(-50.0, 80.0);
-                cfg.imager_band_widths_pct = [0.0, w * 0.5, w * 0.8, w];
-            } else if elem_low.contains("stabilizer") && pid.contains("Amount") {
-                cfg.stabilizer_amount_pct = val.clamp(10.0, 90.0);
-            } else if elem_low.contains("clarity") && pid.contains("Amount") {
-                cfg.clarity_amount_pct = val.clamp(10.0, 90.0);
+            } else if elem_low.contains("exciter") {
+                if pid_low.contains("drive") || pid_low.contains("amount") {
+                    let d = val.clamp(0.0, 100.0);
+                    if let Some(b) = band_opt {
+                        cfg.exciter_band_drives_pct[b] = d;
+                    } else {
+                        let d_clamped = d.clamp(5.0, 65.0);
+                        cfg.exciter_band_drives_pct = [
+                            (d_clamped * 0.82).clamp(0.0, 100.0),
+                            d_clamped,
+                            (d_clamped * 1.12).clamp(0.0, 100.0),
+                            (d_clamped * 0.92).clamp(0.0, 100.0),
+                        ];
+                    }
+                } else if pid_low.contains("mix") {
+                    let m = (if val > 1.0 { val * 0.01 } else { val }).clamp(0.0, 1.0);
+                    if let Some(b) = band_opt {
+                        cfg.exciter_band_mixes[b] = m;
+                    } else {
+                        cfg.exciter_band_mixes = [m; 4];
+                    }
+                } else if pid_low.contains("mode") {
+                    let mode_u8 = (val.round().clamp(0.0, 6.0)) as u8;
+                    if let Some(b) = band_opt {
+                        cfg.exciter_band_modes[b] = mode_u8;
+                    } else {
+                        cfg.exciter_band_modes = [mode_u8; 4];
+                    }
+                }
+            } else if elem_low.contains("imager") {
+                if pid_low.contains("width") {
+                    let w = val.clamp(-100.0, 100.0);
+                    if let Some(b) = band_opt {
+                        cfg.imager_band_widths_pct[b] = w;
+                    } else {
+                        let w_clamped = w.clamp(-50.0, 80.0);
+                        cfg.imager_band_widths_pct = [
+                            -10.0,
+                            (w_clamped * 0.45).clamp(-100.0, 100.0),
+                            (w_clamped * 0.80).clamp(-100.0, 100.0),
+                            w_clamped,
+                        ];
+                    }
+                } else if pid_low.contains("stereoize") {
+                    if pid_low.contains("enable") {
+                        cfg.imager_stereoizer_enabled = val >= 0.5;
+                    } else {
+                        let st = val.clamp(0.0, 100.0);
+                        if let Some(b) = band_opt {
+                            cfg.imager_band_stereoize_pct[b] = st;
+                        } else {
+                            cfg.imager_band_stereoize_pct = [0.0, st * 0.5, st * 0.8, st];
+                        }
+                    }
+                }
+            } else if elem_low.contains("impact") {
+                if pid_low.contains("amount") || pid_low.contains("delta") {
+                    let imp = val.clamp(-100.0, 100.0);
+                    if let Some(b) = band_opt {
+                        cfg.impact_band_amounts[b] = imp;
+                    } else {
+                        cfg.impact_band_amounts = [imp, imp * 0.8, imp * 0.6, imp * 0.7];
+                    }
+                }
+            } else if elem_low.contains("stabilizer") {
+                if pid_low.contains("amount") {
+                    cfg.stabilizer_amount_pct = val.clamp(5.0, 95.0);
+                } else if pid_low.contains("speed") {
+                    cfg.stabilizer_speed_pct = val.clamp(5.0, 95.0);
+                } else if pid_low.contains("transient") {
+                    cfg.stabilizer_tame_transients_pct = val.clamp(0.0, 100.0);
+                } else if pid_low.contains("cut") {
+                    cfg.stabilizer_cut_mode = val >= 0.5;
+                }
+            } else if elem_low.contains("clarity") {
+                if pid_low.contains("amount") {
+                    cfg.clarity_amount_pct = val.clamp(5.0, 95.0);
+                } else if pid_low.contains("tilt") {
+                    cfg.clarity_tilt_db_oct = val.clamp(-6.0, 6.0);
+                }
             }
         }
     }
@@ -1196,12 +1313,15 @@ pub fn run_ozone12_master_assistant(
     mel_80_opt: Option<Vec<f32>>,
 ) -> Result<Ozone12AssistantPresetDto, String> {
     let mut mel = [0.0f32; 80];
-    if let Some(v) = mel_80_opt {
+    let has_valid_mel = mel_80_opt
+        .as_ref()
+        .is_some_and(|v| !v.is_empty() && v.iter().any(|x| x.abs() > 1e-6));
+    if let (true, Some(v)) = (has_valid_mel, mel_80_opt) {
         for (i, &val) in v.iter().take(80).enumerate() {
             mel[i] = val;
         }
     } else {
-        // Default energetic modern vocal-electronic spectrum profile when invoked from UI button
+        // Default energetic modern vocal-electronic spectrum profile when invoked without live audio
         for i in 0..80 {
             let norm = i as f32 / 79.0;
             mel[i] = 0.75 * (-((norm - 0.15) * 4.0).powi(2)).exp()
@@ -1526,7 +1646,7 @@ pub fn load_fl26_score_preset(
 
 fn load_fl26_sample_kit_internal(
     kit_query: &str,
-) -> Result<(Fl26SampleKitDto, Vec<[f32; 2]>), String> {
+) -> Result<(Fl26SampleKitDto, Vec<(u8, Vec<[f32; 2]>)>), String> {
     let samples_dir = resolve_assets_root().join("flstudio26").join("samples");
     let (kit_name, synth_engine, files_and_keys): (&str, &str, &[(&str, &str, u8)]) =
         match kit_query.trim() {
@@ -1580,7 +1700,7 @@ fn load_fl26_sample_kit_internal(
         };
 
     let mut voices = Vec::with_capacity(files_and_keys.len());
-    let mut composite_frames = Vec::new();
+    let mut discrete_kit_voices = Vec::with_capacity(files_and_keys.len());
     for &(label, fname, root_key) in files_and_keys {
         let p = samples_dir.join(fname);
         let decoded = read_wav_file(&p)
@@ -1589,7 +1709,6 @@ fn load_fl26_sample_kit_internal(
         for frame in &decoded.frames {
             peak = peak.max(frame[0].abs()).max(frame[1].abs());
         }
-        composite_frames.extend_from_slice(&decoded.frames);
         let peak_dbfs = (20.0 * peak.log10() * 10.0).round() / 10.0;
         let duration_ms = ((decoded.frames.len() as f32
             / decoded.sample_rate_hz.max(1) as f32)
@@ -1607,6 +1726,7 @@ fn load_fl26_sample_kit_internal(
             duration_ms,
             peak_dbfs,
         });
+        discrete_kit_voices.push((root_key, decoded.frames));
     }
 
     Ok((
@@ -1616,32 +1736,57 @@ fn load_fl26_sample_kit_internal(
             synth_engine: synth_engine.to_string(),
             voices,
         },
-        composite_frames,
+        discrete_kit_voices,
     ))
+}
+
+/// Reads the raw `.wav` file bytes for a specific voice (`sample_idx`) in an FL Studio 26 sample kit (`[Nhóm D.4]`).
+pub fn read_fl26_sample_kit_wav_bytes(
+    kit_query: &str,
+    sample_idx: usize,
+) -> Result<Vec<u8>, String> {
+    let (dto, _) = load_fl26_sample_kit_internal(kit_query)?;
+    let voice = dto.voices.get(sample_idx).ok_or_else(|| {
+        format!(
+            "Sample index {} out of range for kit '{}' (len={})",
+            sample_idx,
+            kit_query,
+            dto.voices.len()
+        )
+    })?;
+    let path = resolve_assets_root()
+        .join("flstudio26")
+        .join("samples")
+        .join(&voice.file_name);
+    fs::read(&path).map_err(|e| format!("Failed reading sample WAV {}: {e}", path.display()))
 }
 
 /// Loads a real 16-bit 44.1 kHz `.wav` studio sample kit from `assets/flstudio26/samples/`.
 pub fn load_fl26_sample_kit(kit_query: &str) -> Result<Fl26SampleKitDto, String> {
-    let (dto, _frames) = load_fl26_sample_kit_internal(kit_query)?;
+    let (dto, _voices) = load_fl26_sample_kit_internal(kit_query)?;
     Ok(dto)
 }
 
-/// Decodes a real FL Studio 26 `.wav` sample kit and loads the stereo audio buffer into an
-/// [`AudioStemClipPlayerNode`] on `MixerEngine` (Channel ID `2` routed to Track `2`).
+/// Decodes a real FL Studio 26 `.wav` sample kit and loads the discrete per-note `.wav` samples into
+/// [`PolyphonicSynthGeneratorNode`] on `MixerEngine` (Channel ID `1` routed to Track `1`) without
+/// concatenating all 4 files into a continuous looping stem (`[Nhóm C.5]`).
 pub fn apply_fl26_sample_kit_to_engine(
     engine: &mut daw_core_graph::MixerEngine,
     kit_query: &str,
 ) -> Result<Fl26SampleKitDto, String> {
-    let (dto, frames) = load_fl26_sample_kit_internal(kit_query)?;
-    let mut player = AudioStemClipPlayerNode::new(2, "FL26 Sample Kit", frames);
-    player.continuous_mode = true;
-    player.loop_enabled = true;
-    if let Some(existing) = engine.channels.iter_mut().find(|c| c.id == 2) {
-        existing.generator = Box::new(player);
-        existing.target_mixer_track = 2;
+    let (dto, discrete_voices) = load_fl26_sample_kit_internal(kit_query)?;
+    let mut synth =
+        daw_core_graph::PolyphonicSynthGeneratorNode::new(1, engine.slicer.sample_rate);
+    if !kit_query.trim().eq_ignore_ascii_case("Sytrus / Harmor Lead") {
+        synth.load_sample_kit_voices(discrete_voices);
+    }
+    engine.remove_stem_channels_on_tracks(&[2]);
+    if let Some(existing) = engine.channels.iter_mut().find(|c| c.id == 1) {
+        existing.generator = Box::new(synth);
+        existing.target_mixer_track = 1;
         let _ = engine.rebuild_graph();
     } else {
-        let _ = engine.add_channel_generator(ChannelGenerator::new(2, 2, Box::new(player)));
+        let _ = engine.add_channel_generator(ChannelGenerator::new(1, 1, Box::new(synth)));
     }
     Ok(dto)
 }
@@ -2055,6 +2200,99 @@ pub fn load_fl26_fx_preset(
         drive_db,
         wet_mix_pct: wet_pct,
     })
+}
+
+/// Loads an FL Studio 26 `.fst` native FX preset, instantiates the real corresponding `UnifiedDspNode`
+/// (`MaximusMultibandNode`, `EmphasisLimiterNode`, `SparseCompressorNode`, `GrossBeatTimeBufferNode`,
+/// `LuxeVerbFdnShimmerNode`, or `ProQ4Processor`) on `engine.tracks[track_idx]` at `slot_idx`,
+/// configures its parameters from the `.fst` payload, and rebuilds the 5-Point APDC graph (`[Nhóm B.8]`).
+pub fn apply_fl26_fx_preset_to_engine(
+    engine: &mut daw_core_graph::MixerEngine,
+    state: &DawAppState,
+    track_idx: u16,
+    slot_idx: u8,
+    preset_query: &str,
+) -> Result<Fl26FxPresetDto, String> {
+    if (track_idx as usize) >= daw_core_graph::MAX_MIXER_TRACKS
+        || (slot_idx as usize) >= daw_core_graph::MAX_INSERT_SLOTS
+    {
+        return Err("Track or slot index out of range".to_string());
+    }
+    let dto = load_fl26_fx_preset(state, track_idx, slot_idx, preset_query)?;
+    let sr = engine.slicer.sample_rate.max(8000.0);
+    let blk = daw_core_graph::MAX_BLOCK_SIZE;
+
+    let norm_thresh = ((dto.threshold_db + 30.0) / 30.0).clamp(0.0, 1.0);
+    let norm_ceil = ((dto.ceiling_db + 12.0) / 12.0).clamp(0.0, 1.0);
+    let norm_drive = (dto.drive_db / 12.0).clamp(0.0, 1.0);
+    let norm_wet = (dto.wet_mix_pct / 100.0).clamp(0.0, 1.0);
+
+    let mut plugin_box: Box<dyn daw_core_graph::UnifiedDspNode> = match dto.plugin_name.as_str() {
+        "Maximus" => Box::new(daw_core_graph::MaximusMultibandNode::new()),
+        "Emphasis" | "Fruity Soft Clipper" => {
+            Box::new(daw_core_graph::EmphasisLimiterNode::new(64, dto.ceiling_db))
+        }
+        "Fruity Limiter" => {
+            let thresh_lin = (10.0f32).powf(dto.threshold_db / 20.0).clamp(0.01, 1.0);
+            let makeup_lin = (10.0f32).powf(dto.drive_db / 20.0).clamp(0.5, 4.0);
+            Box::new(daw_core_graph::SparseCompressorNode::new(
+                thresh_lin,
+                4.0,
+                makeup_lin,
+                64,
+            ))
+        }
+        "Gross Beat" => Box::new(daw_core_graph::GrossBeatTimeBufferNode::new(
+            (sr as usize) * 2,
+        )),
+        "Fruity LuxeVerb" => Box::new(daw_core_graph::LuxeVerbFdnShimmerNode::new()),
+        _ => {
+            let mut eq = dsp_proq4_eq::ProQ4Processor::new();
+            eq.set_band_params(
+                0,
+                EqBandParams {
+                    used: true,
+                    enabled: true,
+                    shape: FilterShape::LowCut,
+                    freq_hz: 30.0,
+                    slope_db_oct: 24.0,
+                    q_ui: 0.75,
+                    ..EqBandParams::default()
+                },
+            );
+            eq.set_band_params(
+                1,
+                EqBandParams {
+                    used: true,
+                    enabled: true,
+                    shape: FilterShape::Bell,
+                    freq_hz: 3200.0,
+                    gain_db: dto.drive_db.clamp(-6.0, 6.0),
+                    q_ui: 1.1,
+                    ..EqBandParams::default()
+                },
+            );
+            Box::new(eq)
+        }
+    };
+
+    plugin_box.prepare(sr, blk);
+    for (param_id, norm_val) in [
+        (0u32, norm_thresh),
+        (1, norm_ceil),
+        (2, norm_drive),
+        (3, norm_wet),
+    ] {
+        plugin_box.set_parameter_normalized(param_id, norm_val);
+    }
+
+    let actual_slot = engine.tracks[track_idx as usize]
+        .set_or_replace_plugin_slot(slot_idx as usize, plugin_box, norm_wet, sr, blk)
+        .map_err(|e| e.to_string())?;
+    let _ = actual_slot;
+    engine.rebuild_graph().map_err(|e| e.to_string())?;
+
+    Ok(dto)
 }
 
 // ============================================================================

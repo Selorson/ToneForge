@@ -1093,3 +1093,524 @@ fn test_cowriter_camcast_theme_and_full_ui_byte_parity() {
 
 
 
+#[test]
+fn test_adversarial_audit_19_gaps_remediation_e2e() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+    let ui_a = workspace_root.join("ui-svelte-webgpu");
+
+    // 1. Verify frontend store has eliminated `mel80: null`, `synthPreDb`, and hardcoded `0.58`/`0.74` Gaussian peaks
+    let store_src = std::fs::read_to_string(ui_a.join("src/lib/state/daw_master_store.svelte.ts"))
+        .expect("read daw_master_store.svelte.ts");
+    assert!(
+        !store_src.contains("mel80: null"),
+        "daw_master_store.svelte.ts must not pass mel80: null to cmd_run_ozone12_ai_master_assistant"
+    );
+    assert!(
+        !store_src.contains("synthPreDb"),
+        "daw_master_store.svelte.ts must not overwrite real SHM spectrum with synthPreDb"
+    );
+    assert!(
+        !store_src.contains("normX - 0.58") && !store_src.contains("normX - 0.74"),
+        "daw_master_store.svelte.ts must not overwrite soothe3Reduction1024 with hardcoded 0.58 / 0.74 Gaussian peaks"
+    );
+    assert!(store_src.contains("computeMel80FromAudio"));
+    assert!(store_src.contains("cmd_update_proq4_global"));
+    assert!(store_src.contains("cmd_update_soothe3_sc_band"));
+    assert!(store_src.contains("cmd_update_bsrnn_stem_state"));
+    assert!(store_src.contains("cmd_begin_custom_audio_upload"));
+    assert!(store_src.contains("cmd_fetch_uvr5_stem_wav"));
+    assert!(store_src.contains("cmd_fetch_fl26_sample_wav"));
+
+    // 2. Verify UI component wiring for Phase Mode, Soothe3 SC Bands, BSRNN Solo/Mute, and TensionSpline
+    let proq4_svelte =
+        std::fs::read_to_string(ui_a.join("src/lib/components/ProQ4InteractiveAnalyzer.svelte"))
+            .expect("read ProQ4InteractiveAnalyzer.svelte");
+    assert!(proq4_svelte.contains("setProQ4PhaseMode"));
+    assert!(proq4_svelte.contains("syncProQ4GlobalToEngine"));
+
+    let soothe3_svelte =
+        std::fs::read_to_string(ui_a.join("src/lib/components/Soothe3ResonanceView.svelte"))
+            .expect("read Soothe3ResonanceView.svelte");
+    assert!(soothe3_svelte.contains("updateSoothe3ScBand"));
+
+    let ozone12_svelte =
+        std::fs::read_to_string(ui_a.join("src/lib/components/Ozone12MasterChain.svelte"))
+            .expect("read Ozone12MasterChain.svelte");
+    assert!(ozone12_svelte.contains("toggleBsrnnStemSolo"));
+    assert!(ozone12_svelte.contains("toggleBsrnnStemMute"));
+
+    let mixer_svelte =
+        std::fs::read_to_string(ui_a.join("src/lib/components/MixerRack502.svelte"))
+            .expect("read MixerRack502.svelte");
+    assert!(mixer_svelte.contains("updateTensionSplinePoint"));
+
+    // 3. Verify AI Master Assistant responds dynamically to different 80-band Mel profiles
+    let ctrl = AudioStreamController::with_mastering_template(48_000.0, 256)
+        .expect("create mastering controller");
+    let mut sub_heavy_mel = [-55.0f32; 80];
+    for i in 0..14 {
+        sub_heavy_mel[i] = -6.0;
+    }
+    let mut bright_high_mel = [-55.0f32; 80];
+    for i in 45..80 {
+        bright_high_mel[i] = -5.0;
+    }
+
+    let res_sub = daw_tauri_host::run_ozone12_master_assistant(
+        &ctrl.app_state,
+        0,
+        1,
+        Some(sub_heavy_mel.to_vec()),
+    )
+    .expect("run AI assistant with sub_heavy_mel");
+    let res_bright = daw_tauri_host::run_ozone12_master_assistant(
+        &ctrl.app_state,
+        0,
+        1,
+        Some(bright_high_mel.to_vec()),
+    )
+    .expect("run AI assistant with bright_high_mel");
+
+    assert!(
+        res_sub.detected_genre != res_bright.detected_genre
+            || res_sub.dominant_instrument != res_bright.dominant_instrument
+            || (res_sub.genre_confidence_pct - res_bright.genre_confidence_pct).abs() > 0.01,
+        "AI Master Assistant must produce distinct predictions for distinct mel_80 spectra"
+    );
+}
+
+#[test]
+fn test_six_ipc_json_schema_alignment_and_patcher_interactive_e2e() {
+    use daw_tauri_host::{
+        PatcherCanvasEdgeDto, PatcherCanvasUpdateDto, ProQ4GlobalUpdateDto,
+        Soothe3ScBandUpdateDto, Uvr5SeparationRequestDto, Uvr5SeparationResultDto,
+        cmd_route_mixer_track_on_engine, cmd_update_patcher_graph, cmd_update_proq4_global,
+        cmd_update_soothe3_sc_band, execute_uvr5_separation_dsp, read_fl26_sample_kit_wav_bytes,
+    };
+
+    let mut ctrl = AudioStreamController::with_mastering_template(48_000.0, 256)
+        .expect("create mastering controller");
+    let mut master_out = [[0.0f32; 2]; 128];
+
+    // =========================================================================
+    // 1. FIX 1: serde_json::from_str on exact TS JSON payloads for ProQ4GlobalUpdateDto
+    // =========================================================================
+    let ts_minimal_proq4_json = r#"{
+        "track_idx": 1,
+        "slot_idx": 0,
+        "phase_mode": "LinearPhase",
+        "gain_scale_pct": 125.0,
+        "auto_gain": false,
+        "show_collisions": true
+    }"#;
+    let proq4_min_dto: ProQ4GlobalUpdateDto = serde_json::from_str(ts_minimal_proq4_json)
+        .expect("ProQ4GlobalUpdateDto must decode minimal TS payload without missing-field errors");
+    assert_eq!(proq4_min_dto.phase_mode.as_deref(), Some("LinearPhase"));
+    assert!((proq4_min_dto.gain_scale_pct - 125.0).abs() < 1e-4);
+    assert!(!proq4_min_dto.auto_gain);
+    assert!(proq4_min_dto.show_collisions);
+    cmd_update_proq4_global(&ctrl.app_state, proq4_min_dto).expect("apply LinearPhase global DTO");
+    ctrl.process_audio_block(&mut master_out);
+    let lin_slot_lat = ctrl.mixer_engine.tracks[1].slots[0].plugin.latency_samples();
+    assert!(
+        lin_slot_lat >= 1024,
+        "LinearPhase mode via phase_mode string must activate FIR latency >= 1024, got {lin_slot_lat}"
+    );
+
+    for (phase_str, proc_mode_num) in [
+        ("ZeroLatency", 0u8),
+        ("NaturalPhase", 1u8),
+        ("LinearPhase", 2u8),
+    ] {
+        let ts_full_proq4_json = format!(
+            r#"{{
+                "track_idx": 1,
+                "slot_idx": 0,
+                "processing_mode": {proc_mode_num},
+                "phase_mode": "{phase_str}",
+                "processing_resolution": 1,
+                "character": 1,
+                "gain_scale_pct": 110.0,
+                "output_level_db": 0.5,
+                "bypass": false,
+                "auto_gain": true,
+                "show_collisions": false
+            }}"#
+        );
+        let dto: ProQ4GlobalUpdateDto = serde_json::from_str(&ts_full_proq4_json)
+            .expect("ProQ4GlobalUpdateDto must decode full synchronized TS payload");
+        cmd_update_proq4_global(&ctrl.app_state, dto).expect("apply full ProQ4GlobalUpdateDto");
+        ctrl.process_audio_block(&mut master_out);
+    }
+
+    // Also test ZeroLatency explicitly resets Pro-Q 4 slot latency to 0
+    let zero_lat_dto: ProQ4GlobalUpdateDto = serde_json::from_str(
+        r#"{"track_idx":1,"slot_idx":0,"phase_mode":"ZeroLatency","gain_scale_pct":100.0,"auto_gain":true,"show_collisions":true}"#,
+    )
+    .expect("decode ZeroLatency DTO");
+    cmd_update_proq4_global(&ctrl.app_state, zero_lat_dto).expect("apply ZeroLatency");
+    ctrl.process_audio_block(&mut master_out);
+    assert_eq!(
+        ctrl.mixer_engine.tracks[1].slots[0].plugin.latency_samples(),
+        0,
+        "ZeroLatency phase_mode must drop Pro-Q 4 latency to 0 samples"
+    );
+
+    // =========================================================================
+    // 2. Soothe3ScBandUpdateDto exact TS JSON schema + boundary validation
+    // =========================================================================
+    let ts_soothe3_sc_json = r#"{
+        "track_idx": 1,
+        "slot_idx": 1,
+        "band_idx": 2,
+        "enabled": true,
+        "freq_hz": 3400.0,
+        "gain_db": 15.6,
+        "q": 2.2,
+        "shape": 1
+    }"#;
+    let soothe_sc_dto: Soothe3ScBandUpdateDto = serde_json::from_str(ts_soothe3_sc_json)
+        .expect("Soothe3ScBandUpdateDto must decode exact TS JSON payload");
+    cmd_update_soothe3_sc_band(&ctrl.app_state, soothe_sc_dto)
+        .expect("cmd_update_soothe3_sc_band valid band 2");
+    ctrl.process_audio_block(&mut master_out);
+    assert!(
+        cmd_update_soothe3_sc_band(
+            &ctrl.app_state,
+            Soothe3ScBandUpdateDto {
+                band_idx: 8, // out of range 0..8
+                ..soothe_sc_dto
+            }
+        )
+        .is_err(),
+        "Out-of-range Soothe3 SC band_idx=8 must be rejected"
+    );
+
+    // =========================================================================
+    // 3. FIX 2: serde_json::from_str on exact TS JSON for Uvr5SeparationRequestDto & ResultDto
+    // =========================================================================
+    let ts_uvr5_req_inv_json = r#"{
+        "audio_path": "ToneForge_Session.wav",
+        "model_profile": "Ensemble: MDX23C + HTDemucs4 / VR-ASPP (3-Model)",
+        "ensemble_mode": "AVERAGE",
+        "weights": [0.45, 0.35, 0.20],
+        "enable_denoise_2pass": true,
+        "vr_aggressiveness": 0.20,
+        "phase_denoise_strength": 0.85,
+        "invert_instrumental": true,
+        "bounce_to_mixer": false
+    }"#;
+    let uvr_req_inv: Uvr5SeparationRequestDto = serde_json::from_str(ts_uvr5_req_inv_json)
+        .expect("Uvr5SeparationRequestDto must decode TS payload with model_profile alias");
+    assert_eq!(
+        uvr_req_inv.model_hash,
+        "Ensemble: MDX23C + HTDemucs4 / VR-ASPP (3-Model)"
+    );
+    assert!(uvr_req_inv.enable_denoise_2pass);
+    assert!((uvr_req_inv.phase_denoise_strength - 0.85).abs() < 1e-5);
+    assert!(uvr_req_inv.invert_instrumental);
+    assert!(!uvr_req_inv.bounce_to_mixer);
+
+    let test_mix: Vec<[f32; 2]> = (0..1024)
+        .map(|n| {
+            let t = (n as f32) / 48_000.0;
+            let low = 0.30 * (std::f32::consts::TAU * 80.0 * t).sin();
+            let mid = 0.25 * (std::f32::consts::TAU * 660.0 * t).sin();
+            let high = 0.15 * (std::f32::consts::TAU * 3800.0 * t).cos();
+            [low + mid + high, low + mid * 0.9 - high * 0.8]
+        })
+        .collect();
+
+    let (uvr_res_inv, stems_inv, _wavs_inv) =
+        execute_uvr5_separation_dsp(&test_mix, 48_000, &uvr_req_inv)
+            .expect("execute_uvr5_separation_dsp with invert_instrumental=true");
+    assert_eq!(uvr_res_inv.bounced_mixer_tracks, [0, 0, 0, 0]);
+    assert!(
+        uvr_res_inv.stem_paths[3].ends_with("_inv_inst.wav"),
+        "4th stem path must end with _inv_inst.wav when invert_instrumental=true, got {}",
+        uvr_res_inv.stem_paths[3]
+    );
+    for p in &uvr_res_inv.stem_paths {
+        assert!(
+            std::path::Path::new(p).exists(),
+            "Sanitized Windows stem WAV path must exist on disk even when model_profile contains ':' and '/': {p}"
+        );
+    }
+    // Verify 4th stem == source_mix - vocals when invert_instrumental == true
+    for i in 0..test_mix.len() {
+        let expected_l = test_mix[i][0] - stems_inv[0][i][0];
+        let expected_r = test_mix[i][1] - stems_inv[0][i][1];
+        assert!((stems_inv[3][i][0] - expected_l).abs() < 1e-5);
+        assert!((stems_inv[3][i][1] - expected_r).abs() < 1e-5);
+    }
+
+    // Compare against invert_instrumental = false & verify isolated DSP effects of enable_denoise_2pass & phase_denoise_strength
+    let mut uvr_req_no_denoise = uvr_req_inv.clone();
+    uvr_req_no_denoise.enable_denoise_2pass = false;
+    let (uvr_res_no_denoise, stems_no_denoise, _) =
+        execute_uvr5_separation_dsp(&test_mix, 48_000, &uvr_req_no_denoise)
+            .expect("execute_uvr5_separation_dsp with enable_denoise_2pass=false");
+    let diff_vocals_denoise: f32 = stems_inv[0]
+        .iter()
+        .zip(stems_no_denoise[0].iter())
+        .map(|(a, b)| (a[0] - b[0]).abs() + (a[1] - b[1]).abs())
+        .sum();
+    assert!(
+        diff_vocals_denoise > 1e-3,
+        "enable_denoise_2pass=true vs false must measurably alter separated vocals DSP waveform (diff={diff_vocals_denoise})"
+    );
+
+    let mut uvr_req_no_phase = uvr_req_inv.clone();
+    uvr_req_no_phase.phase_denoise_strength = 0.0;
+    let (uvr_res_no_phase, stems_no_phase, _) =
+        execute_uvr5_separation_dsp(&test_mix, 48_000, &uvr_req_no_phase)
+            .expect("execute_uvr5_separation_dsp with phase_denoise_strength=0.0");
+    let diff_vocals_phase: f32 = stems_inv[0]
+        .iter()
+        .zip(stems_no_phase[0].iter())
+        .map(|(a, b)| (a[0] - b[0]).abs() + (a[1] - b[1]).abs())
+        .sum();
+    assert!(
+        diff_vocals_phase > 1e-4,
+        "phase_denoise_strength=0.85 vs 0.0 must measurably alter separated vocals DSP waveform (diff={diff_vocals_phase})"
+    );
+
+    let mut uvr_req_other = uvr_req_inv.clone();
+    uvr_req_other.enable_denoise_2pass = false;
+    uvr_req_other.phase_denoise_strength = 0.0;
+    uvr_req_other.invert_instrumental = false;
+    uvr_req_other.bounce_to_mixer = true;
+    let (uvr_res_other, stems_other, _) =
+        execute_uvr5_separation_dsp(&test_mix, 48_000, &uvr_req_other)
+            .expect("execute_uvr5_separation_dsp with invert_instrumental=false");
+    assert_eq!(uvr_res_other.bounced_mixer_tracks, [1, 2, 3, 4]);
+    assert!(uvr_res_other.stem_paths[3].ends_with("_other.wav"));
+    let diff_stem4: f32 = stems_inv[3]
+        .iter()
+        .zip(stems_other[3].iter())
+        .map(|(a, b)| (a[0] - b[0]).abs() + (a[1] - b[1]).abs())
+        .sum();
+    assert!(
+        diff_stem4 > 0.1,
+        "invert_instrumental=true (inv_inst) vs false (demucs_other) must produce distinct 4th stems"
+    );
+
+    // Verify camelCase field aliases across all 3 audited DTOs
+    let camel_proq4: ProQ4GlobalUpdateDto = serde_json::from_str(
+        r#"{"trackIdx":1,"slotIdx":0,"phaseMode":"LinearPhase","processingResolution":3,"gainScalePct":125.0,"autoGain":false,"showCollisions":false}"#,
+    )
+    .expect("ProQ4GlobalUpdateDto camelCase decode");
+    assert_eq!(camel_proq4.phase_mode.as_deref(), Some("LinearPhase"));
+    assert_eq!(camel_proq4.processing_resolution, 3);
+    assert!(!camel_proq4.show_collisions);
+
+    let camel_soothe: Soothe3ScBandUpdateDto = serde_json::from_str(
+        r#"{"trackIdx":1,"slotIdx":1,"bandIdx":4,"enabled":true,"freqHz":8200.0,"gainDb":6.5,"q":1.8,"shape":2}"#,
+    )
+    .expect("Soothe3ScBandUpdateDto camelCase decode");
+    assert_eq!(camel_soothe.band_idx, 4);
+    assert!((camel_soothe.freq_hz - 8200.0).abs() < 1e-4);
+
+    let camel_uvr: Uvr5SeparationRequestDto = serde_json::from_str(
+        r#"{"audioPath":"mix.wav","modelProfile":"MDX23C","ensembleMode":"MEDIAN","enableDenoise2pass":false,"phaseDenoiseStrength":0.4,"invertInstrumental":false,"bounceToMixer":false}"#,
+    )
+    .expect("Uvr5SeparationRequestDto camelCase decode");
+    assert_eq!(camel_uvr.model_hash, "MDX23C");
+    assert!(!camel_uvr.enable_denoise_2pass);
+    assert!(!camel_uvr.invert_instrumental);
+
+    // Edge case: empty audio_path must fail cleanly
+    let mut uvr_empty = uvr_req_inv.clone();
+    uvr_empty.audio_path = "   ".to_string();
+    assert!(execute_uvr5_separation_dsp(&test_mix, 48_000, &uvr_empty).is_err());
+
+    // Response schema roundtrip + stem_files alias
+    let serialized_res = serde_json::to_value(&uvr_res_other).expect("serialize Uvr5SeparationResultDto");
+    assert!(serialized_res.get("stem_paths").and_then(|v| v.as_array()).is_some());
+    let alias_res: Uvr5SeparationResultDto = serde_json::from_str(
+        r#"{"stem_files":["a.wav","b.wav","c.wav","d.wav"],"stem_peak_dbfs":[-6,-6,-6,-6],"stem_rms_dbfs":[-14,-14,-14,-14],"separated_frames":1024,"sample_rate_hz":48000,"bounced_mixer_tracks":[1,2,3,4]}"#,
+    )
+    .expect("Uvr5SeparationResultDto must also accept stem_files alias");
+    assert_eq!(alias_res.stem_paths.len(), 4);
+
+    // Clean up temporary UVR5 test WAVs
+    for p in uvr_res_inv
+        .stem_paths
+        .iter()
+        .chain(uvr_res_no_denoise.stem_paths.iter())
+        .chain(uvr_res_no_phase.stem_paths.iter())
+        .chain(uvr_res_other.stem_paths.iter())
+    {
+        let _ = std::fs::remove_file(p);
+    }
+
+    // =========================================================================
+    // 4. FIX 3: FL26 Sample Kit WAV fetch for all 4 voices + boundary error
+    // =========================================================================
+    for sample_idx in 0..4 {
+        let wav_bytes = read_fl26_sample_kit_wav_bytes("808 Studio Kit (Real .wav)", sample_idx)
+            .unwrap_or_else(|e| panic!("Failed fetching 808 voice {sample_idx}: {e}"));
+        assert!(wav_bytes.starts_with(b"RIFF") && wav_bytes.len() > 44);
+    }
+    assert!(
+        read_fl26_sample_kit_wav_bytes("808 Studio Kit (Real .wav)", 99).is_err(),
+        "Out-of-range sample_idx=99 must return Err"
+    );
+
+    // =========================================================================
+    // 5. FIX 4: cmd_route_mixer_track_on_engine preserves fader gain & updates existing send
+    // =========================================================================
+    ctrl.mixer_engine.tracks[5].gain = 0.92;
+    cmd_route_mixer_track_on_engine(&mut ctrl.mixer_engine, &ctrl.app_state, 5, 6, 0.35, false)
+        .expect("initial route 5 -> 6");
+    cmd_route_mixer_track_on_engine(&mut ctrl.mixer_engine, &ctrl.app_state, 5, 6, 0.65, false)
+        .expect("update route 5 -> 6 gain in-place");
+    cmd_route_mixer_track_on_engine(&mut ctrl.mixer_engine, &ctrl.app_state, 5, 6, 0.50, true)
+        .expect("separate sidechain route 5 -> 6");
+    ctrl.mixer_engine.drain_commands();
+
+    assert!(
+        (ctrl.mixer_engine.tracks[5].gain - 0.92).abs() < 1e-6,
+        "Routing send 5 -> 6 must NEVER overwrite Track 5 fader gain (expected 0.92, got {})",
+        ctrl.mixer_engine.tracks[5].gain
+    );
+    let non_sc_routes_to_6: Vec<_> = ctrl.mixer_engine.tracks[5]
+        .sends
+        .iter()
+        .filter(|s| s.dest_track_index == 6 && !s.is_sidechain_only)
+        .collect();
+    assert_eq!(
+        non_sc_routes_to_6.len(),
+        1,
+        "Repeated routing 5 -> 6 (sidechain=false) must update in-place without duplicating sends"
+    );
+    assert!((non_sc_routes_to_6[0].gain - 0.65).abs() < 1e-6);
+    assert!(
+        cmd_route_mixer_track_on_engine(&mut ctrl.mixer_engine, &ctrl.app_state, 5, 5, 1.0, false)
+            .is_err(),
+        "Self-loop 5 -> 5 must be rejected"
+    );
+    assert!(
+        cmd_route_mixer_track_on_engine(
+            &mut ctrl.mixer_engine,
+            &ctrl.app_state,
+            502,
+            0,
+            1.0,
+            false
+        )
+        .is_err(),
+        "Out-of-range track 502 must be rejected"
+    );
+
+    // =========================================================================
+    // 6. FIX 5 & FIX 6: Interactive Patcher sub-DAG IPC + TS source assertions
+    // =========================================================================
+    let ts_patcher_json = r#"{
+        "track_idx": 1,
+        "slot_idx": 2,
+        "nodes": [
+            { "node_index": 0, "label": "Host Audio Input", "plugin_kind": "HostIn", "latency_samples": 0, "enabled": true, "x_px": 48.0, "y_px": 140.0 },
+            { "node_index": 1, "label": "Pro-Q 4 Linear Phase", "plugin_kind": "ProQ4", "latency_samples": 2048, "enabled": true, "x_px": 280.0, "y_px": 80.0 },
+            { "node_index": 2, "label": "Soothe3 Resonance", "plugin_kind": "Soothe3", "latency_samples": 3072, "enabled": true, "x_px": 280.0, "y_px": 205.0 },
+            { "node_index": 3, "label": "APDC Delay Compensator", "plugin_kind": "FixedLatency", "latency_samples": 1024, "enabled": true, "x_px": 510.0, "y_px": 80.0 },
+            { "node_index": 4, "label": "Ozone 12 Master Bus", "plugin_kind": "Ozone12", "latency_samples": 5760, "enabled": true, "x_px": 726.0, "y_px": 140.0 }
+        ],
+        "edges": [
+            { "from_node": 0, "to_node": 1, "gain": 1.0 },
+            { "from_node": 0, "to_node": 2, "gain": 1.0 },
+            { "from_node": 1, "to_node": 3, "gain": 1.0 },
+            { "from_node": 3, "to_node": 4, "gain": 0.707 },
+            { "from_node": 2, "to_node": 4, "gain": 0.707 }
+        ]
+    }"#;
+    let mut patcher_dto: PatcherCanvasUpdateDto = serde_json::from_str(ts_patcher_json)
+        .expect("PatcherCanvasUpdateDto must decode exact TS payload");
+    let lat_all_on = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
+        .expect("cmd_update_patcher_graph with all 5 nodes enabled");
+    assert_eq!(lat_all_on, 3072);
+
+    // Bypass Soothe3 (3072 smp) and FixedLatency (1024 smp) -> critical path drops to ProQ4 (2048 smp)
+    patcher_dto.nodes[2].enabled = false;
+    patcher_dto.nodes[3].enabled = false;
+    patcher_dto.edges[3].gain = 1.0;
+    let lat_bypassed = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
+        .expect("cmd_update_patcher_graph after bypassing Soothe3 and FixedLatency");
+    assert_eq!(lat_bypassed, 2048);
+
+    // Re-enable Soothe3 (3072 smp), keep FixedLatency bypassed (0 smp), and mute cord 0 -> 2 (`gain = 0.0`):
+    // Critical-path APDC latency MUST drop to 2048 (matching UI longestToOut), NOT stay inflated at 3072!
+    patcher_dto.nodes[2].enabled = true;
+    patcher_dto.edges[1].gain = 0.0; // mute 0 -> 2
+    let lat_muted_soothe_cord = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
+        .expect("cmd_update_patcher_graph with Soothe3 cord muted (0.00x)");
+    assert_eq!(lat_muted_soothe_cord, 2048);
+
+    // Mute ALL cords entering HostOut (`3 -> 4` and `2 -> 4` = 0.0) while `0 -> 1 -> 3` stay 1.0:
+    // Dead-end branch MUST report 0 critical-path latency (not 2048!)
+    patcher_dto.edges[3].gain = 0.0; // mute 3 -> 4
+    patcher_dto.edges[4].gain = 0.0; // mute 2 -> 4
+    let lat_all_cords_muted = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
+        .expect("cmd_update_patcher_graph with all cords to HostOut muted");
+    assert_eq!(lat_all_cords_muted, 0);
+
+    // Reject cycle edge 3 -> 1 cleanly even when gain == 0.0
+    let mut cyclic_dto = patcher_dto.clone();
+    cyclic_dto.edges.push(PatcherCanvasEdgeDto {
+        from_node: 3,
+        to_node: 1,
+        gain: 0.0,
+    });
+    assert!(
+        cmd_update_patcher_graph(&mut ctrl.mixer_engine, &cyclic_dto).is_err(),
+        "Cycle edge 3 -> 1 in PatcherCanvasUpdateDto must be rejected even with 0.0 gain"
+    );
+
+    // Verify TS source contracts for Fix 2, Fix 3, Fix 5, and Fix 6
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+    let store_src = std::fs::read_to_string(
+        workspace_root.join("ui-svelte-webgpu/src/lib/state/daw_master_store.svelte.ts"),
+    )
+    .expect("read daw_master_store.svelte.ts");
+    assert!(
+        store_src.contains("res?.stem_paths ?? res?.stem_files"),
+        "runUvr5SeparationJob must read res?.stem_paths ?? res?.stem_files"
+    );
+    assert!(
+        store_src.contains("{ kitQuery, sampleIdx: idx }"),
+        "loadFl26SampleKit must invoke cmd_fetch_fl26_sample_wav with {{ kitQuery, sampleIdx: idx }}"
+    );
+    assert!(
+        store_src.contains("this.uvr5SeparatedStems = [];"),
+        "loadUserAudioFile must clear fake stem names until UVR5 separation runs"
+    );
+    assert!(
+        store_src.contains("this.audioSourceMode === 'stems4'"),
+        "executeOfflineRender must preserve 100% customAudioDurationFrames in stems4 mode"
+    );
+    assert!(
+        store_src.contains("cmd_switch_to_piano_roll_source"),
+        "switchToPianoRollSource must sync back to Rust MixerEngine"
+    );
+
+    let patcher_svelte = std::fs::read_to_string(
+        workspace_root.join("ui-svelte-webgpu/src/lib/components/PatcherNodeCanvas.svelte"),
+    )
+    .expect("read PatcherNodeCanvas.svelte");
+    assert!(patcher_svelte.contains("getScreenCTM"));
+    assert!(patcher_svelte.contains("movePatcherNode"));
+    assert!(patcher_svelte.contains("togglePatcherNodeEnabled"));
+    assert!(patcher_svelte.contains("updatePatcherEdgeGain"));
+    assert!(patcher_svelte.contains("addPatcherEdge"));
+    assert!(patcher_svelte.contains("removePatcherEdge"));
+    assert!(patcher_svelte.contains("autoLayoutPatcherNodes"));
+}
+

@@ -1,14 +1,15 @@
 // Real-Time WebAudio Speaker Engine & Live Audible DSP Chain (`realtime_speaker_engine.ts`)
 // Outputs real stereo audio to Windows speakers/headphones when `isPlaying === true`:
-// - Source 1: Built-in FL Studio 26 Polyphonic Synth (with Slide/Portamento glides) + 808/909 Drum Sequencer
+// - Source 1: Built-in FL Studio 26 Polyphonic Synth (with Slide/Portamento glides) + Real .wav Sample Kit / 808/909 Drum Sequencer
 // - Source 2: Custom Audio File Picker (`.wav`, `.mp3`, `.flac`, `.ogg`) decoded via `AudioContext.decodeAudioData`
+//             + 4-Stem Synchronized Playback when separated by UVR5 Ensemble Studio
 // - Live DSP Chain: Pre-EQ AnalyserNode -> 24-Band FabFilter Pro-Q 4 Biquad Cascade -> Post-EQ AnalyserNode
-//   -> oeksound Soothe3 Resonance Filter (with Delta Solo bandpass mode) -> BSRNN 4-Stem Rebalance EQ
-//   -> iZotope Ozone 12 12AX7 Tube WaveShaper & Brickwall Maximizer -> Master Speaker Volume GainNode.
+//   -> oeksound Soothe3 6-Band Dynamic Spectral Notch Bank (with Delta Solo bandpass mode) -> BSRNN 4-Stem Rebalance EQ
+//   -> iZotope Ozone 12 4-Band 12AX7 Tube WaveShaper, Multiband Imager & Brickwall Maximizer -> Master Speaker Volume GainNode.
 
 import type { DawTelemetryView, PianoRollNoteUiState, ProQ4BandState } from '../state/daw_master_store.svelte';
 
-export type AudioSourceMode = 'pianoRoll' | 'customFile';
+export type AudioSourceMode = 'pianoRoll' | 'customFile' | 'stems4';
 
 interface ActiveSlideVoice {
   osc1: OscillatorNode;
@@ -23,8 +24,7 @@ export class RealtimeSpeakerEngine {
   private preAnalyser: AnalyserNode | null = null;
   private proq4Nodes: BiquadFilterNode[] = [];
   private postAnalyser: AnalyserNode | null = null;
-  private sootheFilter1: BiquadFilterNode | null = null;
-  private sootheFilter2: BiquadFilterNode | null = null;
+  private sootheNotches: BiquadFilterNode[] = [];
   private stemBassFilter: BiquadFilterNode | null = null;
   private stemDrumsFilter: BiquadFilterNode | null = null;
   private stemVocalsFilter: BiquadFilterNode | null = null;
@@ -38,6 +38,11 @@ export class RealtimeSpeakerEngine {
 
   private customAudioBuffer: AudioBuffer | null = null;
   private customSourceNode: AudioBufferSourceNode | null = null;
+  private uvr5StemBuffers: (AudioBuffer | null)[] = [null, null, null, null];
+  private uvr5StemSources: (AudioBufferSourceNode | null)[] = [null, null, null, null];
+  private uvr5StemGains: (GainNode | null)[] = [null, null, null, null];
+  private fl26KitVoiceBuffers: AudioBuffer[] = [];
+  private pendingFl26RawWavs: ArrayBuffer[] = [];
   private customStartedAtCtxTime = 0;
   private customPausedOffsetSec = 0;
   private isCustomPlaying = false;
@@ -78,7 +83,7 @@ export class RealtimeSpeakerEngine {
 
   /**
    * Lazily initializes the WebAudio `AudioContext` and connects the full live DSP chain:
-   * `sourceBus -> preAnalyser -> proq4Nodes[0..23] -> postAnalyser -> sootheFilter1 -> sootheFilter2`
+   * `sourceBus -> preAnalyser -> proq4Nodes[0..23] -> postAnalyser -> sootheNotches[0..5]`
    * `-> stemBass -> stemDrums -> stemVocals -> stemOther -> ozonePreGain -> ozoneWaveShaper`
    * `-> ozoneCompressor -> ozoneCeilingGain -> masterSpeakerGain -> destination`.
    */
@@ -96,6 +101,15 @@ export class RealtimeSpeakerEngine {
 
       this.sourceBus = ctx.createGain();
       this.sourceBus.gain.value = 0.85;
+
+      // Per-stem GainNodes for UVR5 4-stem separated playback
+      this.uvr5StemGains = [];
+      for (let s = 0; s < 4; s++) {
+        const sg = ctx.createGain();
+        sg.gain.value = 1.0;
+        sg.connect(this.sourceBus);
+        this.uvr5StemGains.push(sg);
+      }
 
       this.preAnalyser = ctx.createAnalyser();
       this.preAnalyser.fftSize = 2048;
@@ -115,17 +129,16 @@ export class RealtimeSpeakerEngine {
       this.postAnalyser.fftSize = 2048;
       this.postAnalyser.smoothingTimeConstant = 0.68;
 
-      this.sootheFilter1 = ctx.createBiquadFilter();
-      this.sootheFilter1.type = 'peaking';
-      this.sootheFilter1.frequency.value = 3400;
-      this.sootheFilter1.Q.value = 2.2;
-      this.sootheFilter1.gain.value = -4.0;
-
-      this.sootheFilter2 = ctx.createBiquadFilter();
-      this.sootheFilter2.type = 'peaking';
-      this.sootheFilter2.frequency.value = 6800;
-      this.sootheFilter2.Q.value = 1.8;
-      this.sootheFilter2.gain.value = -3.0;
+      this.sootheNotches = [];
+      const defaultFreqs = [180, 850, 3400, 6800, 11500, 15000];
+      for (let b = 0; b < 6; b++) {
+        const notch = ctx.createBiquadFilter();
+        notch.type = 'peaking';
+        notch.frequency.value = defaultFreqs[b];
+        notch.Q.value = 1.8;
+        notch.gain.value = 0.0;
+        this.sootheNotches.push(notch);
+      }
 
       this.stemBassFilter = ctx.createBiquadFilter();
       this.stemBassFilter.type = 'lowshelf';
@@ -176,9 +189,12 @@ export class RealtimeSpeakerEngine {
         prevNode = biq;
       }
       prevNode.connect(this.postAnalyser);
-      this.postAnalyser.connect(this.sootheFilter1);
-      this.sootheFilter1.connect(this.sootheFilter2);
-      this.sootheFilter2.connect(this.stemBassFilter);
+      prevNode = this.postAnalyser;
+      for (const notch of this.sootheNotches) {
+        prevNode.connect(notch);
+        prevNode = notch;
+      }
+      prevNode.connect(this.stemBassFilter);
       this.stemBassFilter.connect(this.stemDrumsFilter);
       this.stemDrumsFilter.connect(this.stemVocalsFilter);
       this.stemVocalsFilter.connect(this.stemOtherFilter);
@@ -193,10 +209,31 @@ export class RealtimeSpeakerEngine {
       this.fftPreBuf = new Float32Array(this.preAnalyser.frequencyBinCount);
       this.fftPostBuf = new Float32Array(this.postAnalyser.frequencyBinCount);
 
+      if (this.pendingFl26RawWavs.length > 0) {
+        this.decodePendingFl26Wavs(ctx);
+      }
+
       this.syncDspChain(telemetry);
       return ctx;
     } catch {
       return null;
+    }
+  }
+
+  private async decodePendingFl26Wavs(ctx: AudioContext): Promise<void> {
+    const rawList = this.pendingFl26RawWavs;
+    if (rawList.length === 0) return;
+    const decodedList: AudioBuffer[] = [];
+    for (const raw of rawList) {
+      try {
+        const buf = await ctx.decodeAudioData(raw.slice(0));
+        decodedList.push(buf);
+      } catch {
+        // Ignore unparseable buffer
+      }
+    }
+    if (decodedList.length > 0) {
+      this.fl26KitVoiceBuffers = decodedList;
     }
   }
 
@@ -214,6 +251,41 @@ export class RealtimeSpeakerEngine {
     return buffer;
   }
 
+  private computePatcherCordScale(telemetry: DawTelemetryView): number {
+    const nodes = telemetry.patcherNodes;
+    const edges = telemetry.patcherEdges;
+    if (!nodes.length || !edges.length) return 1.0;
+    const hostIn = nodes.find((n) => n.pluginKind === 'HostIn');
+    const hostOut = nodes.find((n) => n.pluginKind === 'HostOut' || n.pluginKind === 'Ozone12');
+    if (!hostIn || !hostOut) return 1.0;
+    if (hostIn.enabled === false || hostOut.enabled === false) {
+      return 1.0; // Slot bypassed -> unity pass-through
+    }
+
+    // Exact DAG path sum from hostIn to hostOut (cycle-safe bounded depth <= nodes.length)
+    const memo = new Map<number, number>();
+    const visiting = new Set<number>();
+    const dfsGain = (u: number, depth: number): number => {
+      if (u === hostOut.nodeIndex) return 1.0;
+      if (depth > nodes.length || visiting.has(u)) return 0.0;
+      const cached = memo.get(u);
+      if (cached !== undefined) return cached;
+      visiting.add(u);
+      let sum = 0.0;
+      for (const e of edges) {
+        if (e.fromNode === u) {
+          sum += Math.max(0.0, Math.min(4.0, e.gain)) * dfsGain(e.toNode, depth + 1);
+        }
+      }
+      visiting.delete(u);
+      memo.set(u, sum);
+      return sum;
+    };
+    const totalPathGain = dfsGain(hostIn.nodeIndex, 0);
+    // Normalize by default parallel sum (0.707 + 0.707 = 1.414) so default graph has unity gain
+    return Math.max(0.0, Math.min(2.5, totalPathGain / 1.414));
+  }
+
   /**
    * Synchronizes all live WebAudio DSP filter/dynamics parameters from `telemetry`.
    */
@@ -223,141 +295,234 @@ export class RealtimeSpeakerEngine {
     const now = this.ctx.currentTime;
     const nyquist = Math.max(8000, this.ctx.sampleRate * 0.48);
 
-    // 1. Update 24-Band FabFilter Pro-Q 4 Biquad Cascade
+    const patcherProQ4Node = telemetry.patcherNodes.find((n) => n.pluginKind === 'ProQ4');
+    const patcherSootheNode = telemetry.patcherNodes.find((n) => n.pluginKind === 'Soothe3');
+    const proq4Active = !telemetry.proq4Bypass && (patcherProQ4Node?.enabled ?? true);
+    const sootheActive = patcherSootheNode?.enabled ?? true;
+
+    if (this.sourceBus) {
+      const cordScale = this.computePatcherCordScale(telemetry);
+      this.sourceBus.gain.setTargetAtTime(0.85 * cordScale, now, 0.015);
+    }
+
+    // 1. Update 24-Band FabFilter Pro-Q 4 Biquad Cascade (with cascaded slopes 6..96 dB/oct)
     const scale = telemetry.proq4GainScalePct * 0.01;
-    for (let i = 0; i < 24; i++) {
-      const node = this.proq4Nodes[i];
+    let nodeCursor = 0;
+    let netEqDbSum = 0.0;
+    let activeBandCount = 0;
+
+    for (let i = 0; proq4Active && i < 24 && nodeCursor < this.proq4Nodes.length; i++) {
       const band: ProQ4BandState | undefined = telemetry.proq4Bands[i];
-      if (!node) continue;
       if (!band || !band.used || !band.enabled) {
-        node.type = 'peaking';
-        node.gain.setTargetAtTime(0, now, 0.012);
         continue;
       }
 
       const freq = Math.max(16, Math.min(nyquist, band.freqHz));
       const gainDb = Math.max(-30, Math.min(30, band.gainDb * scale));
       const qVal = Math.max(0.1, Math.min(24.0, band.q));
+      const isCutOrBp = band.shape === 2 || band.shape === 4 || band.shape === 6;
+      const stages = isCutOrBp
+        ? Math.min(4, Math.max(1, Math.round((band.slopeDbOct || 12) / 12)))
+        : 1;
 
-      switch (band.shape) {
-        case 0:
-          node.type = 'peaking';
-          break;
-        case 1:
-          node.type = 'lowshelf';
-          break;
-        case 2:
-          node.type = 'highpass';
-          break;
-        case 3:
-        case 7:
-        case 8:
-          node.type = 'highshelf';
-          break;
-        case 4:
-          node.type = 'lowpass';
-          break;
-        case 5:
-          node.type = 'notch';
-          break;
-        case 6:
-          node.type = 'bandpass';
-          break;
-        case 9:
-          node.type = 'allpass';
-          break;
-        default:
-          node.type = 'peaking';
-          break;
+      if (!isCutOrBp && Math.abs(gainDb) > 0.05) {
+        netEqDbSum += gainDb;
+        activeBandCount++;
       }
-      node.frequency.setTargetAtTime(freq, now, 0.012);
-      node.Q.setTargetAtTime(qVal, now, 0.012);
-      node.gain.setTargetAtTime(gainDb, now, 0.012);
+
+      for (let s = 0; s < stages && nodeCursor < this.proq4Nodes.length; s++) {
+        const node = this.proq4Nodes[nodeCursor++];
+        switch (band.shape) {
+          case 0:
+            node.type = 'peaking';
+            break;
+          case 1:
+            node.type = 'lowshelf';
+            break;
+          case 2:
+            node.type = 'highpass';
+            break;
+          case 3:
+          case 7:
+          case 8:
+            node.type = 'highshelf';
+            break;
+          case 4:
+            node.type = 'lowpass';
+            break;
+          case 5:
+            node.type = 'notch';
+            break;
+          case 6:
+            node.type = 'bandpass';
+            break;
+          case 9:
+            node.type = 'allpass';
+            break;
+          default:
+            node.type = 'peaking';
+            break;
+        }
+        node.frequency.setTargetAtTime(freq, now, 0.012);
+        node.Q.setTargetAtTime(qVal, now, 0.012);
+        node.gain.setTargetAtTime(gainDb / stages, now, 0.012);
+      }
     }
 
-    // 2. Update oeksound Soothe3 Resonance Suppressor (including Delta Solo bandpass mode)
-    if (this.sootheFilter1 && this.sootheFilter2) {
-      if (telemetry.soothe3DeltaSolo) {
-        this.sootheFilter1.type = 'bandpass';
-        this.sootheFilter1.frequency.setTargetAtTime(3600, now, 0.012);
-        this.sootheFilter1.Q.setTargetAtTime(1.4 + telemetry.soothe3Detail * 0.25, now, 0.012);
-        this.sootheFilter1.gain.setTargetAtTime(0, now, 0.012);
+    // Zero out remaining unused Biquad stages
+    while (nodeCursor < this.proq4Nodes.length) {
+      const node = this.proq4Nodes[nodeCursor++];
+      node.type = 'peaking';
+      node.gain.setTargetAtTime(0, now, 0.012);
+    }
 
-        this.sootheFilter2.type = 'peaking';
-        this.sootheFilter2.frequency.setTargetAtTime(5200, now, 0.012);
-        this.sootheFilter2.Q.setTargetAtTime(1.8, now, 0.012);
-        this.sootheFilter2.gain.setTargetAtTime(6.0, now, 0.012);
+    // 2. Update oeksound Soothe3 6-Band Dynamic Spectral Notch Bank (including Delta Solo & Sidechain EQ bands)
+    if (this.sootheNotches.length === 6) {
+      if (!sootheActive) {
+        for (let b = 0; b < 6; b++) {
+          this.sootheNotches[b].type = 'peaking';
+          this.sootheNotches[b].gain.setTargetAtTime(0.0, now, 0.015);
+        }
+      } else if (telemetry.soothe3DeltaSolo) {
+        const primarySc =
+          telemetry.soothe3ScBands.find((b) => b.enabled && b.depth > 0) ??
+          telemetry.soothe3ScBands[2];
+        const centerHz = Math.max(120, Math.min(nyquist, primarySc?.freqHz ?? 3400));
+        this.sootheNotches[0].type = 'bandpass';
+        this.sootheNotches[0].frequency.setTargetAtTime(centerHz, now, 0.012);
+        this.sootheNotches[0].Q.setTargetAtTime(1.2 + telemetry.soothe3Detail * 0.25, now, 0.012);
+        this.sootheNotches[0].gain.setTargetAtTime(0, now, 0.012);
+
+        for (let b = 1; b < 6; b++) {
+          const sc = telemetry.soothe3ScBands[b];
+          const notch = this.sootheNotches[b];
+          const f = Math.max(80, Math.min(nyquist, sc?.freqHz ?? 2000 * b));
+          notch.type = 'peaking';
+          notch.frequency.setTargetAtTime(f, now, 0.012);
+          notch.Q.setTargetAtTime(Math.max(0.7, sc?.q ?? 1.8), now, 0.012);
+          notch.gain.setTargetAtTime(sc?.enabled ? Math.max(0, (sc?.depth ?? 2.0) * 0.8) : 0, now, 0.012);
+        }
       } else {
         const mix = Math.max(0, Math.min(1, telemetry.soothe3MixPct * 0.01));
         const modeScale = telemetry.soothe3HardMode ? 1.65 : 1.15;
-        const cut1 = Math.max(
-          telemetry.soothe3MaxCutDb,
-          -telemetry.soothe3Depth * modeScale * mix
-        );
-        const cut2 = Math.max(
-          telemetry.soothe3MaxCutDb,
-          -telemetry.soothe3Depth * modeScale * 0.82 * mix
-        );
-        const f1 = Math.max(200, Math.min(nyquist, telemetry.soothe3ScBands[2]?.freqHz ?? 3400));
-        const f2 = Math.max(400, Math.min(nyquist, telemetry.soothe3ScBands[3]?.freqHz ?? 6800));
-        const sharpnessQ = Math.max(0.7, Math.min(12.0, 0.9 + telemetry.soothe3Detail * 0.45));
+        const sharpnessBase = Math.max(0.5, Math.min(12.0, 0.8 + telemetry.soothe3Detail * 0.4));
 
-        this.sootheFilter1.type = 'peaking';
-        this.sootheFilter1.frequency.setTargetAtTime(f1, now, 0.015);
-        this.sootheFilter1.Q.setTargetAtTime(sharpnessQ, now, 0.015);
-        this.sootheFilter1.gain.setTargetAtTime(cut1, now, 0.015);
+        for (let b = 0; b < 6; b++) {
+          const sc = telemetry.soothe3ScBands[b];
+          const notch = this.sootheNotches[b];
+          if (!sc || !sc.enabled || telemetry.soothe3Depth <= 0.01) {
+            notch.type = 'peaking';
+            notch.gain.setTargetAtTime(0.0, now, 0.015);
+            continue;
+          }
+          const freq = Math.max(40, Math.min(nyquist, sc.freqHz));
+          const sensWeight = Math.max(0.0, (sc.depth + 10.0) / 10.0);
+          const rawCut = -telemetry.soothe3Depth * modeScale * mix * sensWeight * 0.85;
+          const cutDb = Math.max(telemetry.soothe3MaxCutDb, Math.min(0.0, rawCut));
+          const qVal = Math.max(0.4, Math.min(16.0, (sc.q || 1.2) * sharpnessBase * 0.55));
 
-        this.sootheFilter2.type = 'peaking';
-        this.sootheFilter2.frequency.setTargetAtTime(f2, now, 0.015);
-        this.sootheFilter2.Q.setTargetAtTime(sharpnessQ * 0.85, now, 0.015);
-        this.sootheFilter2.gain.setTargetAtTime(cut2, now, 0.015);
+          notch.type = 'peaking';
+          notch.frequency.setTargetAtTime(freq, now, 0.015);
+          notch.Q.setTargetAtTime(qVal, now, 0.015);
+          notch.gain.setTargetAtTime(cutDb, now, 0.015);
+        }
       }
     }
 
-    // 3. Update BSRNN 4-Stem Master Rebalance Filters ([Vocals, Drums, Bass, Other])
+    // 3. Update BSRNN 4-Stem Master Rebalance Filters & UVR5 Per-Stem Gains ([Vocals, Drums, Bass, Other])
     const [vocDb, drmDb, basDb, othDb] = telemetry.bsrnnStemGainsDb;
     const anySolo = telemetry.bsrnnStemSolo.some(Boolean);
-    const effStemDb = (idx: number, rawDb: number): number => {
-      if (telemetry.bsrnnStemMute[idx]) return -18.0;
-      if (anySolo && !telemetry.bsrnnStemSolo[idx]) return -15.0;
-      return Math.max(-12.0, Math.min(12.0, rawDb));
+    const isStemActive = (idx: number): boolean => {
+      if (telemetry.bsrnnStemMute[idx]) return false;
+      if (anySolo && !telemetry.bsrnnStemSolo[idx]) return false;
+      return true;
     };
 
+    const effStemDb = (idx: number, rawDb: number, extraTiltDb = 0.0): number => {
+      if (!isStemActive(idx)) return -24.0;
+      return Math.max(-18.0, Math.min(18.0, rawDb + extraTiltDb));
+    };
+
+    // Ozone 12 4-Band Exciter & Imager harmonic tilt contribution
+    const lowExciterTilt = telemetry.ozone12ExciterBypass
+      ? 0.0
+      : (telemetry.ozone12ExciterDrivesPct[0] - 20.0) * 0.04;
+    const midExciterTilt = telemetry.ozone12ExciterBypass
+      ? 0.0
+      : (telemetry.ozone12ExciterDrivesPct[2] - 25.0) * 0.04;
+    const highExciterAndAirTilt =
+      (telemetry.ozone12ExciterBypass ? 0.0 : (telemetry.ozone12ExciterDrivesPct[3] - 20.0) * 0.05) +
+      telemetry.ozone12ImagerWidthsPct[3] * 0.02;
+
     if (this.stemVocalsFilter) {
-      this.stemVocalsFilter.gain.setTargetAtTime(effStemDb(0, vocDb), now, 0.015);
+      this.stemVocalsFilter.gain.setTargetAtTime(effStemDb(0, vocDb, midExciterTilt), now, 0.015);
     }
     if (this.stemDrumsFilter) {
       this.stemDrumsFilter.gain.setTargetAtTime(effStemDb(1, drmDb), now, 0.015);
     }
     if (this.stemBassFilter) {
-      this.stemBassFilter.gain.setTargetAtTime(effStemDb(2, basDb), now, 0.015);
+      this.stemBassFilter.gain.setTargetAtTime(effStemDb(2, basDb, lowExciterTilt), now, 0.015);
     }
     if (this.stemOtherFilter) {
-      this.stemOtherFilter.gain.setTargetAtTime(effStemDb(3, othDb), now, 0.015);
+      this.stemOtherFilter.gain.setTargetAtTime(
+        effStemDb(3, othDb, highExciterAndAirTilt),
+        now,
+        0.015
+      );
     }
 
-    // 4. Update iZotope Ozone 12 12AX7 Tube WaveShaper & Brickwall Maximizer
+    // Update UVR5 separated stem GainNodes if active
+    for (let s = 0; s < 4; s++) {
+      const sg = this.uvr5StemGains[s];
+      if (!sg) continue;
+      const trk = telemetry.mixerTracks[s + 1];
+      const trkGain = trk?.muted ? 0.0 : (trk?.gainLinear ?? 1.0);
+      if (!isStemActive(s) || trkGain <= 0.0001) {
+        sg.gain.setTargetAtTime(0.0, now, 0.012);
+      } else {
+        const stemLin = Math.pow(10.0, Math.max(-24, Math.min(12, telemetry.bsrnnStemGainsDb[s])) / 20.0);
+        sg.gain.setTargetAtTime(stemLin * trkGain, now, 0.012);
+      }
+    }
+
+    // 4. Update iZotope Ozone 12 12AX7 Tube WaveShaper, FL26 Native FX & Brickwall Maximizer
     const avgDrivePct = telemetry.ozone12ExciterBypass
       ? 0
-      : (telemetry.ozone12ExciterDrivesPct[0] +
-          telemetry.ozone12ExciterDrivesPct[1] +
-          telemetry.ozone12ExciterDrivesPct[2] +
-          telemetry.ozone12ExciterDrivesPct[3]) *
-        0.25;
+      : telemetry.ozone12ExciterDrivesPct[0] * 0.22 +
+        telemetry.ozone12ExciterDrivesPct[1] * 0.25 +
+        telemetry.ozone12ExciterDrivesPct[2] * 0.30 +
+        telemetry.ozone12ExciterDrivesPct[3] * 0.23;
     const softClipBoost = telemetry.ozone12SoftClipEnabled ? telemetry.ozone12SoftClipMix * 25.0 : 0.0;
-    const driveSig = Math.round(avgDrivePct + softClipBoost);
+    const fl26FxBoost = telemetry.fl26SelectedFxPreset.includes('Maximum loudness') ||
+      telemetry.fl26SelectedFxPreset.includes('Pop (heavy)')
+      ? 14.0
+      : telemetry.fl26SelectedFxPreset.includes('Soundgoodizer')
+        ? 10.0
+        : 0.0;
+    const driveSig = Math.round(avgDrivePct + softClipBoost + fl26FxBoost);
     if (this.ozoneWaveShaper && driveSig !== this.lastDriveSignature) {
       this.lastDriveSignature = driveSig;
       this.ozoneWaveShaper.curve = this.build12AX7SaturationCurve(driveSig);
     }
 
+    const allStemsMuted = [0, 1, 2, 3].every((idx) => !isStemActive(idx));
+    const proq4OutTrimDb = telemetry.proq4Bypass ? 0.0 : (telemetry.proq4OutputLevelDb ?? 0.0);
+    const autoGainCompDb =
+      (telemetry.proq4AutoGain && activeBandCount > 0
+        ? Math.max(-6.0, Math.min(6.0, (-netEqDbSum / activeBandCount) * 0.35))
+        : 0.0) + proq4OutTrimDb;
+
     if (this.ozonePreGain && this.ozoneCompressor && this.ozoneCeilingGain) {
-      if (telemetry.ozone12MaximizerBypass) {
-        this.ozonePreGain.gain.setTargetAtTime(1.0, now, 0.015);
+      if (allStemsMuted) {
+        this.ozonePreGain.gain.setTargetAtTime(0.0, now, 0.015);
+      } else if (telemetry.ozone12MaximizerBypass) {
+        const compLin = Math.pow(10, autoGainCompDb / 20);
+        this.ozonePreGain.gain.setTargetAtTime(compLin, now, 0.015);
         this.ozoneCompressor.threshold.setTargetAtTime(0.0, now, 0.015);
         this.ozoneCeilingGain.gain.setTargetAtTime(1.0, now, 0.015);
       } else {
-        const gainLin = Math.pow(10, Math.max(-12, Math.min(14, telemetry.ozone12GainDb * 0.45)) / 20);
+        const totalGainDb = telemetry.ozone12GainDb * 0.45 + autoGainCompDb;
+        const gainLin = Math.pow(10, Math.max(-12, Math.min(14, totalGainDb)) / 20);
         const ceilLin = Math.pow(10, Math.max(-12, Math.min(0, telemetry.ozone12CeilingDbtp)) / 20);
         this.ozonePreGain.gain.setTargetAtTime(gainLin, now, 0.015);
         this.ozoneCompressor.threshold.setTargetAtTime(
@@ -395,6 +560,10 @@ export class RealtimeSpeakerEngine {
     return curve;
   }
 
+  private isCustomOrStemsMode(mode: AudioSourceMode): boolean {
+    return mode === 'customFile' || mode === 'stems4';
+  }
+
   /**
    * Starts or pauses real-time speaker output when the user clicks `▶ Play` or `⏸ Pause`.
    */
@@ -424,7 +593,7 @@ export class RealtimeSpeakerEngine {
     if (samplePos <= 0) {
       this.currentStep16th = 0;
       this.customPausedOffsetSec = 0;
-      if (telemetry.audioSourceMode === 'customFile' && telemetry.isPlaying) {
+      if (this.isCustomOrStemsMode(telemetry.audioSourceMode) && telemetry.isPlaying) {
         this.stopCustomBufferNode();
         this.startCustomBufferNode();
       }
@@ -434,7 +603,7 @@ export class RealtimeSpeakerEngine {
   private startPlaybackLoop(telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
     if (!this.ctx) return;
-    if (telemetry.audioSourceMode === 'customFile' && this.customAudioBuffer) {
+    if (this.isCustomOrStemsMode(telemetry.audioSourceMode) && this.customAudioBuffer) {
       this.stopSequencerTimer();
       if (!this.isCustomPlaying) {
         this.startCustomBufferNode();
@@ -473,11 +642,35 @@ export class RealtimeSpeakerEngine {
   private startCustomBufferNode(): void {
     if (!this.ctx || !this.sourceBus || !this.customAudioBuffer) return;
     this.stopCustomBufferNode();
+    const offset = this.customPausedOffsetSec % Math.max(0.01, this.customAudioBuffer.duration);
+
+    // If UVR5 separated 4 stems are active (`stems4`), play all 4 stems in sample-accurate sync through per-stem GainNodes
+    const hasSeparatedStems =
+      this.latestTelemetry?.audioSourceMode === 'stems4' &&
+      this.uvr5StemBuffers.every((b) => b !== null);
+    if (hasSeparatedStems) {
+      const startAt = this.ctx.currentTime + 0.005;
+      for (let s = 0; s < 4; s++) {
+        const stemBuf = this.uvr5StemBuffers[s];
+        const stemGain = this.uvr5StemGains[s];
+        if (!stemBuf || !stemGain) continue;
+        const src = this.ctx.createBufferSource();
+        src.buffer = stemBuf;
+        src.loop = true;
+        src.connect(stemGain);
+        const stemOffset = offset % Math.max(0.01, stemBuf.duration);
+        src.start(startAt, stemOffset);
+        this.uvr5StemSources[s] = src;
+      }
+      this.customStartedAtCtxTime = this.ctx.currentTime;
+      this.isCustomPlaying = true;
+      return;
+    }
+
     const src = this.ctx.createBufferSource();
     src.buffer = this.customAudioBuffer;
     src.loop = true;
     src.connect(this.sourceBus);
-    const offset = this.customPausedOffsetSec % Math.max(0.01, this.customAudioBuffer.duration);
     src.start(0, offset);
     this.customSourceNode = src;
     this.customStartedAtCtxTime = this.ctx.currentTime;
@@ -493,6 +686,18 @@ export class RealtimeSpeakerEngine {
         // Ignore if already stopped
       }
       this.customSourceNode = null;
+    }
+    for (let s = 0; s < 4; s++) {
+      const stemSrc = this.uvr5StemSources[s];
+      if (stemSrc) {
+        try {
+          stemSrc.stop();
+          stemSrc.disconnect();
+        } catch {
+          // Ignore if already stopped
+        }
+        this.uvr5StemSources[s] = null;
+      }
     }
     this.isCustomPlaying = false;
   }
@@ -510,6 +715,7 @@ export class RealtimeSpeakerEngine {
       const arrayBuf = await file.arrayBuffer();
       const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
       this.customAudioBuffer = decoded;
+      this.uvr5StemBuffers = [null, null, null, null];
       this.customPausedOffsetSec = 0;
       this.stopSequencerTimer();
       this.stopCustomBufferNode();
@@ -520,6 +726,218 @@ export class RealtimeSpeakerEngine {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Returns the full-length stereo Float32Array PCM buffers and sample rate of the currently loaded custom audio file
+   * so it can be uploaded to the Rust audio engine without any duration truncation.
+   */
+  getCustomAudioPcmAndSampleRate(): { left: Float32Array; right: Float32Array; sampleRate: number } | null {
+    if (!this.customAudioBuffer || this.customAudioBuffer.length === 0) {
+      return null;
+    }
+    const left = this.customAudioBuffer.getChannelData(0);
+    const right =
+      this.customAudioBuffer.numberOfChannels > 1
+        ? this.customAudioBuffer.getChannelData(1)
+        : left;
+    return {
+      left,
+      right,
+      sampleRate: Math.round(this.customAudioBuffer.sampleRate),
+    };
+  }
+
+  /**
+   * Decodes the 4 separated UVR5 stem `.wav` ArrayBuffers (`[Vocals, Drums, Bass, Other]`)
+   * and switches custom file playback to synchronized 4-stem playback.
+   */
+  async loadUvr5SeparatedStems(
+    stemWavBuffers: ArrayBuffer[],
+    telemetry: DawTelemetryView
+  ): Promise<boolean> {
+    if (stemWavBuffers.length < 4) return false;
+    const ctx = this.ensureAudioGraph(telemetry);
+    if (!ctx) return false;
+    try {
+      const decodedStems: (AudioBuffer | null)[] = [null, null, null, null];
+      for (let s = 0; s < 4; s++) {
+        if (stemWavBuffers[s] && stemWavBuffers[s].byteLength > 44) {
+          decodedStems[s] = await ctx.decodeAudioData(stemWavBuffers[s].slice(0));
+        }
+      }
+      if (decodedStems.every((b) => b !== null)) {
+        this.uvr5StemBuffers = decodedStems;
+        if (!this.customAudioBuffer && decodedStems[0]) {
+          this.customAudioBuffer = decodedStems[0];
+        }
+        this.syncDspChain(telemetry);
+        if (telemetry.isPlaying && this.isCustomOrStemsMode(telemetry.audioSourceMode)) {
+          this.startCustomBufferNode();
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Decodes real FL Studio 26 `.wav` sample kit voices fetched from the Tauri backend.
+   */
+  async loadFl26KitVoiceBuffers(
+    wavBuffers: ArrayBuffer[],
+    telemetry: DawTelemetryView
+  ): Promise<void> {
+    this.pendingFl26RawWavs = wavBuffers;
+    const ctx = this.ctx ?? this.ensureAudioGraph(telemetry);
+    if (!ctx) return;
+    await this.decodePendingFl26Wavs(ctx);
+  }
+
+  /**
+   * Computes a genuine 80-band log-Mel spectrum (`20 Hz .. 20 kHz` triangular Mel filterbank)
+   * from the currently loaded `customAudioBuffer` PCM, live `preAnalyser` FFT, or active Piano Roll pattern.
+   */
+  computeMel80FromAudio(telemetry?: DawTelemetryView): number[] {
+    const melMin = 2595.0 * Math.log10(1.0 + 20.0 / 700.0);
+    const melMax = 2595.0 * Math.log10(1.0 + 20000.0 / 700.0);
+    const melPtsHz = new Float64Array(82);
+    for (let m = 0; m < 82; m++) {
+      const melVal = melMin + ((melMax - melMin) * m) / 81.0;
+      melPtsHz[m] = 700.0 * (Math.pow(10.0, melVal / 2595.0) - 1.0);
+    }
+
+    // 1. If a custom audio file is loaded, compute multi-window DFT across the entire song's PCM
+    if (
+      this.customAudioBuffer &&
+      this.customAudioBuffer.length > 64 &&
+      (!telemetry || this.isCustomOrStemsMode(telemetry.audioSourceMode))
+    ) {
+      const sr = this.customAudioBuffer.sampleRate;
+      const left = this.customAudioBuffer.getChannelData(0);
+      const right =
+        this.customAudioBuffer.numberOfChannels > 1
+          ? this.customAudioBuffer.getChannelData(1)
+          : left;
+      const totalLen = left.length;
+      const numWindows = Math.min(32, Math.max(1, Math.floor(totalLen / 512)));
+      const step = Math.max(1, Math.floor((totalLen - 256) / numWindows));
+      const melPower = new Float64Array(80);
+
+      for (let m = 0; m < 80; m++) {
+        const fCenter = melPtsHz[m + 1];
+        if (fCenter >= sr * 0.49) {
+          melPower[m] = 1e-9;
+          continue;
+        }
+        const omega = (2.0 * Math.PI * fCenter) / sr;
+        const cosW = Math.cos(omega);
+        const sinW = Math.sin(omega);
+        let bandEnergySum = 0.0;
+
+        for (let w = 0; w < numWindows; w++) {
+          const base = Math.min(totalLen - 256, w * step);
+          let s1 = 0.0;
+          let s2 = 0.0;
+          const coeff = 2.0 * cosW;
+          for (let n = 0; n < 256; n++) {
+            const hann = 0.5 * (1.0 - Math.cos((2.0 * Math.PI * n) / 255.0));
+            const x = 0.5 * (left[base + n] + right[base + n]) * hann;
+            const s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+          }
+          const real = s1 - s2 * cosW;
+          const imag = s2 * sinW;
+          bandEnergySum += (real * real + imag * imag) / (256.0 * 256.0);
+        }
+        melPower[m] = bandEnergySum / numWindows;
+      }
+
+      const mel80: number[] = new Array(80);
+      for (let m = 0; m < 80; m++) {
+        mel80[m] = Math.max(-85.0, Math.min(6.0, 10.0 * Math.log10(melPower[m] + 1e-10)));
+      }
+      return mel80;
+    }
+
+    // 2. If live WebAudio preAnalyser has real FFT energy, project FFT bins onto the 80 triangular Mel filters
+    if (this.ctx && this.preAnalyser) {
+      this.preAnalyser.getFloatFrequencyData(this.fftPreBuf);
+      let maxBinDb = -120.0;
+      for (let i = 2; i < 128; i++) {
+        if (this.fftPreBuf[i] > maxBinDb) maxBinDb = this.fftPreBuf[i];
+      }
+      if (maxBinDb > -95.0) {
+        const binCount = this.fftPreBuf.length;
+        const nyquist = this.ctx.sampleRate * 0.5;
+        const mel80: number[] = new Array(80);
+        for (let m = 0; m < 80; m++) {
+          const fLeft = melPtsHz[m];
+          const fCenter = melPtsHz[m + 1];
+          const fRight = melPtsHz[m + 2];
+          let weightedSum = 0.0;
+          let weightTotal = 0.0;
+
+          const bStart = Math.max(1, Math.floor((fLeft / nyquist) * (binCount - 1)));
+          const bEnd = Math.min(binCount - 1, Math.ceil((fRight / nyquist) * (binCount - 1)));
+          for (let b = bStart; b <= bEnd; b++) {
+            const fBin = (b / (binCount - 1)) * nyquist;
+            const w =
+              fBin <= fCenter
+                ? (fBin - fLeft) / Math.max(1.0, fCenter - fLeft)
+                : (fRight - fBin) / Math.max(1.0, fRight - fCenter);
+            const clampedW = Math.max(0.05, w);
+            const dbVal = Number.isFinite(this.fftPreBuf[b]) ? this.fftPreBuf[b] : -100.0;
+            const linPow = Math.pow(10.0, Math.max(-100.0, dbVal) / 10.0);
+            weightedSum += linPow * clampedW;
+            weightTotal += clampedW;
+          }
+          const avgPow = weightTotal > 0 ? weightedSum / weightTotal : 1e-9;
+          mel80[m] = Math.max(-85.0, Math.min(6.0, 10.0 * Math.log10(avgPow + 1e-10)));
+        }
+        return mel80;
+      }
+    }
+
+    // 3. Otherwise derive the 80-band Mel profile from the active Piano Roll notes & FL26 Sample Kit
+    const mel80: number[] = new Array(80);
+    const kit = telemetry?.fl26SelectedSampleKit ?? '808 Studio Kit';
+    const is808 = kit.includes('808');
+    const is909 = kit.includes('909');
+    const isStrings = kit.includes('Strings');
+    const isSytrus = kit.includes('Sytrus');
+    const pat =
+      telemetry?.pianoRollPatterns.find((p) => p.patternId === telemetry.selectedPatternId) ??
+      telemetry?.pianoRollPatterns[0];
+
+    for (let m = 0; m < 80; m++) {
+      const fCenter = melPtsHz[m + 1];
+      let energy = Math.pow(10.0, (-28.0 - 10.0 * (m / 79.0)) / 10.0);
+      if (is808 && fCenter >= 35 && fCenter <= 120) energy += 0.25;
+      if (is909 && ((fCenter >= 50 && fCenter <= 160) || (fCenter >= 6000 && fCenter <= 12000))) {
+        energy += 0.18;
+      }
+      if (isStrings && fCenter >= 220 && fCenter <= 3200) energy += 0.22;
+      if (isSytrus && fCenter >= 800 && fCenter <= 9500) energy += 0.24;
+
+      if (pat) {
+        for (const note of pat.notes) {
+          const f0 = this.midiToFreqHz(note.key, note.finePitchCents);
+          for (let h = 1; h <= 4; h++) {
+            const fh = f0 * h;
+            const distOct = Math.abs(Math.log2(Math.max(1e-3, fCenter / fh)));
+            if (distOct < 0.35) {
+              energy += (note.velocity * 0.12) / (h * (1.0 + distOct * 8.0));
+            }
+          }
+        }
+      }
+      mel80[m] = Math.max(-85.0, Math.min(6.0, 10.0 * Math.log10(energy + 1e-10)));
+    }
+    return mel80;
   }
 
   /**
@@ -550,7 +968,6 @@ export class RealtimeSpeakerEngine {
     }
     const now = ctx.currentTime + 0.005;
     const dur = 0.24;
-    // Temporarily ensure speaker gain is audible for the audition note even if transport is paused
     if (this.masterSpeakerGain && !telemetry.speakerMuted) {
       const vol = Math.max(0.15, (telemetry.speakerVolumePct / 100.0) * 0.85);
       this.masterSpeakerGain.gain.cancelScheduledValues(ctx.currentTime);
@@ -579,7 +996,7 @@ export class RealtimeSpeakerEngine {
       !this.ctx ||
       !this.sourceBus ||
       !telemetry.isPlaying ||
-      telemetry.audioSourceMode === 'customFile'
+      this.isCustomOrStemsMode(telemetry.audioSourceMode)
     ) {
       return;
     }
@@ -729,6 +1146,29 @@ export class RealtimeSpeakerEngine {
     const isStrings = kit.includes('Strings');
     const isSytrus = kit.includes('Sytrus');
 
+    // Layer real decoded FL26 .wav sample when Symphonic Strings or Sample Kit buffers are loaded
+    if (isStrings && this.fl26KitVoiceBuffers.length > 0) {
+      const sampleBuf =
+        key >= 60 && this.fl26KitVoiceBuffers.length > 1
+          ? this.fl26KitVoiceBuffers[1]
+          : this.fl26KitVoiceBuffers[0];
+      const baseNote = key >= 60 && this.fl26KitVoiceBuffers.length > 1 ? 72 : 48;
+      const src = ctx.createBufferSource();
+      src.buffer = sampleBuf;
+      src.playbackRate.setValueAtTime(
+        Math.pow(2.0, (key - baseNote + finePitchCents / 100.0) / 12.0),
+        startTime
+      );
+      const smpEnv = ctx.createGain();
+      smpEnv.gain.setValueAtTime(0.001, startTime);
+      smpEnv.gain.linearRampToValueAtTime(Math.min(0.32, velocity * 0.25), startTime + 0.03);
+      smpEnv.gain.exponentialRampToValueAtTime(0.0001, startTime + durationSec + 0.08);
+      src.connect(smpEnv);
+      smpEnv.connect(this.sourceBus);
+      src.start(startTime);
+      src.stop(startTime + durationSec + 0.1);
+    }
+
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
     const filter = ctx.createBiquadFilter();
@@ -794,6 +1234,17 @@ export class RealtimeSpeakerEngine {
 
   private triggerKick(ctx: AudioContext, startTime: number, kit: string, gainScale: number): void {
     if (!this.sourceBus) return;
+    if (this.fl26KitVoiceBuffers.length > 0 && !kit.includes('Strings')) {
+      const kickBuf = this.fl26KitVoiceBuffers[0];
+      const src = ctx.createBufferSource();
+      src.buffer = kickBuf;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(Math.min(0.65, 0.5 * gainScale), startTime);
+      src.connect(g);
+      g.connect(this.sourceBus);
+      src.start(startTime);
+    }
+
     const is909 = kit.includes('909');
     const osc = ctx.createOscillator();
     const env = ctx.createGain();
@@ -825,6 +1276,17 @@ export class RealtimeSpeakerEngine {
     gainScale: number
   ): void {
     if (!this.sourceBus || !this.noiseBuffer) return;
+    if (this.fl26KitVoiceBuffers.length > 1 && (kit.includes('909') || kit.includes('Skipper'))) {
+      const snareBuf = this.fl26KitVoiceBuffers[1];
+      const src = ctx.createBufferSource();
+      src.buffer = snareBuf;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(Math.min(0.55, 0.42 * gainScale), startTime);
+      src.connect(g);
+      g.connect(this.sourceBus);
+      src.start(startTime);
+    }
+
     // Body tone
     const bodyOsc = ctx.createOscillator();
     const bodyEnv = ctx.createGain();
@@ -865,6 +1327,19 @@ export class RealtimeSpeakerEngine {
     gainScale: number
   ): void {
     if (!this.sourceBus || !this.noiseBuffer) return;
+    if (this.fl26KitVoiceBuffers.length >= 3) {
+      const hatBuf = openHat ? this.fl26KitVoiceBuffers[2] : this.fl26KitVoiceBuffers[1];
+      if (hatBuf) {
+        const src = ctx.createBufferSource();
+        src.buffer = hatBuf;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(Math.min(0.4, 0.28 * gainScale), startTime);
+        src.connect(g);
+        g.connect(this.sourceBus);
+        src.start(startTime);
+      }
+    }
+
     const noiseSrc = ctx.createBufferSource();
     noiseSrc.buffer = this.noiseBuffer;
 
