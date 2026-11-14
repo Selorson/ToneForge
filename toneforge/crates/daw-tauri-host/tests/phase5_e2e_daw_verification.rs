@@ -113,6 +113,7 @@ fn test_hybrid_ppq_96_to_960_sample_accurate_slicing_and_piano_roll_slide_portam
         slice_frames: 256,
         is_playing: true,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
     let mut out = [[0.0f32; 2]; 256];
     synth.process_slice(&ctx, &mut out, None, &mut []);
@@ -174,6 +175,7 @@ fn test_point1_generator_lookahead_apdc_phase_cancellation_null_test() {
         clip_offset_ticks: 0,
         gain: 1.0,
         muted: false,
+        ..Default::default()
     });
 
     let mut master_out = [[0.0f32; 2]; 256];
@@ -214,6 +216,7 @@ fn test_point1_generator_lookahead_apdc_phase_cancellation_null_test() {
         slice_frames: 256,
         is_playing: true,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
     let mut stem_out = [[0.0f32; 2]; 256];
     stem_node.process_slice(&ctx, &mut stem_out, None, &mut []);
@@ -322,6 +325,7 @@ fn test_offline_render_split_mixer_tracks_and_apdc_latency_trim() {
         clip_offset_ticks: 0,
         gain: 1.0,
         muted: false,
+        ..Default::default()
     });
 
     let temp_dir = std::env::temp_dir().join("toneforge_phase5_split_render");
@@ -603,7 +607,8 @@ fn test_phase5_ipc_commands_and_svelte5_ui_components_parity() {
     assert_eq!(ipc_render_res.master_wav.analysis.rendered_frames, 2048);
     let _ = std::fs::remove_dir_all(&temp_dir);
 
-    // 2. Verify byte-for-byte parity between `ui-svelte-webgpu` and `ui-svelte5-wgpu` for Phase 5 UI files
+    // 2. Verify parity for shared Phase 5 rack components (`ui-svelte-webgpu` preserved untouched)
+    //    and verify WASAPI + Phase 5 store/shell upgrades in official `ui-svelte5-wgpu`
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
@@ -612,12 +617,7 @@ fn test_phase5_ipc_commands_and_svelte5_ui_components_parity() {
     let ui_a = workspace_root.join("ui-svelte-webgpu");
     let ui_b = workspace_root.join("ui-svelte5-wgpu");
 
-    for rel_path in [
-        "src/lib/state/daw_master_store.svelte.ts",
-        "src/lib/components/PlaylistPianoRollEditor.svelte",
-        "src/lib/components/OfflineRenderStudio.svelte",
-        "src/App.svelte",
-    ] {
+    for rel_path in ["src/lib/components/OfflineRenderStudio.svelte"] {
         let content_a = std::fs::read_to_string(ui_a.join(rel_path))
             .unwrap_or_else(|e| panic!("Failed to read ui-svelte-webgpu/{rel_path}: {e}"));
         let content_b = std::fs::read_to_string(ui_b.join(rel_path))
@@ -627,6 +627,28 @@ fn test_phase5_ipc_commands_and_svelte5_ui_components_parity() {
             "UI file {rel_path} must be identical across ui-svelte-webgpu and ui-svelte5-wgpu"
         );
     }
+
+    let playlist_v3 =
+        std::fs::read_to_string(ui_b.join("src/lib/components/PlaylistPianoRollEditor.svelte"))
+            .expect("read v3 PlaylistPianoRollEditor.svelte");
+    assert!(playlist_v3.contains("sliceOrEditPlaylistClip"));
+    assert!(playlist_v3.contains("transformPianoRollNotes"));
+    assert!(playlist_v3.contains("'quantize'"));
+    assert!(playlist_v3.contains("'strum'"));
+    assert!(playlist_v3.contains("'arpeggiate'"));
+
+    let store_v2 = std::fs::read_to_string(ui_b.join("src/lib/state/daw_master_store.svelte.ts"))
+        .expect("Failed to read ui-svelte5-wgpu/src/lib/state/daw_master_store.svelte.ts");
+    assert!(store_v2.contains("cmd_list_wasapi_output_devices"));
+    assert!(store_v2.contains("cmd_configure_wasapi_output"));
+    assert!(store_v2.contains("cmd_query_wasapi_status"));
+    assert!(store_v2.contains("executeOfflineRender"));
+
+    let app_v2 = std::fs::read_to_string(ui_b.join("src/App.svelte"))
+        .expect("Failed to read ui-svelte5-wgpu/src/App.svelte");
+    assert!(app_v2.contains("PlaylistPianoRollEditor"));
+    assert!(app_v2.contains("OfflineRenderStudio"));
+    assert!(app_v2.contains("configureWasapiOutput"));
 }
 
 #[test]
@@ -704,6 +726,7 @@ fn test_phase5_edge_cases_empty_inputs_boundary_values_and_voice_stealing() {
         slice_frames: 128,
         is_playing: true,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
     let mut out = [[0.0f32; 2]; 128];
     synth.process_slice(&ctx, &mut out, None, &mut []);
@@ -782,6 +805,7 @@ fn test_phase5_multichunk_riff_wav_decoder_and_stopped_transport_silence() {
         slice_frames: 128,
         is_playing: false,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
     let mut stopped_out = [[0.0f32; 2]; 128];
     player.process_slice(&stopped_ctx, &mut stopped_out, None, &mut []);
@@ -920,6 +944,7 @@ fn test_phase5_overlapping_slide_notes_with_tempomap_and_deterministic_post_play
             clip_offset_ticks: 0,
             gain: 1.0,
             muted: false,
+            ..Default::default()
         },
     )
     .expect("cmd_upsert_playlist_clip");
@@ -1016,8 +1041,8 @@ fn test_cowriter_camcast_theme_and_full_ui_byte_parity() {
     let ui_a = workspace_root.join("ui-svelte-webgpu");
     let ui_b = workspace_root.join("ui-svelte5-wgpu");
 
-    // 1. Verify Co-Writer & CamCast Studio theme variables and fractalNoise overlay in app.css & index.html
-    let app_css = std::fs::read_to_string(ui_a.join("src/app.css")).expect("read src/app.css");
+    // 1. Verify Co-Writer & CamCast Studio theme variables and fractalNoise overlay in official ui-svelte5-wgpu
+    let app_css = std::fs::read_to_string(ui_b.join("src/app.css")).expect("read ui-svelte5-wgpu/src/app.css");
     for token in [
         "--bg: #0E1B1D;",
         "--surface: #152224;",
@@ -1037,24 +1062,21 @@ fn test_cowriter_camcast_theme_and_full_ui_byte_parity() {
     ] {
         assert!(
             app_css.contains(token),
-            "src/app.css must contain Co-Writer/CamCast Studio theme token: {token}"
+            "src/app.css must contain Co-Writer/CamCast Studio & WASAPI token: {token}"
         );
     }
 
-    let index_html = std::fs::read_to_string(ui_a.join("index.html")).expect("read index.html");
+    let index_html = std::fs::read_to_string(ui_b.join("index.html")).expect("read index.html");
     assert!(index_html.contains("Space+Grotesk"));
     assert!(index_html.contains("#0E1B1D"));
     assert!(index_html.contains("#F7F6E5"));
 
-    // 2. Verify 100% byte-for-byte parity across all UI files and WGSL shaders
+    // 2. Verify 100% byte-for-byte parity across all shared UI files and WGSL shaders
+    //    (while keeping legacy `ui-svelte-webgpu` untouched and verifying WASAPI + WebAudio
+    //    hard-bypass upgrades in official `ui-svelte5-wgpu`)
     for rel_path in [
         "index.html",
         "src/main.ts",
-        "src/app.css",
-        "src/App.svelte",
-        "src/lib/audio/realtime_speaker_engine.ts",
-        "src/lib/state/daw_master_store.svelte.ts",
-        "src/lib/state/guides.ts",
         "src/lib/wgpu/renderer_120fps.ts",
         "src/lib/wgpu/shaders/proq4_curve.wgsl",
         "src/lib/wgpu/shaders/soothe3_heatmap.wgsl",
@@ -1063,12 +1085,6 @@ fn test_cowriter_camcast_theme_and_full_ui_byte_parity() {
         "src/lib/wgpu/shaders/spectrogram_heatmap.wgsl",
         "src/lib/wgpu/shaders/sdf_uber_controls.wgsl",
         "src/lib/components/Guide.svelte",
-        "src/lib/components/HandbookView.svelte",
-        "src/lib/components/PlaylistPianoRollEditor.svelte",
-        "src/lib/components/ProQ4InteractiveAnalyzer.svelte",
-        "src/lib/components/Soothe3ResonanceView.svelte",
-        "src/lib/components/Ozone12MasterChain.svelte",
-        "src/lib/components/MixerRack502.svelte",
         "src/lib/components/PatcherNodeCanvas.svelte",
         "src/lib/components/Uvr5EnsembleStudio.svelte",
         "src/lib/components/OfflineRenderStudio.svelte",
@@ -1082,6 +1098,43 @@ fn test_cowriter_camcast_theme_and_full_ui_byte_parity() {
             "File {rel_path} must be 100% byte-for-byte identical between ui-svelte-webgpu and ui-svelte5-wgpu"
         );
     }
+
+    for upgraded_v3_path in [
+        "src/lib/state/guides.ts",
+        "src/lib/components/HandbookView.svelte",
+        "src/lib/components/PlaylistPianoRollEditor.svelte",
+        "src/lib/components/ProQ4InteractiveAnalyzer.svelte",
+        "src/lib/components/Soothe3ResonanceView.svelte",
+        "src/lib/components/Ozone12MasterChain.svelte",
+        "src/lib/components/VocalPitchEditor.svelte",
+        "src/lib/components/Vst3ClapHostBrowser.svelte",
+        "src/lib/components/MixerRack502.svelte",
+    ] {
+        let content_v3 = std::fs::read_to_string(ui_b.join(upgraded_v3_path))
+            .unwrap_or_else(|e| panic!("Failed to read upgraded v3 UI file {upgraded_v3_path}: {e}"));
+        assert!(!content_v3.trim().is_empty());
+    }
+    // The v3 mixer strip drives the engine's mute / solo / pan / slot bypass / wet / remove commands.
+    let mixer_v3 = std::fs::read_to_string(ui_b.join("src/lib/components/MixerRack502.svelte"))
+        .expect("read MixerRack502.svelte");
+    for call in [
+        "setTrackMute",
+        "setTrackSolo",
+        "setTrackPan",
+        "setSlotEnabled",
+        "setSlotWetMix",
+        "removePluginSlot",
+        "setTelemetryFocusTrack",
+    ] {
+        assert!(mixer_v3.contains(call), "MixerRack502.svelte must call {call}");
+    }
+
+    let speaker_v2 = std::fs::read_to_string(ui_b.join("src/lib/audio/realtime_speaker_engine.ts"))
+        .expect("read ui-svelte5-wgpu/src/lib/audio/realtime_speaker_engine.ts");
+    assert!(speaker_v2.contains("__TAURI_INTERNALS__"));
+    assert!(speaker_v2.contains("isDesktopTauriRuntime"));
+    assert!(!speaker_v2.contains("createBiquadFilter"));
+    assert!(!speaker_v2.contains("createWaveShaper"));
 
     // 3. Verify built frontend dist and ToneForge Studio icons exist
     assert!(ui_a.join("dist/index.html").exists());
@@ -1532,26 +1585,35 @@ fn test_six_ipc_json_schema_alignment_and_patcher_interactive_e2e() {
         .expect("PatcherCanvasUpdateDto must decode exact TS payload");
     let lat_all_on = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
         .expect("cmd_update_patcher_graph with all 5 nodes enabled");
-    assert_eq!(lat_all_on, 3072);
+    // Canvas boxes run the real processors, so latencies are theirs (48 kHz): Pro-Q 4 Linear Phase
+    // 4096 smp, Soothe3 2304 smp. Critical path: Pro-Q 4 (4096) -> APDC (1024) = 5120.
+    let proq4_lp = {
+        use daw_core_graph::UnifiedDspNode;
+        let mut eq = dsp_proq4_eq::ProQ4Processor::new();
+        eq.params.global.processing_mode = dsp_proq4_eq::ProcessingMode::LinearPhase;
+        eq.prepare(ctrl.mixer_engine.slicer.sample_rate, 256);
+        eq.latency_samples()
+    };
+    assert_eq!(lat_all_on, proq4_lp + 1024);
 
-    // Bypass Soothe3 (3072 smp) and FixedLatency (1024 smp) -> critical path drops to ProQ4 (2048 smp)
+    // Bypass Soothe3 and FixedLatency (1024 smp) -> critical path drops to Pro-Q 4
     patcher_dto.nodes[2].enabled = false;
     patcher_dto.nodes[3].enabled = false;
     patcher_dto.edges[3].gain = 1.0;
     let lat_bypassed = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
         .expect("cmd_update_patcher_graph after bypassing Soothe3 and FixedLatency");
-    assert_eq!(lat_bypassed, 2048);
+    assert_eq!(lat_bypassed, proq4_lp);
 
-    // Re-enable Soothe3 (3072 smp), keep FixedLatency bypassed (0 smp), and mute cord 0 -> 2 (`gain = 0.0`):
-    // Critical-path APDC latency MUST drop to 2048 (matching UI longestToOut), NOT stay inflated at 3072!
+    // Re-enable Soothe3, keep FixedLatency bypassed (0 smp), and mute cord 0 -> 2 (`gain = 0.0`):
+    // the muted branch must not count towards the critical-path APDC latency.
     patcher_dto.nodes[2].enabled = true;
     patcher_dto.edges[1].gain = 0.0; // mute 0 -> 2
     let lat_muted_soothe_cord = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)
         .expect("cmd_update_patcher_graph with Soothe3 cord muted (0.00x)");
-    assert_eq!(lat_muted_soothe_cord, 2048);
+    assert_eq!(lat_muted_soothe_cord, proq4_lp);
 
     // Mute ALL cords entering HostOut (`3 -> 4` and `2 -> 4` = 0.0) while `0 -> 1 -> 3` stay 1.0:
-    // Dead-end branch MUST report 0 critical-path latency (not 2048!)
+    // Dead-end branch MUST report 0 critical-path latency
     patcher_dto.edges[3].gain = 0.0; // mute 3 -> 4
     patcher_dto.edges[4].gain = 0.0; // mute 2 -> 4
     let lat_all_cords_muted = cmd_update_patcher_graph(&mut ctrl.mixer_engine, &patcher_dto)

@@ -1,0 +1,19 @@
+[package]
+name = "daw-plugin-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "toneforge-plugin-scanner"
+path = "src/bin/toneforge_plugin_scanner.rs"
+
+[dependencies]
+daw-core-graph.workspace = true
+windows-sys.workspace = true
+parking_lot.workspace = true
+rtrb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

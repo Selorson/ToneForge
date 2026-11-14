@@ -12,6 +12,7 @@ path = "src/bin/extract_izresembed.rs"
 
 [dependencies]
 daw-core-graph = { workspace = true }
+dsp-ozone12-mastering = { workspace = true }
 extract-cleanroom-assets = { workspace = true }
 rustfft = { workspace = true }
 realfft = { workspace = true }
@@ -31,4 +32,3 @@ windows-sys = { workspace = true }
 [dev-dependencies]
 dsp-proq4-eq = { workspace = true }
 dsp-soothe3-spectral = { workspace = true }
-dsp-ozone12-mastering = { workspace = true }

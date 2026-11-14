@@ -337,3 +337,50 @@ pub fn pick_directory_dialog_native(title: &str, initial_dir: Option<&Path>) -> 
     }
     dlg.pick_folder()
 }
+
+/// Native "Save project" dialog (`.tfproj`, JSON).
+pub fn pick_project_save_path_native(default_name: &str, initial_dir: Option<&Path>) -> Option<PathBuf> {
+    let mut dlg = rfd::FileDialog::new()
+        .set_title("Lưu dự án — ToneForge Studio")
+        .add_filter("ToneForge Project", &["tfproj"])
+        .set_file_name(default_name);
+    if let Some(dir) = initial_dir {
+        if dir.is_dir() {
+            dlg = dlg.set_directory(dir);
+        }
+    }
+    dlg.save_file().map(|p| {
+        if p.extension().is_none() {
+            p.with_extension("tfproj")
+        } else {
+            p
+        }
+    })
+}
+
+/// Native "Open project" dialog (`.tfproj`, JSON).
+pub fn pick_project_open_path_native(initial_dir: Option<&Path>) -> Option<PathBuf> {
+    let mut dlg = rfd::FileDialog::new()
+        .set_title("Mở dự án — ToneForge Studio")
+        .add_filter("ToneForge Project", &["tfproj", "json"]);
+    if let Some(dir) = initial_dir {
+        if dir.is_dir() {
+            dlg = dlg.set_directory(dir);
+        }
+    }
+    dlg.pick_file()
+}
+
+/// Writes stereo `frames` as a 32-bit float WAV at `sample_rate_hz` (lossless asset persistence).
+pub fn write_f32_wav_file(path: &Path, frames: &[StereoFrame], sample_rate_hz: u32) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let bytes = crate::offline_render_engine::encode_wav_bytes_exact_sr(
+        frames,
+        sample_rate_hz,
+        crate::offline_render_engine::WavBitDepth::Float32Ieee,
+        false,
+    );
+    std::fs::write(path, bytes).map_err(|e| format!("Failed writing {}: {e}", path.display()))
+}

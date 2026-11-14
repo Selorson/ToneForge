@@ -1026,6 +1026,8 @@ static GLOBAL_GPU_ENSEMBLE_ENGINE: OnceLock<Mutex<Option<GpuStemEnsembleEngine>>
 
 /// Runs the cached global RTX 4080 `GpuStemEnsembleEngine` (lazily initializing the 3 ONNX
 /// sessions once on first offline separation and keeping them warm in VRAM for instant reuse).
+/// When ONNX Runtime DLLs are unavailable on a headless CPU host, cleanly falls back to the
+/// real 3-model trained `.npz` `GruThreeStemSeparator` (`PureRustFallback`).
 pub fn run_global_gpu_stem_ensemble(
     mix_frames: &[StereoFrame],
     sample_rate_hz: u32,
@@ -1036,7 +1038,43 @@ pub fn run_global_gpu_stem_ensemble(
         .lock()
         .map_err(|_| "Global GpuStemEnsembleEngine mutex poisoned".to_string())?;
     if guard.is_none() {
-        *guard = Some(GpuStemEnsembleEngine::new()?);
+        match GpuStemEnsembleEngine::new() {
+            Ok(engine) => {
+                *guard = Some(engine);
+            }
+            Err(onnx_err) => {
+                let t0 = Instant::now();
+                if let Some(mut gru) = crate::npz_gru_legacy::GruThreeStemSeparator::from_global_cache()
+                {
+                    let sr = sample_rate_hz.max(8_000);
+                    let [raw_vocals, drums_raw, bass_raw, other_raw] =
+                        gru.separate_4stems(mix_frames, sr);
+                    let vocals = apply_spectral_phase_denoise_vs_mix(
+                        &raw_vocals,
+                        mix_frames,
+                        cfg.phase_denoise_strength,
+                    );
+                    let inv_instrumental =
+                        SpectralEnsembler::invert_audio_waveform(mix_frames, &vocals);
+                    let (drums, bass, other) = project_instrumental_substems(
+                        &inv_instrumental,
+                        &drums_raw,
+                        &bass_raw,
+                        &other_raw,
+                    );
+                    return Ok(GpuStemEnsembleOutput {
+                        vocals,
+                        drums,
+                        bass,
+                        other,
+                        inv_instrumental,
+                        active_tier: GpuExecutionTier::PureRustFallback,
+                        elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    });
+                }
+                return Err(onnx_err);
+            }
+        }
     }
     guard
         .as_mut()

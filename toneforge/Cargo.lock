@@ -42,6 +42,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "akunarch-audio-cli"
+version = "0.1.0"
+dependencies = [
+ "daw-core-graph",
+ "dsp-ozone12-mastering",
+ "dsp-proq4-eq",
+ "dsp-soothe3-spectral",
+ "serde",
+ "serde_json",
+ "symphonia",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -588,19 +601,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "daw-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "daw-core-graph",
+ "parking_lot",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "daw-tauri-host"
 version = "0.1.0"
 dependencies = [
  "ai-uvr5-stem-engine",
  "bytemuck",
  "daw-core-graph",
+ "daw-plugin-host",
  "dsp-ozone12-mastering",
+ "dsp-pitch-time",
  "dsp-proq4-eq",
  "dsp-soothe3-spectral",
  "parking_lot",
+ "realfft 3.4.0",
  "rfd",
  "rtrb",
  "rubato",
+ "rustfft 6.2.0",
  "serde",
  "serde_json",
  "symphonia",
@@ -809,6 +839,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsp-pitch-time"
+version = "0.1.0"
+dependencies = [
+ "daw-core-graph",
+ "num-complex",
+ "num-traits",
+ "realfft 3.4.0",
+ "rustfft 6.2.0",
+ "serde",
+ "serde_json",
+ "wide",
+]
+
+[[package]]
 name = "dsp-proq4-eq"
 version = "0.1.0"
 dependencies = [
@@ -942,6 +986,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -3838,6 +3883,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-vst3-clap-plugin"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4051,7 +4103,11 @@ name = "toneforge-studio"
 version = "0.1.0"
 dependencies = [
  "daw-core-graph",
+ "daw-plugin-host",
  "daw-tauri-host",
+ "dsp-pitch-time",
+ "dsp-proq4-eq",
+ "dsp-soothe3-spectral",
  "parking_lot",
  "serde",
  "serde_json",

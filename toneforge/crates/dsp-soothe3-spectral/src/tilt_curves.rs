@@ -58,8 +58,47 @@ impl TiltPair {
     }
 }
 
+/// Computes frequency-tilted `(tau_attack_sec, tau_release_sec)` for a bin at `freq_hz` (`update_speed`).
+/// Automatically applies a smooth sub-`150 Hz` ballistic floor (`>= 25 ms` attack, `>= 80 ms` release
+/// across `50..100 Hz`) to prevent half-cycle sub-bass waveform tearing while preserving fast
+/// transient response at `3..10 kHz`.
+#[inline]
+pub fn compute_bin_ballistic_taus_sec(
+    freq_hz: f32,
+    attack_eff: f32,
+    release_eff: f32,
+) -> (f32, f32) {
+    let f = freq_hz.max(0.0);
+    let a_eff = attack_eff.clamp(0.0, 25.0);
+    let r_eff = release_eff.clamp(0.0, 25.0);
+
+    // Base user-controlled time constants (`~1.5..4 ms` fast HF attack, `~15..140 ms` release)
+    let tau_att_base = (0.080 / (1.0 + 1.8 * a_eff)).clamp(0.0005, 0.250);
+    let tau_rel_base = (0.400 / (1.0 + 1.2 * r_eff)).clamp(0.005, 1.000);
+
+    // Smooth Hermite sub-165 Hz anti-tearing tilt (`0.0` for `f >= 165 Hz`, `>= 0.76` across `50..100 Hz`)
+    let u_sub = ((165.0 - f) / 95.0).clamp(0.0, 1.0);
+    let w_sub = u_sub * u_sub * (3.0 - 2.0 * u_sub);
+
+    let tau_att_sec = (tau_att_base.max(0.036 * w_sub) + 0.012 * w_sub).clamp(0.0005, 0.350);
+    let tau_rel_sec = (tau_rel_base.max(0.115 * w_sub) + 0.030 * w_sub).clamp(0.005, 1.200);
+    (tau_att_sec, tau_rel_sec)
+}
+
+/// Asymmetric one-pole envelope integrator (`integrate_asym`) in dB (`gr_db <= 0.0`).
+#[inline(always)]
+pub fn integrate_asym(prev_db: f32, target_db: f32, attack_alpha: f32, release_alpha: f32) -> f32 {
+    let alpha = if target_db < prev_db {
+        attack_alpha
+    } else {
+        release_alpha
+    };
+    alpha * prev_db + (1.0 - alpha) * target_db
+}
+
 /// Populates per-bin effective `Detail`, `Attack` alpha, and `Release` alpha arrays
 /// for all `num_bins` (`2,049`) bins of a 4096-point STFT at `base_sample_rate`.
+#[allow(clippy::too_many_arguments)]
 pub fn update_per_bin_tilt_tables<const BINS: usize>(
     fft_size: usize,
     hop_size: usize,
@@ -86,13 +125,8 @@ pub fn update_per_bin_tilt_tables<const BINS: usize>(
 
         out_detail_per_bin[k] = d_eff;
 
-        // Higher `Attack` / `Release` speed value (`0..10`) -> shorter time constant -> faster response
-        // Attack time constant: ~1.5 ms at speed 10, ~80 ms at speed 0
-        let tau_att_sec = (0.080 / (1.0 + 1.8 * a_eff)).clamp(0.0005, 0.250);
-        // Release time constant: ~15 ms at speed 10, ~400 ms at speed 0
-        let tau_rel_sec = (0.400 / (1.0 + 1.2 * r_eff)).clamp(0.005, 1.000);
-
-        out_attack_alpha_per_bin[k] = (-dt_hop / tau_att_sec).exp().clamp(0.0, 0.995);
-        out_release_alpha_per_bin[k] = (-dt_hop / tau_rel_sec).exp().clamp(0.0, 0.999);
+        let (tau_att_sec, tau_rel_sec) = compute_bin_ballistic_taus_sec(fk, a_eff, r_eff);
+        out_attack_alpha_per_bin[k] = (-dt_hop / tau_att_sec).exp().clamp(0.0, 0.9985);
+        out_release_alpha_per_bin[k] = (-dt_hop / tau_rel_sec).exp().clamp(0.0, 0.9995);
     }
 }

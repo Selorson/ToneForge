@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { DawTelemetryView, FIXED_POINT_30BIT_MAX, MAX_MIXER_TRACKS } from '../state/daw_master_store.svelte';
+  import {
+    DawTelemetryView,
+    FIXED_POINT_30BIT_MAX,
+    MAX_MIXER_TRACKS,
+    MIXER_INSERT_SLOT_COUNT,
+    NATIVE_INSERT_PLUGINS,
+  } from '../state/daw_master_store.svelte';
   import { WebGpu120FpsRenderer } from '../wgpu/renderer_120fps';
   import Guide from './Guide.svelte';
 
@@ -19,6 +25,31 @@
   );
 
   const selectedTrack = $derived(telemetry.mixerTracks[telemetry.selectedTrackIndex] ?? telemetry.mixerTracks[0]);
+
+  // Fader law: -inf..+6 dB on a 0..1 slider (0.75 = 0 dB), mapped to linear gain for the engine.
+  const FADER_MIN_DB = -60;
+  const FADER_MAX_DB = 6;
+  function gainToFader(g: number): number {
+    if (g <= 0.000001) return 0;
+    const db = 20 * Math.log10(g);
+    return Math.max(0, Math.min(1, (db - FADER_MIN_DB) / (FADER_MAX_DB - FADER_MIN_DB)));
+  }
+  function faderToGain(v: number): number {
+    if (v <= 0.0005) return 0;
+    return Math.pow(10, (FADER_MIN_DB + v * (FADER_MAX_DB - FADER_MIN_DB)) / 20);
+  }
+  function fmtDb(g: number): string {
+    return g <= 0.000001 ? '-∞' : `${(20 * Math.log10(g)).toFixed(1)}`;
+  }
+  function setBankStart(start: number): void {
+    if (!Number.isFinite(start)) return;
+    const maxStart = Math.max(0, MAX_MIXER_TRACKS - telemetry.visibleBankSize);
+    telemetry.visibleBankStart = Math.max(0, Math.min(maxStart, Math.round(start)));
+  }
+  function selectTrack(idx: number): void {
+    telemetry.selectedTrackIndex = idx;
+    telemetry.setTelemetryFocusTrack(idx);
+  }
 
   $effect(() => {
     if (!meterCanvas) return;
@@ -51,6 +82,18 @@
       <button onclick={() => (telemetry.visibleBankStart = 128)}>128..159</button>
       <button onclick={() => (telemetry.visibleBankStart = 256)}>256..287</button>
       <button onclick={() => (telemetry.visibleBankStart = 470)}>470..501 (Preview)</button>
+      <button title="Nhóm kênh trước" onclick={() => setBankStart(telemetry.visibleBankStart - telemetry.visibleBankSize)}>◀</button>
+      <label class="bank-start" title="Kênh đầu tiên hiển thị (0..501)">
+        Từ kênh
+        <input
+          type="number"
+          min="0"
+          max={MAX_MIXER_TRACKS - 1}
+          value={telemetry.visibleBankStart}
+          onchange={(e) => setBankStart(parseInt((e.currentTarget as HTMLInputElement).value, 10))}
+        />
+      </label>
+      <button title="Nhóm kênh sau" onclick={() => setBankStart(telemetry.visibleBankStart + telemetry.visibleBankSize)}>▶</button>
     </div>
   </header>
 
@@ -68,23 +111,62 @@
         class="strip {telemetry.selectedTrackIndex === trk.index ? 'selected' : ''}"
         role="button"
         tabindex="0"
-        onclick={() => (telemetry.selectedTrackIndex = trk.index)}
-        onkeydown={(e) => e.key === 'Enter' && (telemetry.selectedTrackIndex = trk.index)}
+        onclick={() => selectTrack(trk.index)}
+        onkeydown={(e) => e.key === 'Enter' && selectTrack(trk.index)}
       >
         <div class="strip-idx">#{trk.index}</div>
         <div class="strip-name">{trk.name}</div>
-        <div class="strip-peak">{m.peakLDb.toFixed(1)} dB</div>
+        <div class="strip-peak" title="Peak L / R">
+          {Math.max(m.peakLDb, -99).toFixed(1)} / {Math.max(m.peakRDb, -99).toFixed(1)}
+        </div>
+        <div class="strip-buttons">
+          <button
+            class={trk.muted ? 'ms-btn mute on' : 'ms-btn mute'}
+            title="Mute"
+            onclick={(e) => {
+              e.stopPropagation();
+              telemetry.setTrackMute(trk.index, !trk.muted);
+            }}>M</button
+          >
+          {#if trk.index !== 0}
+            <button
+              class={trk.soloed ? 'ms-btn solo on' : 'ms-btn solo'}
+              title="Solo"
+              onclick={(e) => {
+                e.stopPropagation();
+                telemetry.setTrackSolo(trk.index, !trk.soloed);
+              }}>S</button
+            >
+          {/if}
+        </div>
+        <label class="pan-row" title="Pan (double-click: center)">
+          <input
+            type="range"
+            min="-1"
+            max="1"
+            step="0.01"
+            value={trk.pan}
+            onclick={(e) => e.stopPropagation()}
+            ondblclick={() => telemetry.setTrackPan(trk.index, 0)}
+            oninput={(e) => telemetry.setTrackPan(trk.index, parseFloat((e.currentTarget as HTMLInputElement).value))}
+          />
+          <span>{trk.pan === 0 ? 'C' : trk.pan < 0 ? `L${Math.round(-trk.pan * 100)}` : `R${Math.round(trk.pan * 100)}`}</span>
+        </label>
         <input
           type="range"
           min="0"
-          max="1.5"
-          step="0.01"
-          value={trk.gainLinear}
+          max="1"
+          step="0.001"
+          value={gainToFader(trk.gainLinear)}
+          title="Fader (dB) — double-click: 0 dB"
+          onclick={(e) => e.stopPropagation()}
+          ondblclick={() => telemetry.setTrackGain(trk.index, 1.0)}
           oninput={(e) => {
             const val = parseFloat((e.currentTarget as HTMLInputElement).value);
-            telemetry.setTrackGain(trk.index, val);
+            telemetry.setTrackGain(trk.index, faderToGain(val));
           }}
         />
+        <div class="fader-db">{fmtDb(trk.gainLinear)} dB</div>
         <div class="apdc-badge">{trk.apdcLatencySamples} smp</div>
       </div>
     {/each}
@@ -123,13 +205,67 @@
         </label>
       </div>
       <div class="slots-list">
-        {#each selectedTrack.slots as slot (slot.slotIndex)}
-          <div class="slot-row">
-            <span>Slot {slot.slotIndex + 1}: <strong>{slot.name}</strong></span>
-            <span>Wet {(slot.wetMix * 100).toFixed(0)}%</span>
-          </div>
-        {:else}
-          <div class="slot-empty">No insert FX loaded on Track #{selectedTrack.index}</div>
+        {#each Array.from({ length: MIXER_INSERT_SLOT_COUNT }, (_, i) => i) as slotIdx (slotIdx)}
+          {@const slot = selectedTrack.slots.find((s) => s.slotIndex === slotIdx)}
+          {#if slot}
+            <div class="slot-row">
+              <label class="slot-enable" title="Bật / Bypass">
+                <input
+                  type="checkbox"
+                  checked={slot.enabled}
+                  onchange={(e) =>
+                    telemetry.setSlotEnabled(
+                      selectedTrack.index,
+                      slot.slotIndex,
+                      (e.currentTarget as HTMLInputElement).checked
+                    )}
+                />
+                Slot {slot.slotIndex + 1}: <strong>{slot.name}</strong>
+              </label>
+              <label class="slot-wet" title="Dry/Wet song song (APDC bù trễ)">
+                Wet {(slot.wetMix * 100).toFixed(0)}%
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={slot.wetMix}
+                  oninput={(e) =>
+                    telemetry.setSlotWetMix(
+                      selectedTrack.index,
+                      slot.slotIndex,
+                      parseFloat((e.currentTarget as HTMLInputElement).value)
+                    )}
+                />
+              </label>
+              <button
+                class="slot-remove"
+                title="Gỡ plugin khỏi khe"
+                onclick={() => telemetry.removePluginSlot(selectedTrack.index, slot.slotIndex)}>✕</button
+              >
+            </div>
+          {:else}
+            <div class="slot-row slot-row-empty">
+              <span class="slot-empty-label">Slot {slotIdx + 1}: <em>— Trống —</em></span>
+              <select
+                class="slot-insert-select"
+                value=""
+                title="Chèn plugin nội bộ vào Slot {slotIdx + 1}"
+                onchange={(e) => {
+                  const kind = (e.currentTarget as HTMLSelectElement).value;
+                  if (kind) {
+                    telemetry.insertNativePluginSlot(selectedTrack.index, slotIdx, kind);
+                    (e.currentTarget as HTMLSelectElement).value = '';
+                  }
+                }}
+              >
+                <option value="">+ Chèn plugin…</option>
+                {#each NATIVE_INSERT_PLUGINS as plugin (plugin.kind)}
+                  <option value={plugin.kind}>{plugin.label}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
         {/each}
       </div>
       <div class="route-controls">
@@ -205,6 +341,8 @@
   .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   h2 { margin: 0; font-size: 1rem; color: var(--accent); font-weight: 600; }
   .subtitle { font-size: 0.75rem; color: var(--muted); }
+  .bank-start { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem; color: var(--muted); }
+  .bank-start input { width: 56px; }
   .bank-selector button, .route-controls button {
     background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 500;
   }
@@ -231,5 +369,19 @@
   .fx-preset-select select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; margin-left: 4px; font-size: 0.72rem; }
   h3 { margin: 0; font-size: 0.82rem; font-family: var(--font-sans); color: var(--accent); font-weight: 600; }
   .slot-row, .spline-row, .route-controls { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .strip-buttons { display: flex; justify-content: center; gap: 3px; margin: 3px 0; }
+  .ms-btn { width: 22px; height: 18px; padding: 0; font-size: 0.66rem; font-weight: 700; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); cursor: pointer; }
+  .ms-btn.mute.on { background: #c0392b; color: #fff; border-color: #c0392b; }
+  .ms-btn.solo.on { background: #e5b400; color: #1d1d1d; border-color: #e5b400; }
+  .pan-row { display: flex; flex-direction: column; align-items: center; font-size: 0.62rem; color: var(--muted); }
+  .pan-row input { width: 64px; }
+  .fader-db { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text); }
+  .slot-enable { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+  .slot-wet { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+  .slot-wet input { width: 80px; }
+  .slot-remove { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; padding: 1px 6px; }
+  .slot-row-empty { opacity: 0.78; }
+  .slot-empty-label { flex: 1; color: var(--muted); }
+  .slot-insert-select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 0.72rem; }
 </style>
 

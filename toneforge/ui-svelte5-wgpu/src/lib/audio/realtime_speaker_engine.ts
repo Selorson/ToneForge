@@ -1,15 +1,24 @@
-// Real-Time WebAudio Speaker Engine & Live Audible DSP Chain (`realtime_speaker_engine.ts`)
-// Outputs real stereo audio to Windows speakers/headphones when `isPlaying === true`:
-// - Source 1: Built-in FL Studio 26 Polyphonic Synth (with Slide/Portamento glides) + Real .wav Sample Kit / 808/909 Drum Sequencer
-// - Source 2: Custom Audio File Picker (`.wav`, `.mp3`, `.flac`, `.ogg`) decoded via `AudioContext.decodeAudioData`
-//             + 4-Stem Synchronized Playback when separated by UVR5 Ensemble Studio
-// - Live DSP Chain: Pre-EQ AnalyserNode -> 24-Band FabFilter Pro-Q 4 Biquad Cascade -> Post-EQ AnalyserNode
-//   -> oeksound Soothe3 6-Band Dynamic Spectral Notch Bank (with Delta Solo bandpass mode) -> BSRNN 4-Stem Rebalance EQ
-//   -> iZotope Ozone 12 4-Band 12AX7 Tube WaveShaper, Multiband Imager & Brickwall Maximizer -> Master Speaker Volume GainNode.
+// Uncolored Standalone-Browser Raw PCM Fallback (`realtime_speaker_engine.ts`)
+//
+// HARD ARCHITECTURAL CONTRACT (ToneForge v2 Studio Mastering & Real-Time DAW):
+// - Inside Tauri Desktop (`__TAURI_INTERNALS__` / `__TAURI__`), this module is 100% HARD-BYPASSED:
+//   `window.AudioContext` is NEVER instantiated (preventing WebView2 from holding a Windows Audiosrv
+//   shared session that would block WASAPI Exclusive Mode `AUDCLNT_E_DEVICE_IN_USE`), and 100% of
+//   audible sound comes exclusively from the Rust Lock-Free DSP/AI Engine via Windows WASAPI hardware.
+// - All simulated WebAudio EQ / Soothe3 / BSRNN / Ozone 12 WaveShaper / Compressor nodes have been
+//   permanently retired. Only an uncolored raw PCM (`sourceBus -> rawAnalyser -> masterSpeakerGain`)
+//   preview path remains strictly for standalone web browser (`http://localhost:5173`) inspection.
 
-import type { DawTelemetryView, PianoRollNoteUiState, ProQ4BandState } from '../state/daw_master_store.svelte';
+import type { DawTelemetryView, PianoRollNoteUiState } from '../state/daw_master_store.svelte';
 
 export type AudioSourceMode = 'pianoRoll' | 'customFile' | 'stems4';
+
+export function isDesktopTauriRuntime(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
+  );
+}
 
 interface ActiveSlideVoice {
   osc1: OscillatorNode;
@@ -21,18 +30,7 @@ interface ActiveSlideVoice {
 export class RealtimeSpeakerEngine {
   private ctx: AudioContext | null = null;
   private sourceBus: GainNode | null = null;
-  private preAnalyser: AnalyserNode | null = null;
-  private proq4Nodes: BiquadFilterNode[] = [];
-  private postAnalyser: AnalyserNode | null = null;
-  private sootheNotches: BiquadFilterNode[] = [];
-  private stemBassFilter: BiquadFilterNode | null = null;
-  private stemDrumsFilter: BiquadFilterNode | null = null;
-  private stemVocalsFilter: BiquadFilterNode | null = null;
-  private stemOtherFilter: BiquadFilterNode | null = null;
-  private ozonePreGain: GainNode | null = null;
-  private ozoneWaveShaper: WaveShaperNode | null = null;
-  private ozoneCompressor: DynamicsCompressorNode | null = null;
-  private ozoneCeilingGain: GainNode | null = null;
+  private rawAnalyser: AnalyserNode | null = null;
   private masterSpeakerGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
 
@@ -52,22 +50,24 @@ export class RealtimeSpeakerEngine {
   private currentStep16th = 0;
   private activeSlideVoices: Map<number, ActiveSlideVoice> = new Map();
 
-  private fftPreBuf = new Float32Array(1024);
-  private fftPostBuf = new Float32Array(1024);
-  private lastDriveSignature = -1;
+  private fftRawBuf = new Float32Array(1024);
   private unlockListenersAttached = false;
   private latestTelemetry: DawTelemetryView | null = null;
 
   constructor() {
-    this.attachAutoplayUnlockListeners();
+    if (!isDesktopTauriRuntime()) {
+      this.attachAutoplayUnlockListeners();
+    }
   }
 
   private attachAutoplayUnlockListeners(): void {
-    if (typeof window === 'undefined' || this.unlockListenersAttached) return;
+    if (isDesktopTauriRuntime() || typeof window === 'undefined' || this.unlockListenersAttached) {
+      return;
+    }
     this.unlockListenersAttached = true;
 
     const unlock = () => {
-      if (!this.latestTelemetry) return;
+      if (isDesktopTauriRuntime() || !this.latestTelemetry) return;
       if (this.latestTelemetry.isPlaying) {
         this.ensureAudioGraph(this.latestTelemetry);
         if (this.ctx && this.ctx.state === 'suspended') {
@@ -82,17 +82,20 @@ export class RealtimeSpeakerEngine {
   }
 
   /**
-   * Lazily initializes the WebAudio `AudioContext` and connects the full live DSP chain:
-   * `sourceBus -> preAnalyser -> proq4Nodes[0..23] -> postAnalyser -> sootheNotches[0..5]`
-   * `-> stemBass -> stemDrums -> stemVocals -> stemOther -> ozonePreGain -> ozoneWaveShaper`
-   * `-> ozoneCompressor -> ozoneCeilingGain -> masterSpeakerGain -> destination`.
+   * Standalone pure-browser fallback ONLY: initializes an uncolored raw PCM graph
+   * (`sourceBus -> rawAnalyser -> masterSpeakerGain -> destination`).
+   * Strictly returns `null` inside Tauri Desktop so WebView2 never touches Windows Audio!
    */
   private ensureAudioGraph(telemetry: DawTelemetryView): AudioContext | null {
     this.latestTelemetry = telemetry;
+    if (isDesktopTauriRuntime()) {
+      return null;
+    }
     if (this.ctx) return this.ctx;
     if (typeof window === 'undefined') return null;
     const AudioCtxCtor =
-      window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtxCtor) return null;
 
     try {
@@ -102,7 +105,6 @@ export class RealtimeSpeakerEngine {
       this.sourceBus = ctx.createGain();
       this.sourceBus.gain.value = 0.85;
 
-      // Per-stem GainNodes for UVR5 4-stem separated playback
       this.uvr5StemGains = [];
       for (let s = 0; s < 4; s++) {
         const sg = ctx.createGain();
@@ -111,103 +113,20 @@ export class RealtimeSpeakerEngine {
         this.uvr5StemGains.push(sg);
       }
 
-      this.preAnalyser = ctx.createAnalyser();
-      this.preAnalyser.fftSize = 2048;
-      this.preAnalyser.smoothingTimeConstant = 0.68;
-
-      this.proq4Nodes = [];
-      for (let i = 0; i < 24; i++) {
-        const biq = ctx.createBiquadFilter();
-        biq.type = 'peaking';
-        biq.frequency.value = 1000;
-        biq.gain.value = 0;
-        biq.Q.value = 1.0;
-        this.proq4Nodes.push(biq);
-      }
-
-      this.postAnalyser = ctx.createAnalyser();
-      this.postAnalyser.fftSize = 2048;
-      this.postAnalyser.smoothingTimeConstant = 0.68;
-
-      this.sootheNotches = [];
-      const defaultFreqs = [180, 850, 3400, 6800, 11500, 15000];
-      for (let b = 0; b < 6; b++) {
-        const notch = ctx.createBiquadFilter();
-        notch.type = 'peaking';
-        notch.frequency.value = defaultFreqs[b];
-        notch.Q.value = 1.8;
-        notch.gain.value = 0.0;
-        this.sootheNotches.push(notch);
-      }
-
-      this.stemBassFilter = ctx.createBiquadFilter();
-      this.stemBassFilter.type = 'lowshelf';
-      this.stemBassFilter.frequency.value = 115;
-      this.stemBassFilter.gain.value = 0;
-
-      this.stemDrumsFilter = ctx.createBiquadFilter();
-      this.stemDrumsFilter.type = 'peaking';
-      this.stemDrumsFilter.frequency.value = 80;
-      this.stemDrumsFilter.Q.value = 1.1;
-      this.stemDrumsFilter.gain.value = 0;
-
-      this.stemVocalsFilter = ctx.createBiquadFilter();
-      this.stemVocalsFilter.type = 'peaking';
-      this.stemVocalsFilter.frequency.value = 1750;
-      this.stemVocalsFilter.Q.value = 0.85;
-      this.stemVocalsFilter.gain.value = 0;
-
-      this.stemOtherFilter = ctx.createBiquadFilter();
-      this.stemOtherFilter.type = 'highshelf';
-      this.stemOtherFilter.frequency.value = 9000;
-      this.stemOtherFilter.gain.value = 0;
-
-      this.ozonePreGain = ctx.createGain();
-      this.ozonePreGain.gain.value = 1.0;
-
-      this.ozoneWaveShaper = ctx.createWaveShaper();
-      this.ozoneWaveShaper.oversample = '2x';
-
-      this.ozoneCompressor = ctx.createDynamicsCompressor();
-      this.ozoneCompressor.threshold.value = -6.0;
-      this.ozoneCompressor.knee.value = 3.0;
-      this.ozoneCompressor.ratio.value = 12.0;
-      this.ozoneCompressor.attack.value = 0.002;
-      this.ozoneCompressor.release.value = 0.09;
-
-      this.ozoneCeilingGain = ctx.createGain();
-      this.ozoneCeilingGain.gain.value = 0.89;
+      this.rawAnalyser = ctx.createAnalyser();
+      this.rawAnalyser.fftSize = 2048;
+      this.rawAnalyser.smoothingTimeConstant = 0.68;
 
       this.masterSpeakerGain = ctx.createGain();
       this.masterSpeakerGain.gain.value = 0.85;
 
-      // Connect the full real-time DSP chain
-      this.sourceBus.connect(this.preAnalyser);
-      let prevNode: AudioNode = this.preAnalyser;
-      for (const biq of this.proq4Nodes) {
-        prevNode.connect(biq);
-        prevNode = biq;
-      }
-      prevNode.connect(this.postAnalyser);
-      prevNode = this.postAnalyser;
-      for (const notch of this.sootheNotches) {
-        prevNode.connect(notch);
-        prevNode = notch;
-      }
-      prevNode.connect(this.stemBassFilter);
-      this.stemBassFilter.connect(this.stemDrumsFilter);
-      this.stemDrumsFilter.connect(this.stemVocalsFilter);
-      this.stemVocalsFilter.connect(this.stemOtherFilter);
-      this.stemOtherFilter.connect(this.ozonePreGain);
-      this.ozonePreGain.connect(this.ozoneWaveShaper);
-      this.ozoneWaveShaper.connect(this.ozoneCompressor);
-      this.ozoneCompressor.connect(this.ozoneCeilingGain);
-      this.ozoneCeilingGain.connect(this.masterSpeakerGain);
+      // Uncolored unity pass-through: ZERO simulated EQ, Soothe3, BSRNN, WaveShaper, or Compressor nodes
+      this.sourceBus.connect(this.rawAnalyser);
+      this.rawAnalyser.connect(this.masterSpeakerGain);
       this.masterSpeakerGain.connect(ctx.destination);
 
       this.noiseBuffer = this.createPercussionNoiseBuffer(ctx);
-      this.fftPreBuf = new Float32Array(this.preAnalyser.frequencyBinCount);
-      this.fftPostBuf = new Float32Array(this.postAnalyser.frequencyBinCount);
+      this.fftRawBuf = new Float32Array(this.rawAnalyser.frequencyBinCount);
 
       if (this.pendingFl26RawWavs.length > 0) {
         this.decodePendingFl26Wavs(ctx);
@@ -220,7 +139,7 @@ export class RealtimeSpeakerEngine {
     }
   }
 
-  private async decodePendingFl26Wavs(ctx: AudioContext): Promise<void> {
+  private async decodePendingFl26Wavs(ctx: BaseAudioContext): Promise<void> {
     const rawList = this.pendingFl26RawWavs;
     if (rawList.length === 0) return;
     const decodedList: AudioBuffer[] = [];
@@ -237,7 +156,7 @@ export class RealtimeSpeakerEngine {
     }
   }
 
-  private createPercussionNoiseBuffer(ctx: AudioContext): AudioBuffer {
+  private createPercussionNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
     const length = Math.floor(ctx.sampleRate * 0.5);
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -251,186 +170,15 @@ export class RealtimeSpeakerEngine {
     return buffer;
   }
 
-  private computePatcherCordScale(telemetry: DawTelemetryView): number {
-    const nodes = telemetry.patcherNodes;
-    const edges = telemetry.patcherEdges;
-    if (!nodes.length || !edges.length) return 1.0;
-    const hostIn = nodes.find((n) => n.pluginKind === 'HostIn');
-    const hostOut = nodes.find((n) => n.pluginKind === 'HostOut' || n.pluginKind === 'Ozone12');
-    if (!hostIn || !hostOut) return 1.0;
-    if (hostIn.enabled === false || hostOut.enabled === false) {
-      return 1.0; // Slot bypassed -> unity pass-through
-    }
-
-    // Exact DAG path sum from hostIn to hostOut (cycle-safe bounded depth <= nodes.length)
-    const memo = new Map<number, number>();
-    const visiting = new Set<number>();
-    const dfsGain = (u: number, depth: number): number => {
-      if (u === hostOut.nodeIndex) return 1.0;
-      if (depth > nodes.length || visiting.has(u)) return 0.0;
-      const cached = memo.get(u);
-      if (cached !== undefined) return cached;
-      visiting.add(u);
-      let sum = 0.0;
-      for (const e of edges) {
-        if (e.fromNode === u) {
-          sum += Math.max(0.0, Math.min(4.0, e.gain)) * dfsGain(e.toNode, depth + 1);
-        }
-      }
-      visiting.delete(u);
-      memo.set(u, sum);
-      return sum;
-    };
-    const totalPathGain = dfsGain(hostIn.nodeIndex, 0);
-    // Normalize by default parallel sum (0.707 + 0.707 = 1.414) so default graph has unity gain
-    return Math.max(0.0, Math.min(2.5, totalPathGain / 1.414));
-  }
-
   /**
-   * Synchronizes all live WebAudio DSP filter/dynamics parameters from `telemetry`.
+   * In Tauri Desktop: 100% hard-bypassed (all DSP & volume run in Rust WASAPI).
+   * In Standalone Browser: updates only uncolored master speaker gain & stem mute/solo gains.
    */
   syncDspChain(telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
-    if (!this.ctx) return;
+    if (isDesktopTauriRuntime() || !this.ctx) return;
+
     const now = this.ctx.currentTime;
-    const nyquist = Math.max(8000, this.ctx.sampleRate * 0.48);
-
-    const patcherProQ4Node = telemetry.patcherNodes.find((n) => n.pluginKind === 'ProQ4');
-    const patcherSootheNode = telemetry.patcherNodes.find((n) => n.pluginKind === 'Soothe3');
-    const proq4Active = !telemetry.proq4Bypass && (patcherProQ4Node?.enabled ?? true);
-    const sootheActive = patcherSootheNode?.enabled ?? true;
-
-    if (this.sourceBus) {
-      const cordScale = this.computePatcherCordScale(telemetry);
-      this.sourceBus.gain.setTargetAtTime(0.85 * cordScale, now, 0.015);
-    }
-
-    // 1. Update 24-Band FabFilter Pro-Q 4 Biquad Cascade (with cascaded slopes 6..96 dB/oct)
-    const scale = telemetry.proq4GainScalePct * 0.01;
-    let nodeCursor = 0;
-    let netEqDbSum = 0.0;
-    let activeBandCount = 0;
-
-    for (let i = 0; proq4Active && i < 24 && nodeCursor < this.proq4Nodes.length; i++) {
-      const band: ProQ4BandState | undefined = telemetry.proq4Bands[i];
-      if (!band || !band.used || !band.enabled) {
-        continue;
-      }
-
-      const freq = Math.max(16, Math.min(nyquist, band.freqHz));
-      const gainDb = Math.max(-30, Math.min(30, band.gainDb * scale));
-      const qVal = Math.max(0.1, Math.min(24.0, band.q));
-      const isCutOrBp = band.shape === 2 || band.shape === 4 || band.shape === 6;
-      const stages = isCutOrBp
-        ? Math.min(4, Math.max(1, Math.round((band.slopeDbOct || 12) / 12)))
-        : 1;
-
-      if (!isCutOrBp && Math.abs(gainDb) > 0.05) {
-        netEqDbSum += gainDb;
-        activeBandCount++;
-      }
-
-      for (let s = 0; s < stages && nodeCursor < this.proq4Nodes.length; s++) {
-        const node = this.proq4Nodes[nodeCursor++];
-        switch (band.shape) {
-          case 0:
-            node.type = 'peaking';
-            break;
-          case 1:
-            node.type = 'lowshelf';
-            break;
-          case 2:
-            node.type = 'highpass';
-            break;
-          case 3:
-          case 7:
-          case 8:
-            node.type = 'highshelf';
-            break;
-          case 4:
-            node.type = 'lowpass';
-            break;
-          case 5:
-            node.type = 'notch';
-            break;
-          case 6:
-            node.type = 'bandpass';
-            break;
-          case 9:
-            node.type = 'allpass';
-            break;
-          default:
-            node.type = 'peaking';
-            break;
-        }
-        node.frequency.setTargetAtTime(freq, now, 0.012);
-        node.Q.setTargetAtTime(qVal, now, 0.012);
-        node.gain.setTargetAtTime(gainDb / stages, now, 0.012);
-      }
-    }
-
-    // Zero out remaining unused Biquad stages
-    while (nodeCursor < this.proq4Nodes.length) {
-      const node = this.proq4Nodes[nodeCursor++];
-      node.type = 'peaking';
-      node.gain.setTargetAtTime(0, now, 0.012);
-    }
-
-    // 2. Update oeksound Soothe3 6-Band Dynamic Spectral Notch Bank (including Delta Solo & Sidechain EQ bands)
-    if (this.sootheNotches.length === 6) {
-      if (!sootheActive) {
-        for (let b = 0; b < 6; b++) {
-          this.sootheNotches[b].type = 'peaking';
-          this.sootheNotches[b].gain.setTargetAtTime(0.0, now, 0.015);
-        }
-      } else if (telemetry.soothe3DeltaSolo) {
-        const primarySc =
-          telemetry.soothe3ScBands.find((b) => b.enabled && b.depth > 0) ??
-          telemetry.soothe3ScBands[2];
-        const centerHz = Math.max(120, Math.min(nyquist, primarySc?.freqHz ?? 3400));
-        this.sootheNotches[0].type = 'bandpass';
-        this.sootheNotches[0].frequency.setTargetAtTime(centerHz, now, 0.012);
-        this.sootheNotches[0].Q.setTargetAtTime(1.2 + telemetry.soothe3Detail * 0.25, now, 0.012);
-        this.sootheNotches[0].gain.setTargetAtTime(0, now, 0.012);
-
-        for (let b = 1; b < 6; b++) {
-          const sc = telemetry.soothe3ScBands[b];
-          const notch = this.sootheNotches[b];
-          const f = Math.max(80, Math.min(nyquist, sc?.freqHz ?? 2000 * b));
-          notch.type = 'peaking';
-          notch.frequency.setTargetAtTime(f, now, 0.012);
-          notch.Q.setTargetAtTime(Math.max(0.7, sc?.q ?? 1.8), now, 0.012);
-          notch.gain.setTargetAtTime(sc?.enabled ? Math.max(0, (sc?.depth ?? 2.0) * 0.8) : 0, now, 0.012);
-        }
-      } else {
-        const mix = Math.max(0, Math.min(1, telemetry.soothe3MixPct * 0.01));
-        const modeScale = telemetry.soothe3HardMode ? 1.65 : 1.15;
-        const sharpnessBase = Math.max(0.5, Math.min(12.0, 0.8 + telemetry.soothe3Detail * 0.4));
-
-        for (let b = 0; b < 6; b++) {
-          const sc = telemetry.soothe3ScBands[b];
-          const notch = this.sootheNotches[b];
-          if (!sc || !sc.enabled || telemetry.soothe3Depth <= 0.01) {
-            notch.type = 'peaking';
-            notch.gain.setTargetAtTime(0.0, now, 0.015);
-            continue;
-          }
-          const freq = Math.max(40, Math.min(nyquist, sc.freqHz));
-          const sensWeight = Math.max(0.0, (sc.depth + 10.0) / 10.0);
-          const rawCut = -telemetry.soothe3Depth * modeScale * mix * sensWeight * 0.85;
-          const cutDb = Math.max(telemetry.soothe3MaxCutDb, Math.min(0.0, rawCut));
-          const qVal = Math.max(0.4, Math.min(16.0, (sc.q || 1.2) * sharpnessBase * 0.55));
-
-          notch.type = 'peaking';
-          notch.frequency.setTargetAtTime(freq, now, 0.015);
-          notch.Q.setTargetAtTime(qVal, now, 0.015);
-          notch.gain.setTargetAtTime(cutDb, now, 0.015);
-        }
-      }
-    }
-
-    // 3. Update BSRNN 4-Stem Master Rebalance Filters & UVR5 Per-Stem Gains ([Vocals, Drums, Bass, Other])
-    const [vocDb, drmDb, basDb, othDb] = telemetry.bsrnnStemGainsDb;
     const anySolo = telemetry.bsrnnStemSolo.some(Boolean);
     const isStemActive = (idx: number): boolean => {
       if (telemetry.bsrnnStemMute[idx]) return false;
@@ -438,40 +186,6 @@ export class RealtimeSpeakerEngine {
       return true;
     };
 
-    const effStemDb = (idx: number, rawDb: number, extraTiltDb = 0.0): number => {
-      if (!isStemActive(idx)) return -24.0;
-      return Math.max(-18.0, Math.min(18.0, rawDb + extraTiltDb));
-    };
-
-    // Ozone 12 4-Band Exciter & Imager harmonic tilt contribution
-    const lowExciterTilt = telemetry.ozone12ExciterBypass
-      ? 0.0
-      : (telemetry.ozone12ExciterDrivesPct[0] - 20.0) * 0.04;
-    const midExciterTilt = telemetry.ozone12ExciterBypass
-      ? 0.0
-      : (telemetry.ozone12ExciterDrivesPct[2] - 25.0) * 0.04;
-    const highExciterAndAirTilt =
-      (telemetry.ozone12ExciterBypass ? 0.0 : (telemetry.ozone12ExciterDrivesPct[3] - 20.0) * 0.05) +
-      telemetry.ozone12ImagerWidthsPct[3] * 0.02;
-
-    if (this.stemVocalsFilter) {
-      this.stemVocalsFilter.gain.setTargetAtTime(effStemDb(0, vocDb, midExciterTilt), now, 0.015);
-    }
-    if (this.stemDrumsFilter) {
-      this.stemDrumsFilter.gain.setTargetAtTime(effStemDb(1, drmDb), now, 0.015);
-    }
-    if (this.stemBassFilter) {
-      this.stemBassFilter.gain.setTargetAtTime(effStemDb(2, basDb, lowExciterTilt), now, 0.015);
-    }
-    if (this.stemOtherFilter) {
-      this.stemOtherFilter.gain.setTargetAtTime(
-        effStemDb(3, othDb, highExciterAndAirTilt),
-        now,
-        0.015
-      );
-    }
-
-    // Update UVR5 separated stem GainNodes if active
     for (let s = 0; s < 4; s++) {
       const sg = this.uvr5StemGains[s];
       if (!sg) continue;
@@ -480,61 +194,14 @@ export class RealtimeSpeakerEngine {
       if (!isStemActive(s) || trkGain <= 0.0001) {
         sg.gain.setTargetAtTime(0.0, now, 0.012);
       } else {
-        const stemLin = Math.pow(10.0, Math.max(-24, Math.min(12, telemetry.bsrnnStemGainsDb[s])) / 20.0);
+        const stemLin = Math.pow(
+          10.0,
+          Math.max(-24, Math.min(12, telemetry.bsrnnStemGainsDb[s])) / 20.0
+        );
         sg.gain.setTargetAtTime(stemLin * trkGain, now, 0.012);
       }
     }
 
-    // 4. Update iZotope Ozone 12 12AX7 Tube WaveShaper, FL26 Native FX & Brickwall Maximizer
-    const avgDrivePct = telemetry.ozone12ExciterBypass
-      ? 0
-      : telemetry.ozone12ExciterDrivesPct[0] * 0.22 +
-        telemetry.ozone12ExciterDrivesPct[1] * 0.25 +
-        telemetry.ozone12ExciterDrivesPct[2] * 0.30 +
-        telemetry.ozone12ExciterDrivesPct[3] * 0.23;
-    const softClipBoost = telemetry.ozone12SoftClipEnabled ? telemetry.ozone12SoftClipMix * 25.0 : 0.0;
-    const fl26FxBoost = telemetry.fl26SelectedFxPreset.includes('Maximum loudness') ||
-      telemetry.fl26SelectedFxPreset.includes('Pop (heavy)')
-      ? 14.0
-      : telemetry.fl26SelectedFxPreset.includes('Soundgoodizer')
-        ? 10.0
-        : 0.0;
-    const driveSig = Math.round(avgDrivePct + softClipBoost + fl26FxBoost);
-    if (this.ozoneWaveShaper && driveSig !== this.lastDriveSignature) {
-      this.lastDriveSignature = driveSig;
-      this.ozoneWaveShaper.curve = this.build12AX7SaturationCurve(driveSig);
-    }
-
-    const allStemsMuted = [0, 1, 2, 3].every((idx) => !isStemActive(idx));
-    const proq4OutTrimDb = telemetry.proq4Bypass ? 0.0 : (telemetry.proq4OutputLevelDb ?? 0.0);
-    const autoGainCompDb =
-      (telemetry.proq4AutoGain && activeBandCount > 0
-        ? Math.max(-6.0, Math.min(6.0, (-netEqDbSum / activeBandCount) * 0.35))
-        : 0.0) + proq4OutTrimDb;
-
-    if (this.ozonePreGain && this.ozoneCompressor && this.ozoneCeilingGain) {
-      if (allStemsMuted) {
-        this.ozonePreGain.gain.setTargetAtTime(0.0, now, 0.015);
-      } else if (telemetry.ozone12MaximizerBypass) {
-        const compLin = Math.pow(10, autoGainCompDb / 20);
-        this.ozonePreGain.gain.setTargetAtTime(compLin, now, 0.015);
-        this.ozoneCompressor.threshold.setTargetAtTime(0.0, now, 0.015);
-        this.ozoneCeilingGain.gain.setTargetAtTime(1.0, now, 0.015);
-      } else {
-        const totalGainDb = telemetry.ozone12GainDb * 0.45 + autoGainCompDb;
-        const gainLin = Math.pow(10, Math.max(-12, Math.min(14, totalGainDb)) / 20);
-        const ceilLin = Math.pow(10, Math.max(-12, Math.min(0, telemetry.ozone12CeilingDbtp)) / 20);
-        this.ozonePreGain.gain.setTargetAtTime(gainLin, now, 0.015);
-        this.ozoneCompressor.threshold.setTargetAtTime(
-          Math.max(-24, Math.min(-0.5, telemetry.ozone12CeilingDbtp - telemetry.ozone12GainDb * 0.6)),
-          now,
-          0.015
-        );
-        this.ozoneCeilingGain.gain.setTargetAtTime(ceilLin, now, 0.015);
-      }
-    }
-
-    // 5. Update Master Speaker Volume & Mute
     if (this.masterSpeakerGain) {
       const masterTrk = telemetry.mixerTracks[0];
       const masterTrkGain = masterTrk?.muted ? 0.0 : (masterTrk?.gainLinear ?? 1.0);
@@ -546,29 +213,14 @@ export class RealtimeSpeakerEngine {
     }
   }
 
-  private build12AX7SaturationCurve(driveAmountPct: number): Float32Array<ArrayBuffer> {
-    const samples = 2048;
-    const curve = new Float32Array(new ArrayBuffer(samples * 4));
-    const k = Math.max(0.05, (driveAmountPct / 100.0) * 2.4);
-    const norm = 1.0 / Math.tanh(k);
-    for (let i = 0; i < samples; i++) {
-      const x = (i * 2) / (samples - 1) - 1;
-      // Asymmetric 12AX7 triode tube transfer characteristic
-      const asym = x + 0.06 * x * x * (driveAmountPct / 100.0);
-      curve[i] = Math.max(-1.0, Math.min(1.0, Math.tanh(k * asym) * norm));
-    }
-    return curve;
-  }
-
   private isCustomOrStemsMode(mode: AudioSourceMode): boolean {
     return mode === 'customFile' || mode === 'stems4';
   }
 
-  /**
-   * Starts or pauses real-time speaker output when the user clicks `▶ Play` or `⏸ Pause`.
-   */
   setPlaying(playing: boolean, telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
+    if (isDesktopTauriRuntime()) return;
+
     if (playing) {
       const ctx = this.ensureAudioGraph(telemetry);
       if (!ctx) return;
@@ -585,11 +237,10 @@ export class RealtimeSpeakerEngine {
     }
   }
 
-  /**
-   * Seeks transport position (e.g. `⏮ Reset` to `0, 0`).
-   */
   seek(samplePos: number, _ppqTick: number, telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
+    if (isDesktopTauriRuntime()) return;
+
     if (samplePos <= 0) {
       this.currentStep16th = 0;
       this.customPausedOffsetSec = 0;
@@ -602,7 +253,8 @@ export class RealtimeSpeakerEngine {
 
   private startPlaybackLoop(telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
-    if (!this.ctx) return;
+    if (isDesktopTauriRuntime() || !this.ctx) return;
+
     if (this.isCustomOrStemsMode(telemetry.audioSourceMode) && this.customAudioBuffer) {
       this.stopSequencerTimer();
       if (!this.isCustomPlaying) {
@@ -626,7 +278,8 @@ export class RealtimeSpeakerEngine {
     if (this.isCustomPlaying && this.ctx && this.customAudioBuffer) {
       const elapsed = this.ctx.currentTime - this.customStartedAtCtxTime;
       this.customPausedOffsetSec =
-        (this.customPausedOffsetSec + Math.max(0, elapsed)) % Math.max(0.01, this.customAudioBuffer.duration);
+        (this.customPausedOffsetSec + Math.max(0, elapsed)) %
+        Math.max(0.01, this.customAudioBuffer.duration);
     }
     this.stopCustomBufferNode();
   }
@@ -640,11 +293,10 @@ export class RealtimeSpeakerEngine {
   }
 
   private startCustomBufferNode(): void {
-    if (!this.ctx || !this.sourceBus || !this.customAudioBuffer) return;
+    if (isDesktopTauriRuntime() || !this.ctx || !this.sourceBus || !this.customAudioBuffer) return;
     this.stopCustomBufferNode();
     const offset = this.customPausedOffsetSec % Math.max(0.01, this.customAudioBuffer.duration);
 
-    // If UVR5 separated 4 stems are active (`stems4`), play all 4 stems in sample-accurate sync through per-stem GainNodes
     const hasSeparatedStems =
       this.latestTelemetry?.audioSourceMode === 'stems4' &&
       this.uvr5StemBuffers.every((b) => b !== null);
@@ -703,21 +355,33 @@ export class RealtimeSpeakerEngine {
   }
 
   /**
-   * Decodes a user-selected audio file (`.wav`, `.mp3`, `.flac`, `.ogg`) and plays it through the live DSP chain.
+   * Decodes a browser `File` object:
+   * - In Tauri Desktop (fallback only when `File.path` is unavailable): uses a transient
+   *   `OfflineAudioContext` so NO Windows audio endpoint / Audiosrv session is ever opened!
+   * - In Standalone Browser: decodes and queues on the uncolored raw PCM fallback graph.
    */
   async loadCustomAudioFile(file: File, telemetry: DawTelemetryView): Promise<boolean> {
     const arrayBuf = await file.arrayBuffer();
+    if (isDesktopTauriRuntime()) {
+      if (typeof OfflineAudioContext === 'undefined') return false;
+      try {
+        const offline = new OfflineAudioContext(2, 1, 48000);
+        this.customAudioBuffer = await offline.decodeAudioData(arrayBuf.slice(0));
+        return true;
+      } catch {
+        return false;
+      }
+    }
     return this.loadCustomAudioArrayBuffer(arrayBuf, telemetry);
   }
 
-  /**
-   * Decodes a raw binary WAV/audio `ArrayBuffer` (e.g. fetched directly from Rust `symphonia`
-   * native decoder without JSON serialization) and plays it through the live DSP chain.
-   */
   async loadCustomAudioArrayBuffer(
     audioBytes: ArrayBuffer,
     telemetry: DawTelemetryView
   ): Promise<boolean> {
+    if (isDesktopTauriRuntime()) {
+      return false;
+    }
     const ctx = this.ensureAudioGraph(telemetry);
     if (!ctx) return false;
     if (ctx.state === 'suspended') {
@@ -739,11 +403,11 @@ export class RealtimeSpeakerEngine {
     }
   }
 
-  /**
-   * Returns the full-length stereo Float32Array PCM buffers and sample rate of the currently loaded custom audio file
-   * so it can be uploaded to the Rust audio engine without any duration truncation.
-   */
-  getCustomAudioPcmAndSampleRate(): { left: Float32Array; right: Float32Array; sampleRate: number } | null {
+  getCustomAudioPcmAndSampleRate(): {
+    left: Float32Array;
+    right: Float32Array;
+    sampleRate: number;
+  } | null {
     if (!this.customAudioBuffer || this.customAudioBuffer.length === 0) {
       return null;
     }
@@ -759,15 +423,11 @@ export class RealtimeSpeakerEngine {
     };
   }
 
-  /**
-   * Decodes the 4 separated UVR5 stem `.wav` ArrayBuffers (`[Vocals, Drums, Bass, Other]`)
-   * and switches custom file playback to synchronized 4-stem playback.
-   */
   async loadUvr5SeparatedStems(
     stemWavBuffers: ArrayBuffer[],
     telemetry: DawTelemetryView
   ): Promise<boolean> {
-    if (stemWavBuffers.length < 4) return false;
+    if (isDesktopTauriRuntime() || stemWavBuffers.length < 4) return false;
     const ctx = this.ensureAudioGraph(telemetry);
     if (!ctx) return false;
     try {
@@ -794,13 +454,11 @@ export class RealtimeSpeakerEngine {
     }
   }
 
-  /**
-   * Decodes real FL Studio 26 `.wav` sample kit voices fetched from the Tauri backend.
-   */
   async loadFl26KitVoiceBuffers(
     wavBuffers: ArrayBuffer[],
     telemetry: DawTelemetryView
   ): Promise<void> {
+    if (isDesktopTauriRuntime()) return;
     this.pendingFl26RawWavs = wavBuffers;
     const ctx = this.ctx ?? this.ensureAudioGraph(telemetry);
     if (!ctx) return;
@@ -808,8 +466,10 @@ export class RealtimeSpeakerEngine {
   }
 
   /**
-   * Computes a genuine 80-band log-Mel spectrum (`20 Hz .. 20 kHz` triangular Mel filterbank)
-   * from the currently loaded `customAudioBuffer` PCM, live `preAnalyser` FFT, or active Piano Roll pattern.
+   * Computes an 80-band log-Mel spectrum (`20 Hz .. 20 kHz`):
+   * - In Tauri Desktop: projects the genuine Rust 1024-bin `proq4PreDb` shared-memory spectrum
+   *   (while the Rust backend `cmd_run_ozone12_ai_master_assistant` also scans the full song PCM directly).
+   * - In Standalone Browser: computes from `customAudioBuffer` or `rawAnalyser`.
    */
   computeMel80FromAudio(telemetry?: DawTelemetryView): number[] {
     const melMin = 2595.0 * Math.log10(1.0 + 20.0 / 700.0);
@@ -820,8 +480,50 @@ export class RealtimeSpeakerEngine {
       melPtsHz[m] = 700.0 * (Math.pow(10.0, melVal / 2595.0) - 1.0);
     }
 
-    // 1. If a custom audio file is loaded, compute multi-window DFT across the entire song's PCM
+    // 1. In Tauri Desktop, read directly from the Rust engine's 1024-bin log spectrum (`proq4PreDb`)
+    if (telemetry && isDesktopTauriRuntime()) {
+      const pre = telemetry.proq4PreDb;
+      let maxDb = -120.0;
+      for (let i = 0; i < pre.length; i++) {
+        if (pre[i] > maxDb) maxDb = pre[i];
+      }
+      if (maxDb > -105.0) {
+        const mel80: number[] = new Array(80);
+        for (let m = 0; m < 80; m++) {
+          const fLeft = Math.max(20.0, melPtsHz[m]);
+          const fCenter = Math.max(20.0, melPtsHz[m + 1]);
+          const fRight = Math.min(20000.0, melPtsHz[m + 2]);
+          const kStart = Math.max(
+            0,
+            Math.floor((Math.log(fLeft / 20.0) / Math.log(1000.0)) * 1023.0)
+          );
+          const kEnd = Math.min(
+            1023,
+            Math.ceil((Math.log(Math.max(fLeft + 1.0, fRight) / 20.0) / Math.log(1000.0)) * 1023.0)
+          );
+          let weightedSum = 0.0;
+          let weightTotal = 0.0;
+          for (let k = kStart; k <= kEnd; k++) {
+            const fk = 20.0 * Math.pow(1000.0, k / 1023.0);
+            const w =
+              fk <= fCenter
+                ? (fk - fLeft) / Math.max(1.0, fCenter - fLeft)
+                : (fRight - fk) / Math.max(1.0, fRight - fCenter);
+            const cw = Math.max(0.05, w);
+            const dbVal = Number.isFinite(pre[k]) ? pre[k] : -100.0;
+            weightedSum += Math.pow(10.0, Math.max(-100.0, dbVal) / 10.0) * cw;
+            weightTotal += cw;
+          }
+          const avgPow = weightTotal > 0 ? weightedSum / weightTotal : 1e-9;
+          mel80[m] = Math.max(-85.0, Math.min(6.0, 10.0 * Math.log10(avgPow + 1e-10)));
+        }
+        return mel80;
+      }
+    }
+
+    // 2. Standalone browser custom buffer DFT
     if (
+      !isDesktopTauriRuntime() &&
       this.customAudioBuffer &&
       this.customAudioBuffer.length > 64 &&
       (!telemetry || this.isCustomOrStemsMode(telemetry.audioSourceMode))
@@ -874,66 +576,14 @@ export class RealtimeSpeakerEngine {
       return mel80;
     }
 
-    // 2. If live WebAudio preAnalyser has real FFT energy, project FFT bins onto the 80 triangular Mel filters
-    if (this.ctx && this.preAnalyser) {
-      this.preAnalyser.getFloatFrequencyData(this.fftPreBuf);
-      let maxBinDb = -120.0;
-      for (let i = 2; i < 128; i++) {
-        if (this.fftPreBuf[i] > maxBinDb) maxBinDb = this.fftPreBuf[i];
-      }
-      if (maxBinDb > -95.0) {
-        const binCount = this.fftPreBuf.length;
-        const nyquist = this.ctx.sampleRate * 0.5;
-        const mel80: number[] = new Array(80);
-        for (let m = 0; m < 80; m++) {
-          const fLeft = melPtsHz[m];
-          const fCenter = melPtsHz[m + 1];
-          const fRight = melPtsHz[m + 2];
-          let weightedSum = 0.0;
-          let weightTotal = 0.0;
-
-          const bStart = Math.max(1, Math.floor((fLeft / nyquist) * (binCount - 1)));
-          const bEnd = Math.min(binCount - 1, Math.ceil((fRight / nyquist) * (binCount - 1)));
-          for (let b = bStart; b <= bEnd; b++) {
-            const fBin = (b / (binCount - 1)) * nyquist;
-            const w =
-              fBin <= fCenter
-                ? (fBin - fLeft) / Math.max(1.0, fCenter - fLeft)
-                : (fRight - fBin) / Math.max(1.0, fRight - fCenter);
-            const clampedW = Math.max(0.05, w);
-            const dbVal = Number.isFinite(this.fftPreBuf[b]) ? this.fftPreBuf[b] : -100.0;
-            const linPow = Math.pow(10.0, Math.max(-100.0, dbVal) / 10.0);
-            weightedSum += linPow * clampedW;
-            weightTotal += clampedW;
-          }
-          const avgPow = weightTotal > 0 ? weightedSum / weightTotal : 1e-9;
-          mel80[m] = Math.max(-85.0, Math.min(6.0, 10.0 * Math.log10(avgPow + 1e-10)));
-        }
-        return mel80;
-      }
-    }
-
-    // 3. Otherwise derive the 80-band Mel profile from the active Piano Roll notes & FL26 Sample Kit
+    // 3. Harmonic profile from active Piano Roll pattern
     const mel80: number[] = new Array(80);
-    const kit = telemetry?.fl26SelectedSampleKit ?? '808 Studio Kit';
-    const is808 = kit.includes('808');
-    const is909 = kit.includes('909');
-    const isStrings = kit.includes('Strings');
-    const isSytrus = kit.includes('Sytrus');
     const pat =
       telemetry?.pianoRollPatterns.find((p) => p.patternId === telemetry.selectedPatternId) ??
       telemetry?.pianoRollPatterns[0];
-
     for (let m = 0; m < 80; m++) {
       const fCenter = melPtsHz[m + 1];
-      let energy = Math.pow(10.0, (-28.0 - 10.0 * (m / 79.0)) / 10.0);
-      if (is808 && fCenter >= 35 && fCenter <= 120) energy += 0.25;
-      if (is909 && ((fCenter >= 50 && fCenter <= 160) || (fCenter >= 6000 && fCenter <= 12000))) {
-        energy += 0.18;
-      }
-      if (isStrings && fCenter >= 220 && fCenter <= 3200) energy += 0.22;
-      if (isSytrus && fCenter >= 800 && fCenter <= 9500) energy += 0.24;
-
+      let energy = Math.pow(10.0, (-30.0 - 10.0 * (m / 79.0)) / 10.0);
       if (pat) {
         for (const note of pat.notes) {
           const f0 = this.midiToFreqHz(note.key, note.finePitchCents);
@@ -951,20 +601,15 @@ export class RealtimeSpeakerEngine {
     return mel80;
   }
 
-  /**
-   * Switches playback from a custom audio file back to the built-in FL Studio 26 Piano Roll & Drum sequencer.
-   */
   switchToPianoRollSource(telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
+    if (isDesktopTauriRuntime()) return;
     this.stopCustomBufferNode();
     if (telemetry.isPlaying) {
       this.startPlaybackLoop(telemetry);
     }
   }
 
-  /**
-   * Plays an immediate audition note through the live DSP chain when the user clicks or adds a note in the Piano Roll.
-   */
   auditionNote(
     telemetry: DawTelemetryView,
     key: number,
@@ -972,6 +617,7 @@ export class RealtimeSpeakerEngine {
     finePitchCents = 0.0,
     pan = 0.0
   ): void {
+    if (isDesktopTauriRuntime()) return;
     const ctx = this.ensureAudioGraph(telemetry);
     if (!ctx || !this.sourceBus) return;
     if (ctx.state === 'suspended') {
@@ -1004,6 +650,7 @@ export class RealtimeSpeakerEngine {
   tickSequencer(telemetry: DawTelemetryView): void {
     this.latestTelemetry = telemetry;
     if (
+      isDesktopTauriRuntime() ||
       !this.ctx ||
       !this.sourceBus ||
       !telemetry.isPlaying ||
@@ -1041,7 +688,6 @@ export class RealtimeSpeakerEngine {
     const stepEndTick = stepStartTick + 24;
     const kit = telemetry.fl26SelectedSampleKit;
 
-    // 1. Trigger Piano Roll Pattern Notes (with FL Studio 26 Slide / Portamento support)
     for (const pat of telemetry.pianoRollPatterns) {
       const clip = telemetry.playlistClips.find(
         (c) => c.kind === 'Pattern' && c.sourceId === pat.patternId
@@ -1070,22 +716,18 @@ export class RealtimeSpeakerEngine {
       }
     }
 
-    // 2. Trigger 808 / 909 Drum Sequencer matching `fl26SelectedSampleKit`
     const drumClip = telemetry.playlistClips.find((c) => c.trackRow === 2);
     const drumTrackGain = (telemetry.mixerTracks[2]?.gainLinear ?? 1.0) * (drumClip?.muted ? 0 : 1);
     if (drumTrackGain > 0.01) {
-      // Kick on 0, 6, 8, 12
       if (step16th === 0 || step16th === 6 || step16th === 8 || step16th === 12) {
         this.triggerKick(ctx, stepTime, kit, drumTrackGain * (step16th === 6 ? 0.78 : 0.95));
       }
-      // Snare / Clap on 4, 12
       if (step16th === 4 || step16th === 12) {
         this.triggerSnareOrClap(ctx, stepTime, kit, drumTrackGain * 0.85);
       }
-      // Hi-Hat on even steps + trap roll on 14, 15
       if (step16th % 2 === 0 || step16th === 15) {
         const isOpenHat = step16th === 2 || step16th === 10;
-        this.triggerHiHat(ctx, stepTime, isOpenHat, drumTrackGain * (isOpenHat ? 0.42 : 0.30));
+        this.triggerHiHat(ctx, stepTime, isOpenHat, drumTrackGain * (isOpenHat ? 0.42 : 0.3));
       }
     }
   }
@@ -1120,7 +762,7 @@ export class RealtimeSpeakerEngine {
           );
           return;
         } catch {
-          // Fall through to normal note trigger if voice expired
+          // Fall through
         }
       }
     }
@@ -1157,7 +799,6 @@ export class RealtimeSpeakerEngine {
     const isStrings = kit.includes('Strings');
     const isSytrus = kit.includes('Sytrus');
 
-    // Layer real decoded FL26 .wav sample when Symphonic Strings or Sample Kit buffers are loaded
     if (isStrings && this.fl26KitVoiceBuffers.length > 0) {
       const sampleBuf =
         key >= 60 && this.fl26KitVoiceBuffers.length > 1
@@ -1182,11 +823,10 @@ export class RealtimeSpeakerEngine {
 
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
-    const filter = ctx.createBiquadFilter();
     const env = ctx.createGain();
     const panner = ctx.createStereoPanner();
 
-    osc1.type = isBass ? 'triangle' : isStrings ? 'sawtooth' : 'sawtooth';
+    osc1.type = isBass ? 'triangle' : 'sawtooth';
     osc2.type = isBass ? 'sine' : isSytrus ? 'square' : 'triangle';
 
     osc1.frequency.setValueAtTime(freq, startTime);
@@ -1203,28 +843,17 @@ export class RealtimeSpeakerEngine {
       );
     }
 
-    filter.type = 'lowpass';
-    const baseCutoff = isBass ? 380 : isStrings ? 2800 : isSytrus ? 5400 : 3800;
-    filter.frequency.setValueAtTime(baseCutoff * 1.4, startTime);
-    filter.frequency.exponentialRampToValueAtTime(
-      Math.max(120, baseCutoff * 0.65),
-      startTime + durationSec
-    );
-    filter.Q.value = isBass ? 2.2 : 1.8;
-
-    const peakGain = Math.max(0.01, Math.min(0.35, velocity * (isBass ? 0.28 : 0.18)));
+    const peakGain = Math.max(0.01, Math.min(0.3, velocity * (isBass ? 0.24 : 0.15)));
     const attack = isStrings ? 0.045 : 0.008;
     const stopTime = startTime + durationSec + 0.04;
 
     env.gain.setValueAtTime(0.0001, startTime);
     env.gain.linearRampToValueAtTime(peakGain, startTime + attack);
     env.gain.exponentialRampToValueAtTime(0.0001, stopTime);
-
     panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), startTime);
 
-    osc1.connect(filter);
-    osc2.connect(filter);
-    filter.connect(env);
+    osc1.connect(env);
+    osc2.connect(env);
     env.connect(panner);
     panner.connect(this.sourceBus);
 
@@ -1254,13 +883,13 @@ export class RealtimeSpeakerEngine {
       src.connect(g);
       g.connect(this.sourceBus);
       src.start(startTime);
+      return;
     }
 
     const is909 = kit.includes('909');
     const osc = ctx.createOscillator();
     const env = ctx.createGain();
     osc.type = 'sine';
-
     const startPitch = is909 ? 175 : 145;
     const subPitch = is909 ? 52 : 42;
     const decay = is909 ? 0.24 : 0.36;
@@ -1296,39 +925,18 @@ export class RealtimeSpeakerEngine {
       src.connect(g);
       g.connect(this.sourceBus);
       src.start(startTime);
+      return;
     }
 
-    // Body tone
-    const bodyOsc = ctx.createOscillator();
-    const bodyEnv = ctx.createGain();
-    bodyOsc.type = 'triangle';
-    bodyOsc.frequency.setValueAtTime(kit.includes('Skipper') ? 220 : 185, startTime);
-    bodyOsc.frequency.exponentialRampToValueAtTime(110, startTime + 0.09);
-
-    bodyEnv.gain.setValueAtTime(0.22 * gainScale, startTime);
-    bodyEnv.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.11);
-    bodyOsc.connect(bodyEnv);
-    bodyEnv.connect(this.sourceBus);
-    bodyOsc.start(startTime);
-    bodyOsc.stop(startTime + 0.12);
-
-    // Crispy snare wires / clap noise
     const noiseSrc = ctx.createBufferSource();
     noiseSrc.buffer = this.noiseBuffer;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(2400, startTime);
-    bp.Q.setValueAtTime(1.1, startTime);
-
     const noiseEnv = ctx.createGain();
-    noiseEnv.gain.setValueAtTime(0.24 * gainScale, startTime);
-    noiseEnv.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.16);
-
-    noiseSrc.connect(bp);
-    bp.connect(noiseEnv);
+    noiseEnv.gain.setValueAtTime(0.22 * gainScale, startTime);
+    noiseEnv.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.14);
+    noiseSrc.connect(noiseEnv);
     noiseEnv.connect(this.sourceBus);
     noiseSrc.start(startTime);
-    noiseSrc.stop(startTime + 0.17);
+    noiseSrc.stop(startTime + 0.15);
   }
 
   private triggerHiHat(
@@ -1348,44 +956,43 @@ export class RealtimeSpeakerEngine {
         src.connect(g);
         g.connect(this.sourceBus);
         src.start(startTime);
+        return;
       }
     }
 
     const noiseSrc = ctx.createBufferSource();
     noiseSrc.buffer = this.noiseBuffer;
-
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.setValueAtTime(7500, startTime);
-
     const env = ctx.createGain();
     const dur = openHat ? 0.18 : 0.045;
-    env.gain.setValueAtTime(0.18 * gainScale, startTime);
+    env.gain.setValueAtTime(0.14 * gainScale, startTime);
     env.gain.exponentialRampToValueAtTime(0.0001, startTime + dur);
-
-    noiseSrc.connect(hp);
-    hp.connect(env);
+    noiseSrc.connect(env);
     env.connect(this.sourceBus);
     noiseSrc.start(startTime);
     noiseSrc.stop(startTime + dur + 0.01);
   }
 
   /**
-   * Samples the real-time Pre-EQ and Post-EQ `AnalyserNode`s (2048-pt FFT) and maps them onto
-   * the 1024 logarithmic frequency bins (`20 Hz .. 20 kHz`) when the WebAudio graph is running.
+   * Standalone pure-browser raw FFT reader ONLY.
+   * Always returns `false` inside Tauri Desktop so `DawTelemetryView` displays 100% authentic
+   * Rust 128 KB `VisualTelemetryFrame` spectrum & reduction telemetry without browser blending!
    */
   readPrePostSpectrumDb(preOut1024: Float32Array, postOut1024: Float32Array): boolean {
-    if (!this.ctx || this.ctx.state !== 'running' || !this.preAnalyser || !this.postAnalyser) {
+    if (
+      isDesktopTauriRuntime() ||
+      !this.ctx ||
+      this.ctx.state !== 'running' ||
+      !this.rawAnalyser
+    ) {
       return false;
     }
-    this.preAnalyser.getFloatFrequencyData(this.fftPreBuf);
-    this.postAnalyser.getFloatFrequencyData(this.fftPostBuf);
+    this.rawAnalyser.getFloatFrequencyData(this.fftRawBuf);
 
-    const binCount = this.fftPreBuf.length;
+    const binCount = this.fftRawBuf.length;
     const nyquist = this.ctx.sampleRate * 0.5;
     let hasSignal = false;
     for (let i = 4; i < 64; i++) {
-      if (this.fftPreBuf[i] > -95.0) {
+      if (this.fftRawBuf[i] > -95.0) {
         hasSignal = true;
         break;
       }
@@ -1400,10 +1007,10 @@ export class RealtimeSpeakerEngine {
       const idx1 = Math.min(binCount - 1, idx0 + 1);
       const frac = exactIdx - idx0;
 
-      const preVal = this.fftPreBuf[idx0] * (1 - frac) + this.fftPreBuf[idx1] * frac;
-      const postVal = this.fftPostBuf[idx0] * (1 - frac) + this.fftPostBuf[idx1] * frac;
-      preOut1024[k] = Number.isFinite(preVal) ? Math.max(-120.0, preVal) : -120.0;
-      postOut1024[k] = Number.isFinite(postVal) ? Math.max(-120.0, postVal) : -120.0;
+      const rawVal = this.fftRawBuf[idx0] * (1 - frac) + this.fftRawBuf[idx1] * frac;
+      const clamped = Number.isFinite(rawVal) ? Math.max(-120.0, rawVal) : -120.0;
+      preOut1024[k] = clamped;
+      postOut1024[k] = clamped;
     }
     return true;
   }

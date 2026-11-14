@@ -12,6 +12,8 @@
 export type WorkspaceTabKey =
   | 'all'
   | 'playlist'
+  | 'vocal'
+  | 'plugins'
   | 'mixer'
   | 'proq4'
   | 'soothe3'
@@ -36,7 +38,7 @@ export const GUIDES: Record<string, Guide> = {
       'ToneForge Studio gom 5 phần mềm phòng thu phức tạp nhất thế giới (UVR5 tách nhạc, FL Studio 26 soạn nhạc/trộn âm, FabFilter Pro-Q 4 lọc tần số, Soothe3 khử chói và iZotope Ozone 12 nâng âm lượng AI) vào chung một màn hình duy nhất, đồng thời tự động tận dụng Card đồ họa rời (CUDA 12 / DirectML) để xử lý AI cực nhanh. Anh không cần tự nối dây hay cài từng plugin rời — mọi thứ đã được nối sẵn và có nút chọn Preset chỉ việc bấm là nghe hay.',
     steps: [
       'Bấm nút "▶ Play" ở góc trên bên trái để phát âm thanh thật ra Loa máy tính (kèm sóng phổ nhấp nhô 120Hz). Bấm "⏸ Pause" để dừng hẳn nhạc và tắt đường sóng nhấp nhô (trên màn hình Pro-Q 4 sẽ chỉ còn lại đúng đường kẻ EQ màu vàng đứng yên). Huy hiệu "⚡ CUDA 12" cạnh tên app cho biết card đồ họa rời đang tăng tốc AI.',
-      'Muốn đưa bài hát có sẵn trong máy vào nghe và chỉnh trọn bài: bấm nút "📂 Mở nhạc từ máy (.wav/.mp3/.flac)" ngay trên thanh trên cùng (hỗ trợ .wav, .mp3, .flac, .ogg, .m4a, .aac, .aiff không giới hạn độ dài). Khi muốn quay lại nghe bộ trống mẫu nội bộ, bấm nút "🎹 Chuyển về Nhạc mẫu Piano Roll".',
+      'Muốn đưa bài hát có sẵn trong máy vào nghe và chỉnh trọn bài: bấm nút "📂 Mở nhạc từ máy (.wav/.mp3/.flac)" ngay trên thanh trên cùng (hỗ trợ .wav, .mp3, .flac, .ogg, .m4a, .aac, .aiff không giới hạn độ dài). Khi muốn đóng bài hát đang nạp (vẫn giữ nguyên chuỗi FX Mixer) để quay về làm việc với Piano Roll & Playlist, bấm nút "✕ Đóng file nhạc (Về Piano Roll / Playlist)".',
       'Nếu muốn đổi giai điệu hoặc bộ trống/nhạc cụ: ở "Playlist & Piano Roll", chọn "FL26 Sample & Synth Kit" và "FL26 Piano Roll Score (.fsc)" (bấm vào từng nốt nhạc cũng sẽ kêu thử ngay cao độ nốt đó).',
       'Làm sạch và làm mượt tiếng bằng Preset có sẵn ở "Pro-Q 4" (kéo các chấm tròn 1..7 sẽ nghe tiếng nhạc đổi màu ngay tức thì) và "Soothe3" (chọn That Grammy balance preset).',
       'Cuối cùng: bấm "✨ AI Master Assistant (Auto-Match)" ở khung "Ozone 12 Console" để AI tự đo phổ bài nhạc và cân chỉnh âm lượng chuẩn quốc tế, rồi bấm "📁 Chọn thư mục" + "Export Studio WAV & Analyze LUFS/dBTP" ở cuối trang để lấy file .wav hoàn chỉnh.',
@@ -126,7 +128,7 @@ export const GUIDES: Record<string, Guide> = {
       'Đây là bàn trộn trung tâm (502-Track Mixer & Modular Patcher) nơi mọi giọng hát, trống, bass và nhạc cụ hội tụ về trước khi ra loa. ToneForge tích hợp hệ thống "5-Point APDC" tự động căn chỉnh độ trễ của mọi hiệu ứng và bảng sơ đồ dây nối Patcher trực quan có thể kéo-thả bằng chuột.',
     steps: [
       'Chọn nhóm kênh muốn xem bằng các nút "Tracks 0..31", "32..63"... ở góc phải trên. Kênh #0 là "Master" (kênh tổng của cả bài); các kênh #1..#4 mặc định nhận 4 nhánh âm thanh (Vocals, Drums, Bass, Other).',
-      'Bấm vào một ô kênh (ví dụ Track #1) rồi kéo thanh trượt trong ô đó để tăng/giảm âm lượng riêng cho kênh đó. Nhìn chỉ số màu xanh (dB) để biết độ lớn và dòng chữ vàng (smp) để xem số mẫu trễ đã được bù tự động.',
+      'Bấm vào một ô kênh (ví dụ Track #1) rồi kéo Fader (dB, nhấp đúp về 0 dB) để tăng/giảm âm lượng riêng cho kênh đó; thanh Pan nhỏ đẩy tiếng sang trái/phải (nhấp đúp về giữa "C"); nút "M" tắt tiếng kênh, nút "S" chỉ nghe riêng kênh đó. Dòng chữ vàng (smp) cho biết số mẫu trễ đã được bù tự động.',
       'Ở khung "10 FX Insert Slots & Routing": mở ô "FL26 Native FX Preset (.fst)" để nạp ngay hiệu ứng bản quyền của FL Studio 26 như "Maximus: Clear Master.fst", "Emphasis: Pop (heavy).fst", "Fruity Soft Clipper.fst", "Fruity Limiter: Ducking music behind voice.fst" hoặc "LuxeVerb: Shimmer Cathedral.fst".',
       'Nếu muốn gửi âm thanh từ kênh đang chọn sang kênh khác: nhập số kênh vào "Send to Track", tích "Sidechain Only" nếu chỉ gửi nhịp kích hoạt (nhạc tự nhỏ xuống nhường giọng hát), rồi bấm "Apply Route".',
       'Ở bảng sơ đồ "Modular Patcher Sub-DAG" phía dưới: kéo-thả các hộp hiệu ứng bằng chuột để xếp bố cục (hoặc bấm "⚡ Auto-Layout (Sugiyama)" để tự căn hàng đẹp); bấm nhãn "ON / BYP" trên hộp để bật/tắt nhanh hiệu ứng; bấm vào sợi dây cáp để chỉnh "Trọng số cáp", bấm "✕ Xóa Dây" hoặc chọn "Từ → Đến" + "+ Nối Dây".',
@@ -206,6 +208,50 @@ export const GUIDES: Record<string, Guide> = {
     handbookAnchor: {
       sectionId: 'khu-render',
       label: 'Giải thích từng chỉ số của Offline Render & Bounce',
+    },
+  },
+
+  vocal: {
+    title: 'Chỉnh phô giọng hát giữ nguyên màu giọng & Giãn nhịp (Pitcher RT & NewTone Editor)',
+    what:
+      'Khu vực này kết hợp 2 vũ khí chỉnh giọng hàng đầu của FL Studio 26: "Pitcher RT" tự động kéo nốt hát phô về đúng gam ngay lúc đang thu/nghe, và bảng đồ họa "NewTone" tách từng câu hát thành các thanh nốt (Note Blobs) để anh kéo cao độ, làm phẳng chỗ ngân chênh, dời nhịp hoặc dịch Formant mà không bao giờ bị méo thành "giọng sóc chuột" (Chipmunk).',
+    steps: [
+      'Ở khung trên "Pitcher Real-Time Auto-Correct": chọn tông bài hát (Root Key C..B + Scale Major/Minor/Pentatonic), kéo "Retune Speed" xuống 5–15ms nếu muốn hiệu ứng T-Pain/Pop hiện đại hoặc 35–80ms để tự nhiên, luôn giữ bật "True-Envelope Formant Preserve".',
+      'Ở khung dưới "NewTone Graphical Pitch & Time Editor": bấm "🔍 Phân tích Giọng hát (pYIN)" để AI tách giọng hát đang mở thành từng thanh nốt kèm đường chỉ cao độ thực tế.',
+      'Kéo thanh nốt Lên/Xuống để đổi nốt nhạc; chỉnh "Flatten Drift" để ép thẳng chỗ hát chênh; chỉnh "Vibrato" để tăng/giảm độ rung ngân; hoặc bấm "🧲 Snap All to Scale" để tự căn toàn bộ câu hát vào đúng gam chỉ với 1 cú nhấp.',
+      'Bấm "✂ Split Blob" nếu muốn cắt đôi một chữ ngân dài thành 2 nốt riêng, sau đó bấm "✅ Commit Edited Vocal to Track #1" để nạp bản giọng đã chỉnh sạch phô vào bàn trộn.',
+    ],
+    gotcha:
+      'Phụ âm gió ("s", "sh", "ch", tiếng lấy hơi) được bộ dò pYIN tự động nhận diện và giữ nguyên không dịch cao độ để giọng luôn tự nhiên. Đừng kéo "Formant Shift" quá ±4 semitones nếu không cố tình tạo hiệu ứng đổi giới tính giọng!',
+    next: {
+      tab: 'proq4',
+      label: 'Chỉnh chuẩn cao độ xong → Sang Pro-Q 4 để làm sáng giọng hát',
+    },
+    handbookAnchor: {
+      sectionId: 'khu-vocal',
+      label: 'Giải thích chi tiết Pitcher RT & NewTone Vocal Editor',
+    },
+  },
+
+  plugins: {
+    title: 'Nạp Plugin rời bên thứ 3 chuẩn quốc tế (Steinberg VST3 & CLAP 1.2 Host)',
+    what:
+      'Ngoài bộ công cụ tích hợp sẵn, ToneForge Studio v3 đóng vai trò bàn máy chủ (Plugin Host) thực thụ: tự động quét cách ly chống sập các plugin rời đuôi `.vst3` và `.clap` trong máy tính (như Serum, Vital, Kontakt, FabFilter, Valhalla...), nạp thẳng vào 502 kênh Mixer hoặc Channel Rack và mở giao diện cửa sổ gốc Win32 HWND của hãng.',
+    steps: [
+      'Bấm nút "🔍 Quét Plugin VST3 / CLAP (Crash-Isolated)" để trình quét độc lập dò tìm toàn bộ plugin cài trong máy mà không bao giờ làm treo DAW nếu gặp plugin lỗi.',
+      'Chọn kênh đích "Target Track (0..501)" và ô chèn "FX Slot (1..10)" (hoặc bật "Load as Synth Instrument" nếu nạp đàn ảo).',
+      'Bấm "⚡ Load into Slot" cạnh tên plugin trong danh sách (hoặc nạp trực tiếp đường dẫn file `.vst3` / `.clap` bất kỳ) — hệ thống 5-Point APDC sẽ tự động hỏi độ trễ của plugin để bù pha chính xác từng mẫu.',
+      'Bấm "🗔 Open Native GUI" để bật cửa sổ giao diện đồ họa gốc của plugin, hoặc kéo các thanh trượt Parameter tự động đồng bộ hai chiều ngay bên dưới.',
+    ],
+    gotcha:
+      'Nếu một plugin bên thứ 3 bị hỏng hoặc thiếu bản quyền iLok làm sập khi khởi tạo, ToneForge sẽ tự động đưa nó vào danh sách "Quarantine (Cách ly)" để bảo vệ an toàn tuyệt đối cho dự án đang làm.',
+    next: {
+      tab: 'mixer',
+      label: 'Đã nạp Plugin rời → Sang 502-Track Mixer kiểm tra bù trễ APDC',
+    },
+    handbookAnchor: {
+      sectionId: 'khu-plugins',
+      label: 'Giải thích trình chủ VST3 / CLAP & cơ chế cách ly chống sập',
     },
   },
 };

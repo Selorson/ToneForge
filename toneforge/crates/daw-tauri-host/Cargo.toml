@@ -16,6 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 daw-core-graph.workspace = true
+daw-plugin-host.workspace = true
+dsp-pitch-time.workspace = true
 dsp-proq4-eq.workspace = true
 dsp-soothe3-spectral.workspace = true
 dsp-ozone12-mastering.workspace = true
@@ -30,4 +32,6 @@ thiserror.workspace = true
 rfd.workspace = true
 symphonia.workspace = true
 rubato.workspace = true
+realfft.workspace = true
+rustfft.workspace = true
 

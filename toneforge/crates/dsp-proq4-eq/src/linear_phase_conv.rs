@@ -151,6 +151,42 @@ impl PartitionedTier {
         self.write_pos = 0;
     }
 
+    /// Number of `P`-sample partitions `ir_slice` occupies in this tier.
+    #[inline]
+    fn partitions_for(&self, ir_len: usize) -> usize {
+        ir_len.div_ceil(self.part_size).min(self.max_partitions)
+    }
+
+    /// Forward-FFTs partition `m` of `ir_slice` into `bank` (Zero Heap Allocation).
+    fn load_ir_partition(&mut self, bank: usize, ir_slice: &[f32], m: usize) {
+        let p = self.part_size;
+        let inv_fft = 1.0 / (self.fft_size as f32);
+        let start = m * p;
+        let end = (start + p).min(ir_slice.len());
+        self.fft_time_scratch.fill(0.0);
+        if start < end {
+            self.fft_time_scratch[..end - start].copy_from_slice(&ir_slice[start..end]);
+        }
+        let _ = self.r2c.process_with_scratch(
+            &mut self.fft_time_scratch,
+            &mut self.ir_spectra[bank][m],
+            &mut self.r2c_scratch,
+        );
+        for c in &mut self.ir_spectra[bank][m] {
+            *c *= inv_fft;
+        }
+    }
+
+    /// Completes a partition-by-partition load of `bank`: records the active partition count and
+    /// clears the unused tail partitions.
+    fn finish_ir_load(&mut self, bank: usize, ir_len: usize) {
+        let needed_parts = self.partitions_for(ir_len);
+        self.active_partitions[bank] = needed_parts;
+        for m in needed_parts..self.max_partitions {
+            self.ir_spectra[bank][m].fill(Complex32::new(0.0, 0.0));
+        }
+    }
+
     /// Precomputes the forward FFT of each `P`-sample partition from `ir_slice` (starting at `start_tap = P`)
     /// into `bank` (`0` or `1`) and immediately populates `out_block[ch][bank]` from the latest FDL slot
     /// with Zero Heap Allocation.
@@ -334,6 +370,34 @@ pub struct NonUniformPartitionedConvolver {
     synth_scratch: Vec<Complex32>,
     synth_time_buf: Vec<f32>,
     synth_window_buf: Vec<f32>,
+    /// Length of the Kaiser window currently cached in `synth_window_buf` (`0` = none).
+    window_cached_n: usize,
+    /// Resumable IR design state (amortised over audio blocks so the RT thread never spikes).
+    design: IrDesignState,
+}
+
+/// Progress of an in-flight linear-phase IR synthesis (`begin_ir_design` / `continue_ir_design`).
+#[derive(Clone, Copy, Debug, Default)]
+struct IrDesignState {
+    active: bool,
+    smooth: bool,
+    n: usize,
+    df: f64,
+    /// Next exact bin to evaluate (phase A).
+    next_bin: usize,
+    /// Last exact bin (`num_bins - 1` for `n <= 16384`, else `2048`).
+    exact_limit: usize,
+    /// Interpolated upper-band anchor walk (phase B, `n > 16384`).
+    anchor_k0: usize,
+    anchor_m0: f32,
+    step: usize,
+    /// Finalisation stage once every bin is known: `0` IFFT, `1` window + head/tier 0/1,
+    /// `2` tier 2, `3` tier 3, `4` refresh inactive-bank output blocks and start the crossfade.
+    finalize_stage: u8,
+    target_bank: usize,
+    /// Partition-level cursor for the staged tier loads (`tier`, `partition`).
+    load_tier: usize,
+    load_part: usize,
 }
 
 impl Default for NonUniformPartitionedConvolver {
@@ -397,6 +461,8 @@ impl NonUniformPartitionedConvolver {
             synth_scratch: vec![Complex32::new(0.0, 0.0); max_scratch],
             synth_time_buf: vec![0.0; alloc_len],
             synth_window_buf: vec![0.0; alloc_len],
+            window_cached_n: 0,
+            design: IrDesignState::default(),
         };
 
         // Initialize with a unity delta impulse at the center of a 4096-tap FIR (`tau = 2048`)
@@ -442,44 +508,55 @@ impl NonUniformPartitionedConvolver {
     }
 
     fn load_ir_into_bank(&mut self, bank: usize, fir_len: usize) {
+        for stage in 1..=3 {
+            self.load_ir_stage(bank, fir_len, stage);
+        }
+    }
+
+    /// Loads part of `synth_time_buf[..fir_len]` into `bank`: stage `1` = 64-tap head + tiers 0/1,
+    /// stage `2` = tier 2 (`4096..32768`), stage `3` = tier 3 (`32768..`).
+    fn load_ir_stage(&mut self, bank: usize, fir_len: usize, stage: u8) {
         let len = fir_len.min(self.max_fir_len).max(64);
         self.current_fir_len = len;
         let ir = &self.synth_time_buf[..len];
-
-        // 1. Direct 64-tap head `ir[0..64]`
-        self.head_taps[bank].fill(0.0);
-        let head_len = len.min(64);
-        self.head_taps[bank][..head_len].copy_from_slice(&ir[..head_len]);
-
-        // 2. Tier 0 (`P_0 = 64`): `ir[64 .. 512]`
-        if len > 64 {
-            let end = len.min(512);
-            self.tiers[0].load_ir_into_bank(bank, &ir[64..end]);
-        } else {
-            self.tiers[0].load_ir_into_bank(bank, &[]);
-        }
-
-        // 3. Tier 1 (`P_1 = 512`): `ir[512 .. 4096]`
-        if len > 512 {
-            let end = len.min(4096);
-            self.tiers[1].load_ir_into_bank(bank, &ir[512..end]);
-        } else {
-            self.tiers[1].load_ir_into_bank(bank, &[]);
-        }
-
-        // 4. Tier 2 (`P_2 = 4096`): `ir[4096 .. 32768]`
-        if len > 4096 {
-            let end = len.min(32768);
-            self.tiers[2].load_ir_into_bank(bank, &ir[4096..end]);
-        } else {
-            self.tiers[2].load_ir_into_bank(bank, &[]);
-        }
-
-        // 5. Tier 3 (`P_3 = 32768`): `ir[32768 .. len]`
-        if len > 32768 {
-            self.tiers[3].load_ir_into_bank(bank, &ir[32768..len]);
-        } else {
-            self.tiers[3].load_ir_into_bank(bank, &[]);
+        match stage {
+            1 => {
+                // Direct 64-tap head `ir[0..64]`
+                self.head_taps[bank].fill(0.0);
+                let head_len = len.min(64);
+                self.head_taps[bank][..head_len].copy_from_slice(&ir[..head_len]);
+                // Tier 0 (`P_0 = 64`): `ir[64 .. 512]`
+                if len > 64 {
+                    let end = len.min(512);
+                    self.tiers[0].load_ir_into_bank(bank, &ir[64..end]);
+                } else {
+                    self.tiers[0].load_ir_into_bank(bank, &[]);
+                }
+                // Tier 1 (`P_1 = 512`): `ir[512 .. 4096]`
+                if len > 512 {
+                    let end = len.min(4096);
+                    self.tiers[1].load_ir_into_bank(bank, &ir[512..end]);
+                } else {
+                    self.tiers[1].load_ir_into_bank(bank, &[]);
+                }
+            }
+            2 => {
+                // Tier 2 (`P_2 = 4096`): `ir[4096 .. 32768]`
+                if len > 4096 {
+                    let end = len.min(32768);
+                    self.tiers[2].load_ir_into_bank(bank, &ir[4096..end]);
+                } else {
+                    self.tiers[2].load_ir_into_bank(bank, &[]);
+                }
+            }
+            _ => {
+                // Tier 3 (`P_3 = 32768`): `ir[32768 .. len]`
+                if len > 32768 {
+                    self.tiers[3].load_ir_into_bank(bank, &ir[32768..len]);
+                } else {
+                    self.tiers[3].load_ir_into_bank(bank, &[]);
+                }
+            }
         }
     }
 
@@ -515,10 +592,16 @@ impl NonUniformPartitionedConvolver {
         fir_len: usize,
         sample_rate: f64,
         smooth_crossfade: bool,
-        mut mag_fn: F,
+        mag_fn: F,
     ) where
         F: FnMut(f64) -> f32,
     {
+        self.begin_ir_design(fir_len, sample_rate, smooth_crossfade);
+        let _ = self.continue_ir_design(usize::MAX, mag_fn);
+    }
+
+    /// Starts (or restarts) a linear-phase IR synthesis without evaluating any bins yet.
+    pub fn begin_ir_design(&mut self, fir_len: usize, sample_rate: f64, smooth_crossfade: bool) {
         let clamped_req = fir_len.min(self.max_fir_len);
         let n = match clamped_req {
             0..=6144 => 4096,
@@ -528,100 +611,212 @@ impl NonUniformPartitionedConvolver {
             49153..=98304 => 65536,
             _ => 131072,
         };
+        let num_bins = n / 2 + 1;
+        self.design = IrDesignState {
+            active: true,
+            smooth: smooth_crossfade,
+            n,
+            df: sample_rate / (n as f64),
+            next_bin: 0,
+            exact_limit: if n <= 16384 {
+                num_bins - 1
+            } else {
+                2048.min(num_bins - 1)
+            },
+            anchor_k0: 0,
+            anchor_m0: 0.0,
+            step: (n / 8192).max(2),
+            finalize_stage: 0,
+            target_bank: 0,
+            load_tier: 0,
+            load_part: 0,
+        };
+    }
+
+    /// `true` while an IR design started by `begin_ir_design` has not been loaded yet.
+    #[inline]
+    pub fn ir_design_pending(&self) -> bool {
+        self.design.active
+    }
+
+    /// `true` once a valid IR has been loaded at least once.
+    #[inline]
+    pub fn is_primed(&self) -> bool {
+        self.is_primed
+    }
+
+    /// Advances the pending IR design by at most `max_evals` magnitude evaluations. When every bin
+    /// is known, runs the inverse FFT, applies the cached 60 dB Kaiser window and loads the IR (with a
+    /// dual-bank crossfade when requested). Returns `true` when the new IR has been loaded.
+    /// Zero Heap Allocation; bounded work per call so it is safe on the real-time thread.
+    pub fn continue_ir_design<F>(&mut self, max_evals: usize, mut mag_fn: F) -> bool
+    where
+        F: FnMut(f64) -> f32,
+    {
+        if !self.design.active {
+            return false;
+        }
+        let d = self.design;
+        let n = d.n;
         let half = n / 2;
         let num_bins = half + 1;
         let inv_n = 1.0 / (n as f32);
-        let df = sample_rate / (n as f64);
+        let mut evals = 0usize;
 
-        if n <= 16384 {
-            for k in 0..num_bins {
-                let freq_hz = (k as f64) * df;
-                let mag = mag_fn(freq_hz) * inv_n;
-                // Apply linear-phase shift `e^{-j * pi * k}` = `(-1)^k` so impulse center is at `tau = N / 2`
-                let sign = if (k & 1) == 0 { 1.0 } else { -1.0 };
-                self.synth_spec_buf[k] = Complex32::new(mag * sign, 0.0);
+        // Phase A: exact per-bin evaluation.
+        let mut k = d.next_bin;
+        while k <= d.exact_limit && evals < max_evals {
+            let mag = mag_fn((k as f64) * d.df) * inv_n;
+            // Linear-phase shift `e^{-j * pi * k}` = `(-1)^k` centres the impulse at `tau = N / 2`
+            let sign = if (k & 1) == 0 { 1.0 } else { -1.0 };
+            self.synth_spec_buf[k] = Complex32::new(mag * sign, 0.0);
+            k += 1;
+            evals += 1;
+        }
+        self.design.next_bin = k;
+        if k <= d.exact_limit {
+            return false;
+        }
+
+        // Phase B (`n > 16384`): piecewise-linear interpolation between sparse anchors above 2048 bins.
+        if d.exact_limit < num_bins - 1 {
+            if self.design.anchor_k0 == 0 {
+                self.design.anchor_k0 = d.exact_limit;
+                self.design.anchor_m0 = self.synth_spec_buf[d.exact_limit].re.abs();
             }
-        } else {
-            // Exact per-bin evaluation for the lowest 2048 bins (sub-bass / low-mid precision),
-            // and piecewise linear interpolation over small stride steps in the upper bins.
-            let exact_limit = 2048.min(num_bins - 1);
-            for k in 0..=exact_limit {
-                let freq_hz = (k as f64) * df;
-                let mag = mag_fn(freq_hz) * inv_n;
-                let sign = if (k & 1) == 0 { 1.0 } else { -1.0 };
-                self.synth_spec_buf[k] = Complex32::new(mag * sign, 0.0);
-            }
-            let step = (n / 8192).max(2);
-            let mut k0 = exact_limit;
-            let mut m0 = self.synth_spec_buf[k0].re.abs();
-            while k0 < half {
-                let k1 = (k0 + step).min(half);
-                let m1 = mag_fn((k1 as f64) * df) * inv_n;
+            let mut k0 = self.design.anchor_k0;
+            let mut m0 = self.design.anchor_m0;
+            while k0 < half && evals < max_evals {
+                let k1 = (k0 + d.step).min(half);
+                let m1 = mag_fn((k1 as f64) * d.df) * inv_n;
+                evals += 1;
                 let span = (k1 - k0) as f32;
-                for k in (k0 + 1)..=k1 {
-                    let t = ((k - k0) as f32) / span;
+                for kk in (k0 + 1)..=k1 {
+                    let t = ((kk - k0) as f32) / span;
                     let mag = m0 + t * (m1 - m0);
-                    let sign = if (k & 1) == 0 { 1.0 } else { -1.0 };
-                    self.synth_spec_buf[k] = Complex32::new(mag * sign, 0.0);
+                    let sign = if (kk & 1) == 0 { 1.0 } else { -1.0 };
+                    self.synth_spec_buf[kk] = Complex32::new(mag * sign, 0.0);
                 }
                 k0 = k1;
                 m0 = m1;
             }
-        }
-
-        let spec = &mut self.synth_spec_buf[..num_bins];
-        let time_out = &mut self.synth_time_buf[..n];
-        match n {
-            4096 => {
-                let _ = self
-                    .synth_c2r_4096
-                    .process_with_scratch(spec, time_out, &mut self.synth_scratch);
-            }
-            8192 => {
-                let _ = self
-                    .synth_c2r_8192
-                    .process_with_scratch(spec, time_out, &mut self.synth_scratch);
-            }
-            16384 => {
-                let _ = self
-                    .synth_c2r_16384
-                    .process_with_scratch(spec, time_out, &mut self.synth_scratch);
-            }
-            32768 => {
-                let _ = self
-                    .synth_c2r_32768
-                    .process_with_scratch(spec, time_out, &mut self.synth_scratch);
-            }
-            65536 => {
-                let _ = self
-                    .synth_c2r_65536
-                    .process_with_scratch(spec, time_out, &mut self.synth_scratch);
-            }
-            _ => {
-                let _ = self
-                    .synth_c2r_131072
-                    .process_with_scratch(spec, time_out, &mut self.synth_scratch);
+            self.design.anchor_k0 = k0;
+            self.design.anchor_m0 = m0;
+            if k0 < half {
+                return false;
             }
         }
 
-        // Apply 60.0 dB Kaiser window (`0x180232D00`)
-        compute_kaiser_60db_window(&mut self.synth_window_buf[..n]);
-        for i in 0..n {
-            self.synth_time_buf[i] *= self.synth_window_buf[i];
-        }
-
-        if !self.is_primed || !smooth_crossfade {
-            self.load_ir_into_bank(self.active_bank, n);
-            self.crossfade_remaining = 0;
-            self.is_primed = true;
-        } else {
-            if self.crossfade_remaining > 0 {
-                self.active_bank = 1 - self.active_bank;
+        // Finalise in bounded stages (one stage per call unless running synchronously):
+        // inverse FFT -> Kaiser window -> per-tier partition FFTs into the target bank -> crossfade.
+        let synchronous = max_evals == usize::MAX;
+        loop {
+            match self.design.finalize_stage {
+                0 => {
+                    // Never overwrite the inactive bank while a previous crossfade still reads it.
+                    if self.is_primed && d.smooth && self.crossfade_remaining > 0 && !synchronous {
+                        return false;
+                    }
+                    if self.is_primed && d.smooth && self.crossfade_remaining > 0 {
+                        self.active_bank = 1 - self.active_bank;
+                        self.crossfade_remaining = 0;
+                    }
+                    let spec = &mut self.synth_spec_buf[..num_bins];
+                    let time_out = &mut self.synth_time_buf[..n];
+                    let plan = match n {
+                        4096 => &self.synth_c2r_4096,
+                        8192 => &self.synth_c2r_8192,
+                        16384 => &self.synth_c2r_16384,
+                        32768 => &self.synth_c2r_32768,
+                        65536 => &self.synth_c2r_65536,
+                        _ => &self.synth_c2r_131072,
+                    };
+                    let _ = plan.process_with_scratch(spec, time_out, &mut self.synth_scratch);
+                    self.design.target_bank = if !self.is_primed || !d.smooth {
+                        self.active_bank
+                    } else {
+                        1 - self.active_bank
+                    };
+                    self.design.finalize_stage = 1;
+                }
+                1 => {
+                    // 60.0 dB Kaiser window (`0x180232D00`), recomputed only when the length changes.
+                    if self.window_cached_n != n {
+                        compute_kaiser_60db_window(&mut self.synth_window_buf[..n]);
+                        self.window_cached_n = n;
+                    }
+                    for i in 0..n {
+                        self.synth_time_buf[i] *= self.synth_window_buf[i];
+                    }
+                    let bank = self.design.target_bank;
+                    let len = n.min(self.max_fir_len).max(64);
+                    self.current_fir_len = len;
+                    self.head_taps[bank].fill(0.0);
+                    let head_len = len.min(64);
+                    self.head_taps[bank][..head_len].copy_from_slice(&self.synth_time_buf[..head_len]);
+                    self.design.load_tier = 0;
+                    self.design.load_part = 0;
+                    self.design.finalize_stage = 2;
+                }
+                2 => {
+                    // Partition FFTs for tiers 0..3, bounded by an FFT-size budget per call.
+                    let bank = self.design.target_bank;
+                    let len = n.min(self.max_fir_len).max(64);
+                    const TIER_RANGES: [(usize, usize); 4] =
+                        [(64, 512), (512, 4096), (4096, 32768), (32768, usize::MAX)];
+                    let mut budget: usize = if synchronous { usize::MAX } else { 1 << 16 };
+                    while self.design.load_tier < 4 {
+                        let t = self.design.load_tier;
+                        let (lo, hi) = TIER_RANGES[t];
+                        let (lo, hi) = (lo.min(len), hi.min(len));
+                        let parts = self.tiers[t].partitions_for(hi - lo);
+                        if self.design.load_part < parts {
+                            let cost = self.tiers[t].fft_size;
+                            if cost > budget {
+                                break;
+                            }
+                            budget -= cost;
+                            let m = self.design.load_part;
+                            let ir = &self.synth_time_buf[lo..hi];
+                            self.tiers[t].load_ir_partition(bank, ir, m);
+                            self.design.load_part += 1;
+                        } else {
+                            self.tiers[t].finish_ir_load(bank, hi - lo);
+                            self.design.load_tier += 1;
+                            self.design.load_part = 0;
+                        }
+                    }
+                    if self.design.load_tier >= 4 {
+                        self.design.finalize_stage = 3;
+                    }
+                }
+                3 => {
+                    // Present output for the current P-block from the freshly loaded bank
+                    // (tiers 0..2 here, the 32768-partition tier in the final stage).
+                    let bank = self.design.target_bank;
+                    for t in 0..3 {
+                        self.tiers[t].recompute_current_out_block_for_bank(bank);
+                    }
+                    self.design.finalize_stage = 4;
+                }
+                _ => {
+                    let bank = self.design.target_bank;
+                    self.tiers[3].recompute_current_out_block_for_bank(bank);
+                    if !self.is_primed || !d.smooth {
+                        self.crossfade_remaining = 0;
+                        self.is_primed = true;
+                    } else {
+                        self.crossfade_remaining = self.crossfade_total.max(64);
+                    }
+                    break;
+                }
             }
-            let target_bank = 1 - self.active_bank;
-            self.load_ir_into_bank(target_bank, n);
-            self.crossfade_remaining = self.crossfade_total.max(64);
+            if !synchronous {
+                return false;
+            }
         }
+        self.design.active = false;
+        true
     }
 
     #[inline]

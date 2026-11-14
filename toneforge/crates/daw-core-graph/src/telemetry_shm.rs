@@ -244,9 +244,32 @@ pub enum EngineCommand {
     SetPpq(u32),
     /// Trigger a sample-accurate MIDI / Piano Roll / Slide note event on a ChannelGenerator.
     TriggerVoiceEvent(crate::sequencer_pianoroll::SequencerVoiceEvent),
+    /// Trigger a live one-shot audition note (`NoteOn` + automatic ADSR gate release after `gate_samples`)
+    /// on the primary Piano Roll synth/sampler channel — works even when transport is stopped (`!is_playing`).
+    TriggerAuditionNote {
+        key: u8,
+        velocity: f32,
+        fine_pitch_cents: f32,
+        pan: f32,
+        gate_samples: u32,
+    },
     /// Recomputes 5-Point APDC delays across the existing topological schedule in-place
     /// with Zero Heap Allocation (e.g. after a plugin dynamically changes its reported latency).
     RefreshApdc,
+    /// Mutes or unmutes a Mixer Track (`0..502`). Applied with a de-clicked gain ramp.
+    SetTrackMute { track_index: u16, muted: bool },
+    /// Solos or un-solos an Insert Track. Tracks feeding into or fed by a soloed track stay audible.
+    SetTrackSolo { track_index: u16, soloed: bool },
+    /// Sets the stereo balance of a Mixer Track (`-1.0` = left, `0.0` = centre/unity, `+1.0` = right).
+    SetTrackPan { track_index: u16, pan: f32 },
+    /// Selects which Mixer Track's plugins own the shared Pro-Q 4 / Soothe3 telemetry slots.
+    SetTelemetryFocusTrack(u16),
+    /// Normalized parameter update on a channel generator (e.g. a hosted VST3/CLAP instrument).
+    SetChannelParamNormalized {
+        channel_id: u32,
+        param_id: u32,
+        norm_val: f32,
+    },
 }
 
 /// Allocates a wait-free `TripleBuffer<VisualTelemetryFrame>` directly on the heap

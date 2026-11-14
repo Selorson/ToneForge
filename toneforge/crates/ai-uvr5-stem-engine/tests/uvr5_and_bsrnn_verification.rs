@@ -437,12 +437,16 @@ fn test_realtime_bsrnn_active_stem_alignment_mute_cancellation_and_midstream_aut
         slice_frames: 256,
         is_playing: true,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
 
     // 1. All 4 stems muted (`stem_mute = [true; 4]`):
     //    Since `sum_{s=0..3} M_s(k) == 1.0`, `Y[n] = X_delayed[n] - sum_s S_s[n]` must cancel
     //    to 0 (< 1e-5 = -100 dB) once the 5,760-sample latency + 2,048-sample STFT window warm up!
-    let mut node_mute = RealTimeBsrnnStemNode::new(sr);
+    // Real ONNX BSRNN separator serviced inline (lockstep) — the stems come from the trained model.
+    let mut node_mute = RealTimeBsrnnStemNode::new_with_onnx_lockstep(sr)
+        .expect("ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx must load for lockstep verification");
+    assert!(node_mute.separation_available());
     node_mute.stem_mute = [true; 4];
 
     let total_samples = 12_288;
@@ -469,15 +473,20 @@ fn test_realtime_bsrnn_active_stem_alignment_mute_cancellation_and_midstream_aut
             }
         }
     }
+    // Float32 STFT/iSTFT reconstruction floor of the real model path (stems sum to the mixture
+    // through 4 independent overlap-add syntheses): <= 5e-5 (-86 dBFS) on a 0.8-peak signal.
     assert!(
-        max_mute_residual < 1e-5,
+        max_mute_residual < 5e-5,
         "Active 4-stem mute subtraction failed to cancel dry signal (comb/delay mismatch): max_residual = {}",
         max_mute_residual
     );
 
-    // 2. Mid-stream automation from 0.0 dB (unity fast path) to +6.0 dB across all 4 stems:
-    //    Verifies worker queue stays warm during unity bypass and matches `G * x[n - 5760]` immediately!
-    let mut node_auto = RealTimeBsrnnStemNode::new(sr);
+    // 2. Mid-stream automation from 0.0 dB to +6.0 dB across all 4 stems: the worker queue stays
+    //    warm during unity, the move is de-zippered (~10 ms ramp, never overshooting the target) and
+    //    then settles exactly on `G * x[n - 5760]`.
+    let mut node_auto = RealTimeBsrnnStemNode::new_with_onnx_lockstep(sr)
+        .expect("BSRNN ONNX lockstep separator");
+    let total_samples = 16_384;
     let gain_db = 6.0f32;
     let gain_lin = 10.0f32.powf(gain_db / 20.0);
     let mut input_history = Vec::with_capacity(total_samples);
@@ -501,14 +510,19 @@ fn test_realtime_bsrnn_active_stem_alignment_mute_cancellation_and_midstream_aut
             for i in 0..256 {
                 let n = block_start + i;
                 let expected = input_history[n - 5760];
-                let err_l = (block[i][0] - expected[0] * gain_lin).abs();
-                let err_r = (block[i][1] - expected[1] * gain_lin).abs();
-                max_boost_err = max_boost_err.max(err_l).max(err_r);
+                // Ramp region: bounded by the target gain (no overshoot / zipper spikes).
+                assert!(block[i][0].abs() <= expected[0].abs() * gain_lin + 1e-4);
+                assert!(block[i][1].abs() <= expected[1].abs() * gain_lin + 1e-4);
+                if n >= 8192 + 6000 {
+                    let err_l = (block[i][0] - expected[0] * gain_lin).abs();
+                    let err_r = (block[i][1] - expected[1] * gain_lin).abs();
+                    max_boost_err = max_boost_err.max(err_l).max(err_r);
+                }
             }
         }
     }
     assert!(
-        max_boost_err < 1e-5,
+        max_boost_err < 5e-5,
         "Mid-stream 0 dB -> +6 dB stem automation desynchronized: max_boost_err = {}",
         max_boost_err
     );
@@ -584,5 +598,345 @@ fn test_npz_archive_reader_and_ozone_npz_gru_engine_real_models() {
     assert!((inst_probs.iter().sum::<f32>() - 1.0).abs() < 1e-5);
 }
 
+#[test]
+fn test_gate_5b_all_4_onnx_and_all_5_npz_models_real_inference() {
+    use ai_uvr5_stem_engine::{
+        DELIMIT_LATENCY_SAMPLES_48K, GENRE_LABELS, GruThreeStemSeparator, INSTRUMENT_LABELS,
+        InstrumentCnnClassifier, OzoneBsrnnOnnxSeparator, OzoneDelimitOnnxProcessor,
+        Uvr5MdxOnnxSeparator,
+    };
+    use daw_core_graph::ProcessContext;
+
+    let sr = 48_000.0_f64;
+    let sr_u32 = 48_000_u32;
+
+    // Synthesize a rich 16,384-sample (341 ms @ 48 kHz) multi-stem test mixture:
+    // Kick/snare drum transients + 55 Hz bassline + 440/880 Hz vocal harmonic + stereo chord pad
+    let mix_len = 16_384usize;
+    let mix: Vec<StereoFrame> = (0..mix_len)
+        .map(|n| {
+            let t = (n as f64) / sr;
+            let hit = (n % 4096) as f64;
+            let kick = ((-hit / 220.0).exp() * (2.0 * PI * 58.0 * t).sin()) as f32;
+            let snare_noise = (((n as u64).wrapping_mul(6364136223846793005).wrapping_add(1) >> 32)
+                as u32 as i32 as f32
+                / (i32::MAX as f32))
+                * ((-(((n + 2048) % 4096) as f64) / 140.0).exp() as f32);
+            let bass = (0.32 * (2.0 * PI * 55.0 * t).sin() + 0.14 * (2.0 * PI * 110.0 * t).sin()) as f32;
+            let vocal = (0.30 * (2.0 * PI * 523.25 * t).sin()
+                + 0.16 * (2.0 * PI * 1046.5 * t).sin()
+                + 0.08 * (2.0 * PI * 1569.75 * t).sin()) as f32;
+            let pad_l = (0.18 * (2.0 * PI * 329.63 * t).sin()) as f32;
+            let pad_r = (0.18 * (2.0 * PI * 392.00 * t).cos()) as f32;
+            [
+                0.45 * kick + 0.25 * snare_noise + bass + vocal + pad_l,
+                0.45 * kick + 0.25 * snare_noise + bass + vocal + pad_r,
+            ]
+        })
+        .collect();
+
+    // =========================================================================
+    // PART A: ALL 4 REAL `.onnx` MODELS (`CUDA -> DirectML -> CPU`)
+    // =========================================================================
+
+    // ONNX #1: `delimit_exp009_ep080_fixed2.onnx` wired into `Ozone12MasterChain::unlimiter`
+    let delimit = OzoneDelimitOnnxProcessor::from_default_assets()
+        .expect("delimit_exp009_ep080_fixed2.onnx must load via ONNX Runtime");
+    let delimit_tier = delimit.active_tier();
+
+    let mut chain = Ozone12MasterChain::new(sr);
+    chain.unlimiter.enabled = true;
+    chain.unlimiter.threshold_db = -8.0;
+    chain.unlimiter.amount_percent = 90.0;
+    chain.set_unlimiter_neural_backend(Box::new(delimit));
+    // Total chain latency = 2048 (Neural Unlimiter @ 48 kHz) + 264 (IRC V Maximizer @ 48 kHz) = 2312 samples
+    assert_eq!(chain.latency_samples(), DELIMIT_LATENCY_SAMPLES_48K + 264);
+
+    // Disable Maximizer to measure pure Neural Unlimiter transient crest restoration on brickwall-clipped audio
+    chain.set_irc_maximizer_enabled(false);
+    assert_eq!(chain.latency_samples(), DELIMIT_LATENCY_SAMPLES_48K);
+
+    // Brickwall-clip the transient mix at +/- 0.22 (-13.15 dBFS) to crush drum peaks
+    let clip_ceil = 0.22_f32;
+    let clipped_in: Vec<StereoFrame> = mix
+        .iter()
+        .map(|f| [f[0].clamp(-clip_ceil, clip_ceil), f[1].clamp(-clip_ceil, clip_ceil)])
+        .collect();
+
+    let crest_db = |buf: &[StereoFrame]| -> f64 {
+        let mut peak = 0.0_f64;
+        let mut sum_sq = 0.0_f64;
+        for f in buf {
+            let l = f[0] as f64;
+            let r = f[1] as f64;
+            peak = peak.max(l.abs()).max(r.abs());
+            sum_sq += 0.5 * (l * l + r * r);
+        }
+        let rms = (sum_sq / (buf.len().max(1) as f64)).sqrt().max(1.0e-12);
+        20.0 * (peak / rms).max(1.0e-12).log10()
+    };
+
+    let mut unlim_stream = clipped_in.clone();
+    // Append 2048 zero frames to flush lookahead delay
+    unlim_stream.extend(std::iter::repeat_n([0.0_f32; 2], DELIMIT_LATENCY_SAMPLES_48K));
+    let ctx = ProcessContext {
+        sample_rate: sr,
+        current_sample_pos: 0,
+        ppq_tick: 0,
+        bpm: 120.0,
+        slice_frames: 256,
+        is_playing: true,
+        is_offline_rendering: true,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
+    };
+    for chunk in unlim_stream.chunks_mut(256) {
+        chain.process_slice(&ctx, chunk, None, &mut []);
+    }
+    let aligned_restored = &unlim_stream[DELIMIT_LATENCY_SAMPLES_48K..DELIMIT_LATENCY_SAMPLES_48K + mix_len];
+    let in_crest = crest_db(&clipped_in[2048..]);
+    let out_crest = crest_db(&aligned_restored[2048..]);
+    println!(
+        "[Gate 5b][ONNX 1/4] delimit_exp009_ep080_fixed2.onnx tier={:?}, clipped crest={in_crest:.2} dB -> restored crest={out_crest:.2} dB (+{:.2} dB)",
+        delimit_tier,
+        out_crest - in_crest
+    );
+    assert!(
+        aligned_restored.iter().all(|f| f[0].is_finite() && f[1].is_finite()),
+        "Delimit ONNX output contained non-finite samples"
+    );
+    assert!(
+        out_crest > in_crest + 0.25,
+        "Neural Unlimiter (delimit_exp009_ep080_fixed2.onnx) failed to expand crushed transient crest factor ({in_crest:.2} dB -> {out_crest:.2} dB)"
+    );
+
+    // ONNX #2: `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx`
+    let mut bsrnn = OzoneBsrnnOnnxSeparator::from_default_assets()
+        .expect("ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx must load");
+    let bsrnn_stems = bsrnn
+        .separate_4stems_offline(&mix)
+        .expect("BSRNN 4-stem separation failed");
+    let mut bsrnn_max_recon_err = 0.0_f32;
+    let mut bsrnn_energies = [0.0_f64; 4];
+    for i in 0..mix_len {
+        for s in 0..4 {
+            bsrnn_energies[s] += (bsrnn_stems[s][i][0] as f64).powi(2) + (bsrnn_stems[s][i][1] as f64).powi(2);
+        }
+        for ch in 0..2 {
+            let sum = bsrnn_stems[0][i][ch]
+                + bsrnn_stems[1][i][ch]
+                + bsrnn_stems[2][i][ch]
+                + bsrnn_stems[3][i][ch];
+            bsrnn_max_recon_err = bsrnn_max_recon_err.max((sum - mix[i][ch]).abs());
+        }
+    }
+    println!(
+        "[Gate 5b][ONNX 2/4] ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx tier={:?}, energies={:?}, max_recon_err={bsrnn_max_recon_err:.3e}",
+        bsrnn.active_tier(),
+        bsrnn_energies
+    );
+    assert!(bsrnn_energies.iter().all(|&e| e > 1.0e-3));
+    assert!(bsrnn_max_recon_err < 1.0e-5);
+
+    // ONNX #3: `Kim_Vocal_2.onnx`
+    let mut kim = Uvr5MdxOnnxSeparator::from_kim_vocal_2().expect("Kim_Vocal_2.onnx must load");
+    let (kim_voc, kim_inst) = kim
+        .separate_vocal_instrumental(&mix, sr_u32, false)
+        .expect("Kim_Vocal_2 inference failed");
+    let kim_voc_e: f64 = kim_voc.iter().map(|f| (f[0] as f64).powi(2)).sum();
+    let kim_inst_e: f64 = kim_inst.iter().map(|f| (f[0] as f64).powi(2)).sum();
+    println!(
+        "[Gate 5b][ONNX 3/4] Kim_Vocal_2.onnx tier={:?}, voc_energy={kim_voc_e:.3}, inst_energy={kim_inst_e:.3}",
+        kim.active_tier()
+    );
+    assert!(kim_voc_e.is_finite() && kim_inst_e.is_finite() && (kim_voc_e + kim_inst_e) > 1.0);
+
+    // ONNX #4: `UVR-MDX-NET-Inst_HQ_3.onnx`
+    let mut inst_hq3 =
+        Uvr5MdxOnnxSeparator::from_inst_hq_3().expect("UVR-MDX-NET-Inst_HQ_3.onnx must load");
+    let (hq3_voc, hq3_inst) = inst_hq3
+        .separate_vocal_instrumental(&mix, sr_u32, false)
+        .expect("UVR-MDX-NET-Inst_HQ_3 inference failed");
+    let hq3_voc_e: f64 = hq3_voc.iter().map(|f| (f[0] as f64).powi(2)).sum();
+    let hq3_inst_e: f64 = hq3_inst.iter().map(|f| (f[0] as f64).powi(2)).sum();
+    println!(
+        "[Gate 5b][ONNX 4/4] UVR-MDX-NET-Inst_HQ_3.onnx tier={:?}, voc_energy={hq3_voc_e:.3}, inst_energy={hq3_inst_e:.3}",
+        inst_hq3.active_tier()
+    );
+    assert!(hq3_voc_e.is_finite() && hq3_inst_e.is_finite() && (hq3_voc_e + hq3_inst_e) > 1.0);
+
+    // =========================================================================
+    // PART B: ALL 5 REAL `.npz` MODELS (Slaney Mel + 2D CNNs + 3x GRU-512)
+    // =========================================================================
+
+    // NPZ #1: `gparamsBN8.0.npz` (`GenreCnnClassifier`)
+    let genre_clf = GenreCnnClassifier::load_default().expect("gparamsBN8.0.npz must load");
+    let g_probs = genre_clf.classify_audio(&mix, sr_u32);
+    let (top_g_idx, &top_g_prob) = g_probs
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .unwrap();
+    println!(
+        "[Gate 5b][NPZ 1/5] gparamsBN8.0.npz top_genre={} ({:.1}%)",
+        GENRE_LABELS[top_g_idx],
+        top_g_prob * 100.0
+    );
+    assert!((g_probs.iter().sum::<f32>() - 1.0).abs() < 1.0e-5);
+
+    // NPZ #2: `instrument_classifier_params.npz` (`InstrumentCnnClassifier`)
+    let inst_clf =
+        InstrumentCnnClassifier::load_default().expect("instrument_classifier_params.npz must load");
+    let i_probs = inst_clf.classify_audio(&mix, sr_u32);
+    let (top_i_idx, &top_i_prob) = i_probs
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .unwrap();
+    println!(
+        "[Gate 5b][NPZ 2/5] instrument_classifier_params.npz top_inst={} ({:.1}%)",
+        INSTRUMENT_LABELS[top_i_idx],
+        top_i_prob * 100.0
+    );
+    assert!((i_probs.iter().sum::<f32>() - 1.0).abs() < 1.0e-5);
+
+    // NPZ #3, #4, #5: `vocals-small_sanitized.npz`, `drums-small_sanitized.npz`, `bass-small_sanitized.npz`
+    let mut gru3 = GruThreeStemSeparator::from_default_assets()
+        .expect("All 3 GRU-512 .npz stem models must load");
+    let [gru_v, gru_d, gru_b, gru_o] = gru3.separate_4stems(&mix, sr_u32);
+    let gru_energies = [
+        gru_v.iter().map(|f| (f[0] as f64).powi(2)).sum::<f64>(),
+        gru_d.iter().map(|f| (f[0] as f64).powi(2)).sum::<f64>(),
+        gru_b.iter().map(|f| (f[0] as f64).powi(2)).sum::<f64>(),
+        gru_o.iter().map(|f| (f[0] as f64).powi(2)).sum::<f64>(),
+    ];
+    let mut gru_max_recon_err = 0.0_f32;
+    for i in 0..mix_len {
+        for ch in 0..2 {
+            let s = gru_v[i][ch] + gru_d[i][ch] + gru_b[i][ch] + gru_o[i][ch];
+            gru_max_recon_err = gru_max_recon_err.max((s - mix[i][ch]).abs());
+        }
+    }
+    println!(
+        "[Gate 5b][NPZ 3..5/5] GRU-512 3-model stems energies (V,D,B,O)={gru_energies:?}, max_recon_err={gru_max_recon_err:.3e}"
+    );
+    assert!(gru_energies[0] > 1.0e-3 && gru_energies[1] > 1.0e-3 && gru_energies[2] > 1.0e-3);
+    assert!(
+        (gru_energies[0] - gru_energies[1]).abs() > 1.0e-3
+            && (gru_energies[1] - gru_energies[2]).abs() > 1.0e-3,
+        "Vocals, Drums, and Bass .npz GRU models must produce distinct trained stem separations!"
+    );
+    assert!(gru_max_recon_err < 1.0e-5);
+}
+
+#[test]
+fn test_realtime_delimit_onnx_worker_zero_rt_heap_allocations_in_ozone12_chain() {
+    use ai_uvr5_stem_engine::{
+        DELIMIT_LATENCY_SAMPLES_48K, DELIMIT_RT_CUSHION_SAMPLES, RealtimeDelimitOnnxWorker,
+    };
+    use daw_core_graph::ProcessContext;
+
+    let sr = 48_000.0;
+    let worker = RealtimeDelimitOnnxWorker::from_default_assets(sr)
+        .expect("RealtimeDelimitOnnxWorker must initialize");
+    let mut chain = Ozone12MasterChain::new(sr);
+    chain.unlimiter.enabled = true;
+    chain.unlimiter.threshold_db = -6.0;
+    chain.unlimiter.amount_percent = 75.0;
+    chain.set_unlimiter_neural_backend(Box::new(worker));
+
+    // The RT worker adds its fixed alignment cushion to the reported latency.
+    assert_eq!(
+        chain.latency_samples(),
+        DELIMIT_LATENCY_SAMPLES_48K + DELIMIT_RT_CUSHION_SAMPLES + 264
+    );
+
+    let ctx = ProcessContext {
+        sample_rate: sr,
+        current_sample_pos: 0,
+        ppq_tick: 0,
+        bpm: 128.0,
+        slice_frames: 256,
+        is_playing: true,
+        is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
+    };
+
+    let mut block = [[0.0_f32; 2]; 256];
+    // Warm up 4 blocks
+    for b in 0..4 {
+        for (i, f) in block.iter_mut().enumerate() {
+            let n = b * 256 + i;
+            let s = (0.75 * (2.0 * PI * 220.0 * (n as f64) / sr).sin()).clamp(-0.35, 0.35) as f32;
+            *f = [s, s];
+        }
+        chain.process_slice(&ctx, &mut block, None, &mut []);
+    }
+
+    // Strict Zero-Heap-Allocation Real-Time Audio Callback Region (32 x 256 = 8,192 frames)
+    begin_rt_no_alloc_region();
+    for b in 0..32 {
+        for (i, f) in block.iter_mut().enumerate() {
+            let n = (b + 4) * 256 + i;
+            let s = (0.85 * (2.0 * PI * 110.0 * (n as f64) / sr).sin()).clamp(-0.35, 0.35) as f32;
+            *f = [s, -s];
+        }
+        chain.process_slice(&ctx, &mut block, None, &mut []);
+    }
+    let (allocs, bytes, deallocs) = end_rt_no_alloc_region();
+
+    println!(
+        "[Gate 5b][RT Zero-Alloc] Ozone12MasterChain + RealtimeDelimitOnnxWorker over 8,192 frames: allocs={allocs}, bytes={bytes}, deallocs={deallocs}"
+    );
+    assert_eq!(
+        (allocs, bytes, deallocs),
+        (0, 0, 0),
+        "RealtimeDelimitOnnxWorker + Ozone12MasterChain allocated on the RT audio thread!"
+    );
+}
 
 
+
+
+
+
+/// The real-time DeLimit worker must return exactly the inline (lockstep) ONNX residual delayed by
+/// `DELIMIT_RT_CUSHION_SAMPLES` — a constant, reported offset regardless of worker timing.
+#[test]
+fn test_realtime_delimit_worker_residual_is_sample_aligned_with_inline_processor() {
+    use ai_uvr5_stem_engine::{
+        DELIMIT_RT_CUSHION_SAMPLES, OzoneDelimitOnnxProcessor, RealtimeDelimitOnnxWorker,
+    };
+    use dsp_ozone12_mastering::NeuralUnlimiterBackend;
+
+    let sr = 48_000.0;
+    let n_total = 48_000usize;
+    let input: Vec<f32> = (0..n_total)
+        .map(|n| {
+            let t = n as f64 / sr;
+            ((0.9 * (2.0 * PI * 140.0 * t).sin() + 0.4 * (2.0 * PI * 2300.0 * t).sin()).clamp(-0.4, 0.4))
+                as f32
+        })
+        .collect();
+
+    let mut inline = OzoneDelimitOnnxProcessor::from_default_assets().expect("DeLimit ONNX");
+    let mut reference = vec![0.0f32; n_total];
+    for (inp, out) in input.chunks(256).zip(reference.chunks_mut(256)) {
+        inline.process_delimit_envelope(inp, sr, out);
+    }
+
+    let mut rt = RealtimeDelimitOnnxWorker::from_default_assets(sr).expect("DeLimit RT worker");
+    let mut got = vec![0.0f32; n_total];
+    for (inp, out) in input.chunks(256).zip(got.chunks_mut(256)) {
+        rt.process_delimit_envelope(inp, sr, out);
+        rt.wait_for_worker_drain(std::time::Duration::from_millis(500));
+    }
+    let mut max_err = 0.0f32;
+    let mut energy = 0.0f64;
+    for i in DELIMIT_RT_CUSHION_SAMPLES..n_total {
+        let r = reference[i - DELIMIT_RT_CUSHION_SAMPLES];
+        max_err = max_err.max((got[i] - r).abs());
+        energy += (r as f64) * (r as f64);
+    }
+    assert!(energy > 1e-6, "inline DeLimit produced no residual to compare");
+    assert!(max_err < 1e-5, "RT residual misaligned vs inline ONNX: max_err = {max_err}");
+}

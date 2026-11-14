@@ -13,10 +13,7 @@
 //!   Guarantees bit-exact transparency (`Y[n] === X_delayed[n]`) when all stem gains/EQ are `0.0 dB`.
 
 use daw_core_graph::{ApdcDelayLine, ProcessContext, StereoFrame, UnifiedDspNode, VisualTelemetryFrame};
-use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use rtrb::{Consumer, Producer, RingBuffer};
-use rustfft::num_complex::Complex32;
-use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -170,269 +167,41 @@ impl Default for BsrnnOutputHop {
     }
 }
 
-/// Pre-allocated BSRNN 13-Subband STFT + Recurrent Mask Separator Worker.
-/// Executes with **Zero Heap Allocations** during `process_hop`.
-pub struct BsrnnStreamingWorker {
-    fft_forward: Arc<dyn RealToComplex<f32>>,
-    fft_inverse: Arc<dyn ComplexToReal<f32>>,
-    fft_scratch_fwd: Vec<Complex32>,
-    fft_scratch_inv: Vec<Complex32>,
-
-    hann_window: [f32; BSRNN_N_FFT],
-    synthesis_window: [f32; BSRNN_N_FFT],
-
-    /// Sliding input history (`2048` stereo samples).
-    in_ring_l: [f32; BSRNN_N_FFT],
-    in_ring_r: [f32; BSRNN_N_FFT],
-    in_cursor: usize,
-
-    /// Overlap-add output accumulators (`4` stems x `2` channels x `2048` samples).
-    ola_ring: [[[f32; BSRNN_N_FFT]; 2]; BSRNN_STEM_COUNT],
-    ola_cursor: usize,
-
-    /// Working buffers for RealFFT.
-    time_buf: [f32; BSRNN_N_FFT],
-    spec_l: [Complex32; BSRNN_FREQ_BINS],
-    spec_r: [Complex32; BSRNN_FREQ_BINS],
-    stem_spec_l: [Complex32; BSRNN_FREQ_BINS],
-    stem_spec_r: [Complex32; BSRNN_FREQ_BINS],
-
-    /// Recurrent hidden state `[2, 2, 2, 1, 13, 128]` (`13,312` floats) + subband temporal trackers.
-    pub hidden_state: Vec<f32>,
-    subband_fast_env: [f32; 13],
-    subband_slow_env: [f32; 13],
-    weight_calibration: [f32; 13],
-}
-
-impl Default for BsrnnStreamingWorker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BsrnnStreamingWorker {
-    pub fn new() -> Self {
-        let mut planner = RealFftPlanner::<f32>::new();
-        let fft_forward = planner.plan_fft_forward(BSRNN_N_FFT);
-        let fft_inverse = planner.plan_fft_inverse(BSRNN_N_FFT);
-        let fft_scratch_fwd = fft_forward.make_scratch_vec();
-        let fft_scratch_inv = fft_inverse.make_scratch_vec();
-
-        // COLA-compliant root-Hann analysis + synthesis windows for N=2048, H=512 (4x overlap)
-        let mut hann_window = [0.0f32; BSRNN_N_FFT];
-        let mut synthesis_window = [0.0f32; BSRNN_N_FFT];
-        let inv_n = 1.0 / (BSRNN_N_FFT as f32);
-        for n in 0..BSRNN_N_FFT {
-            let h = 0.5 * (1.0 - (2.0 * PI * (n as f32) / (BSRNN_N_FFT as f32)).cos());
-            let root_h = h.sqrt();
-            hann_window[n] = root_h;
-            // For 4x overlap (H = N/4), sum_{m=0..3} h(n - mH) = 2.0, so scale by 0.5 / N_FFT
-            synthesis_window[n] = root_h * 0.5 * inv_n;
-        }
-
-        // Load calibration fingerprint prioritizing `current_exe()` parent first
-        let mut weight_calibration = [1.0f32; 13];
-        if let Some(exe_rel) = crate::onnx_gpu_runtime::resolve_ozone_bsrnn_onnx_path() {
-            if let Ok(desc) = OnnxModelDescriptor::from_onnx_file(&exe_rel) {
-                weight_calibration = desc.weight_fingerprint_f32;
-            }
-        } else {
-            for cand in DEFAULT_BSRNN_ONNX_PATHS {
-                let p = Path::new(cand);
-                if p.exists() {
-                    if let Ok(desc) = OnnxModelDescriptor::from_onnx_file(p) {
-                        weight_calibration = desc.weight_fingerprint_f32;
-                        break;
-                    }
-                }
-            }
-        }
-
-        Self {
-            fft_forward,
-            fft_inverse,
-            fft_scratch_fwd,
-            fft_scratch_inv,
-            hann_window,
-            synthesis_window,
-            in_ring_l: [0.0; BSRNN_N_FFT],
-            in_ring_r: [0.0; BSRNN_N_FFT],
-            in_cursor: 0,
-            ola_ring: [[[0.0; BSRNN_N_FFT]; 2]; BSRNN_STEM_COUNT],
-            ola_cursor: 0,
-            time_buf: [0.0; BSRNN_N_FFT],
-            spec_l: [Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS],
-            spec_r: [Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS],
-            stem_spec_l: [Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS],
-            stem_spec_r: [Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS],
-            hidden_state: vec![0.0f32; BSRNN_HIDDEN_STATE_LEN],
-            subband_fast_env: [1e-6; 13],
-            subband_slow_env: [1e-6; 13],
-            weight_calibration,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.in_ring_l.fill(0.0);
-        self.in_ring_r.fill(0.0);
-        self.in_cursor = 0;
-        for s in 0..BSRNN_STEM_COUNT {
-            self.ola_ring[s][0].fill(0.0);
-            self.ola_ring[s][1].fill(0.0);
-        }
-        self.ola_cursor = 0;
-        self.hidden_state.fill(0.0);
-        self.subband_fast_env = [1e-6; 13];
-        self.subband_slow_env = [1e-6; 13];
-    }
-
-    /// Processes a single `512`-sample input hop into 4 separated stems (`[Vocals, Drums, Bass, Other]`)
-    /// whose sum equals the exact windowed STFT reconstruction `sum_s M_s(k) == 1.0`.
-    /// Zero Heap Allocation.
-    pub fn process_hop(&mut self, in_hop: &BsrnnInputHop, out_hop: &mut BsrnnOutputHop) {
-        // 1. Push 512 new stereo samples into the 2048-sample circular input buffer
-        for i in 0..BSRNN_HOP_SIZE {
-            let pos = (self.in_cursor + i) & (BSRNN_N_FFT - 1);
-            self.in_ring_l[pos] = in_hop.frames[i][0];
-            self.in_ring_r[pos] = in_hop.frames[i][1];
-        }
-        self.in_cursor = (self.in_cursor + BSRNN_HOP_SIZE) & (BSRNN_N_FFT - 1);
-
-        // 2. Windowed forward 2048-point STFT for Left and Right channels
-        for n in 0..BSRNN_N_FFT {
-            let idx = (self.in_cursor + n) & (BSRNN_N_FFT - 1);
-            self.time_buf[n] = self.in_ring_l[idx] * self.hann_window[n];
-        }
-        let _ = self.fft_forward.process_with_scratch(
-            &mut self.time_buf,
-            &mut self.spec_l,
-            &mut self.fft_scratch_fwd,
-        );
-
-        for n in 0..BSRNN_N_FFT {
-            let idx = (self.in_cursor + n) & (BSRNN_N_FFT - 1);
-            self.time_buf[n] = self.in_ring_r[idx] * self.hann_window[n];
-        }
-        let _ = self.fft_forward.process_with_scratch(
-            &mut self.time_buf,
-            &mut self.spec_r,
-            &mut self.fft_scratch_fwd,
-        );
-
-        // 3. Evaluate 13-subband BSRNN soft masks `[M_vocals, M_drums, M_bass, M_other]`
-        //    such that `M_vocals + M_drums + M_bass + M_other == 1.0` at every frequency bin!
-        let mut subband_masks = [[0.25f32; BSRNN_STEM_COUNT]; 13];
-        let mut bin_cursor = 0usize;
-
-        for sb in 0..13 {
-            let width = BSRNN_SUBBAND_BINS[sb];
-            let mut mid_energy = 0.0f32;
-            let mut side_energy = 0.0f32;
-            for k in bin_cursor..(bin_cursor + width) {
-                let l = self.spec_l[k];
-                let r = self.spec_r[k];
-                let mid = (l + r) * 0.5;
-                let side = (l - r) * 0.5;
-                mid_energy += mid.norm_sqr();
-                side_energy += side.norm_sqr();
-            }
-            bin_cursor += width;
-
-            let total_e = ((mid_energy + side_energy) / (width as f32)).sqrt();
-            self.subband_fast_env[sb] = 0.45 * self.subband_fast_env[sb] + 0.55 * total_e;
-            self.subband_slow_env[sb] = 0.92 * self.subband_slow_env[sb] + 0.08 * total_e;
-
-            // Update recurrent hidden state slice for subband `sb`
-            let h_off = sb * 128;
-            let prev_h = self.hidden_state[h_off];
-            let new_h = (0.75 * prev_h + 0.25 * total_e * self.weight_calibration[sb]).tanh();
-            self.hidden_state[h_off] = new_h;
-
-            let transient_ratio =
-                (self.subband_fast_env[sb] / (self.subband_slow_env[sb] + 1e-6)).clamp(0.5, 4.0);
-            let mid_ratio = mid_energy / (mid_energy + side_energy + 1e-9);
-
-            // Subbands 0..=2 (~0..460 Hz): Bass-dominant on sustained Mid energy
-            // Subbands 3..=10 (~460 Hz..6.8 kHz): Vocal-dominant on harmonic Mid energy
-            let raw_bass = if sb <= 1 {
-                3.5 * mid_ratio * (2.0 / transient_ratio)
-            } else if sb == 2 {
-                1.4 * mid_ratio
-            } else {
-                0.05
-            };
-            let raw_drums = (transient_ratio - 0.85).max(0.05) * 1.8;
-            let raw_vocals = if (3..=10).contains(&sb) {
-                mid_ratio * 2.2 * self.weight_calibration[sb]
-            } else {
-                0.25 * mid_ratio
-            };
-            let raw_other = (1.1 - mid_ratio).max(0.15) * 1.6 + 0.25;
-
-            let sum_raw = (raw_vocals + raw_drums + raw_bass + raw_other).max(1e-6);
-            let inv_sum = 1.0 / sum_raw;
-            subband_masks[sb] = [
-                raw_vocals * inv_sum,
-                raw_drums * inv_sum,
-                raw_bass * inv_sum,
-                raw_other * inv_sum,
-            ];
-        }
-
-        // 4. Synthesize each of the 4 stems via masked iSTFT and overlap-add
-        for s in 0..BSRNN_STEM_COUNT {
-            let mut k_idx = 0usize;
-            for sb in 0..13 {
-                let m = subband_masks[sb][s];
-                let width = BSRNN_SUBBAND_BINS[sb];
-                for _ in 0..width {
-                    self.stem_spec_l[k_idx] = self.spec_l[k_idx] * m;
-                    self.stem_spec_r[k_idx] = self.spec_r[k_idx] * m;
-                    k_idx += 1;
-                }
-            }
-            // RealFFT requires DC and Nyquist bins to have strictly zero imaginary part
-            self.stem_spec_l[0].im = 0.0;
-            self.stem_spec_l[BSRNN_FREQ_BINS - 1].im = 0.0;
-            self.stem_spec_r[0].im = 0.0;
-            self.stem_spec_r[BSRNN_FREQ_BINS - 1].im = 0.0;
-
-            let _ = self.fft_inverse.process_with_scratch(
-                &mut self.stem_spec_l,
-                &mut self.time_buf,
-                &mut self.fft_scratch_inv,
-            );
-            for n in 0..BSRNN_N_FFT {
-                let pos = (self.ola_cursor + n) & (BSRNN_N_FFT - 1);
-                self.ola_ring[s][0][pos] += self.time_buf[n] * self.synthesis_window[n];
-            }
-
-            let _ = self.fft_inverse.process_with_scratch(
-                &mut self.stem_spec_r,
-                &mut self.time_buf,
-                &mut self.fft_scratch_inv,
-            );
-            for n in 0..BSRNN_N_FFT {
-                let pos = (self.ola_cursor + n) & (BSRNN_N_FFT - 1);
-                self.ola_ring[s][1][pos] += self.time_buf[n] * self.synthesis_window[n];
-            }
-
-            // Read out 512 completed samples and clear the consumed OLA slots
-            for i in 0..BSRNN_HOP_SIZE {
-                let pos = (self.ola_cursor + i) & (BSRNN_N_FFT - 1);
-                out_hop.stems[s][i] = [self.ola_ring[s][0][pos], self.ola_ring[s][1][pos]];
-                self.ola_ring[s][0][pos] = 0.0;
-                self.ola_ring[s][1][pos] = 0.0;
-            }
-        }
-
-        self.ola_cursor = (self.ola_cursor + BSRNN_HOP_SIZE) & (BSRNN_N_FFT - 1);
-    }
-}
-
-/// Number of pre-seeded hops (`2 * 512 = 1,024` samples = `21.3 ms` @ 48 kHz) cushioning the
+/// Number of pre-seeded hops (`4 * 512 = 2,048` samples = `42.7 ms` @ 48 kHz) cushioning the
 /// asynchronous ONNX GPU worker thread inside the `5,760`-sample (`120 ms`) APDC latency budget.
-const ASYNC_GPU_CUSHION_HOPS: usize = 2;
+const ASYNC_GPU_CUSHION_HOPS: usize = 4;
+
+/// Peak level below which an input frame counts as digital silence (`1e-6` = `-120 dBFS`).
+const IDLE_SILENCE_PEAK: f32 = 1.0e-6;
+
+/// `|applied delta gain|` below which a unity (0 dB / no solo / no mute) rebalance counts as settled.
+const IDLE_DELTA_EPS: f32 = 1.0e-4;
+
+/// Algorithmic delay of `OzoneBsrnnOnnxSeparator::process_hop` in hops: output hop `k` carries the
+/// stems of input hop `k - 5` (`2048` STFT/OLA + `1024` lookahead = `3072` = `6` hops, minus the
+/// hop-framing hop). See `separate_4stems_offline` (`algo_delay = 5 * BSRNN_HOP_SIZE`).
+const SEPARATOR_ALGO_DELAY_HOPS: usize =
+    (BSRNN_N_FFT + crate::bsrnn_onnx_gpu::OZONE_BSRNN_LOOKAHEAD_SAMPLES) / BSRNN_HOP_SIZE - 1;
+
+/// Hops of true input history the separator must see before the first stem hop that is mixed after
+/// an idle restart, so every `2048`-sample analysis frame overlapping that hop is complete
+/// (`2048 / 512 - 1 = 3`). Without it the first frames would see a fake all-zero history (hard edge).
+const RESTART_WARMUP_HOPS: usize = BSRNN_N_FFT / BSRNN_HOP_SIZE - 1;
+
+/// History hops (`8 * 512 = 4,096` samples) re-fed to the freshly reset separator when the pipeline
+/// restarts after idle while the input was not silent.
+const RESTART_PRIME_HOPS: usize = SEPARATOR_ALGO_DELAY_HOPS + RESTART_WARMUP_HOPS;
+
+/// Raw input history ring (power of two) used to prime the separator on an idle restart.
+const INPUT_HISTORY_LEN: usize = 8192;
+const _: () = assert!(RESTART_PRIME_HOPS * BSRNN_HOP_SIZE <= INPUT_HISTORY_LEN);
+const _: () = assert!(INPUT_HISTORY_LEN.is_power_of_two());
+
+/// GPU worker idle backoff: after this long without input hops the poll sleep grows progressively.
+const WORKER_IDLE_BACKOFF_AFTER: std::time::Duration = std::time::Duration::from_millis(100);
+const WORKER_POLL_SLEEP_US: u64 = 250;
+/// Upper bound of the idle poll sleep (`2 ms`, far inside the `42.7 ms` async cushion).
+const WORKER_MAX_IDLE_SLEEP_US: u64 = 2_000;
 
 struct AsyncOnnxWorkerHandle {
     stop_flag: Arc<std::sync::atomic::AtomicBool>,
@@ -493,10 +262,39 @@ pub struct RealTimeBsrnnStemNode {
     expected_out_seq: u64,
     cushion_hops_remaining: usize,
 
-    /// Pre-allocated deterministic fallback worker (used when `async_gpu_worker` is `None`).
-    worker: Box<BsrnnStreamingWorker>,
+    /// Synchronous ONNX separator serviced inline (offline render / deterministic verification).
+    /// Never used on the live real-time thread, which runs the asynchronous GPU worker instead.
+    lockstep_onnx: Option<Box<crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator>>,
+    /// Hops whose separated stems were not ready in time (GPU underflow); rebalance fades out for them.
+    pub underflow_hops: u64,
+    /// `1.0` while separated stems are flowing, ramps to `0.0` on underflow (de-clicked).
+    stems_available_gain: f32,
+    /// Per-stem rebalance delta actually applied (one-pole ramp towards the target, de-zippered).
+    applied_delta_gains: [f32; BSRNN_STEM_COUNT],
+    current_hop_valid: bool,
     /// Optional dedicated ONNX Runtime GPU worker thread spawned strictly outside `process_slice()`.
     async_gpu_worker: Option<AsyncOnnxWorkerHandle>,
+
+    // --- Idle gating: the separator receives NO hops while the node is idle -------------------
+    /// `true` while hop submission is gated (unity bypass settled, or long digital silence).
+    idle: bool,
+    /// Whether a settled unity bypass gates the separator (default: on for the async GPU worker,
+    /// off for lockstep/offline so renders keep reacting instantly to automation leaving 0 dB).
+    unity_idle_gating: bool,
+    /// Consecutive input frames with peak `< IDLE_SILENCE_PEAK` (saturating).
+    silent_run: usize,
+    /// Raw input history (`INPUT_HISTORY_LEN` frames) used to prime the separator on restart.
+    input_history: Box<[StereoFrame]>,
+    history_pos: usize,
+    /// Whether the zero cushion hops after a (re)start count as valid stems (silent history).
+    cushion_hops_valid: bool,
+    /// Samples during which `stems_available_gain` is held at 0 after a primed restart, until the
+    /// first valid stems have travelled through `stem_delay_lines` (no un-faded step).
+    avail_hold_samples: usize,
+    /// Input hops successfully submitted to the separator (lockstep or async GPU worker).
+    pushed_hops: u64,
+    #[cfg(test)]
+    test_mock: Option<Box<tests::MockSeparator>>,
 }
 
 /// Alias preserving backwards compatibility with Phase 1/2 naming.
@@ -548,9 +346,49 @@ impl RealTimeBsrnnStemNode {
             next_in_seq: 0,
             expected_out_seq: 0,
             cushion_hops_remaining: 0,
-            worker: Box::new(BsrnnStreamingWorker::new()),
+            lockstep_onnx: None,
+            underflow_hops: 0,
+            stems_available_gain: 0.0,
+            applied_delta_gains: [0.0; BSRNN_STEM_COUNT],
+            current_hop_valid: false,
             async_gpu_worker: None,
+            idle: false,
+            unity_idle_gating: false,
+            // Freshly constructed: every delay line / separator history is zero == silence.
+            silent_run: usize::MAX,
+            input_history: vec![[0.0f32; 2]; INPUT_HISTORY_LEN].into_boxed_slice(),
+            history_pos: 0,
+            cushion_hops_valid: false,
+            avail_hold_samples: 0,
+            pushed_hops: 0,
+            #[cfg(test)]
+            test_mock: None,
         }
+    }
+
+    /// Number of input hops submitted to the separator so far (diagnostics / idle-gating tests).
+    #[inline]
+    pub fn pushed_hops(&self) -> u64 {
+        self.pushed_hops
+    }
+
+    /// `true` while separator hop submission is gated (no GPU inference).
+    #[inline]
+    pub fn is_idle_gated(&self) -> bool {
+        self.idle
+    }
+
+    /// Enables/disables gating the separator while a unity bypass has settled. Enabled by default
+    /// for the async GPU worker, disabled by default for lockstep (offline render). Call outside the
+    /// real-time thread or between `process_slice` calls.
+    #[inline]
+    pub fn set_unity_idle_gating(&mut self, enabled: bool) {
+        self.unity_idle_gating = enabled;
+    }
+
+    #[inline]
+    pub fn unity_idle_gating(&self) -> bool {
+        self.unity_idle_gating
     }
 
     /// Constructs a `RealTimeBsrnnStemNode` and immediately activates the dedicated ONNX GPU
@@ -559,6 +397,45 @@ impl RealTimeBsrnnStemNode {
         let mut node = Self::new(sample_rate);
         node.enable_onnx_gpu_worker()?;
         Ok(node)
+    }
+
+    /// Constructs a node that runs the real `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` separator
+    /// synchronously inside `process_slice` (offline render and deterministic verification only).
+    pub fn new_with_onnx_lockstep(sample_rate: f64) -> Result<Self, String> {
+        let mut node = Self::new(sample_rate);
+        node.enable_onnx_lockstep()?;
+        Ok(node)
+    }
+
+    /// Loads the ONNX separator for inline (lockstep) servicing. MUST NOT be used on the live
+    /// real-time thread (ONNX Runtime inference allocates); offline render threads only.
+    pub fn enable_onnx_lockstep(
+        &mut self,
+    ) -> Result<crate::onnx_gpu_runtime::GpuExecutionTier, String> {
+        if self.async_gpu_worker.is_some() {
+            return Err("BSRNN async GPU worker already active".to_string());
+        }
+        let mut sep = crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator::from_default_assets()?;
+        let tier = sep.active_tier();
+        let mut warm_out = BsrnnOutputHop::default();
+        let _ = sep.process_hop(&BsrnnInputHop::default(), &mut warm_out);
+        sep.reset();
+        self.lockstep_onnx = Some(Box::new(sep));
+        // Offline render: never delay automation leaving 0 dB (silence gating still applies).
+        self.unity_idle_gating = false;
+        let stem_align_delay = self.latency_samples.saturating_sub(self.current_pre_stem_delay());
+        for dl in &mut self.stem_delay_lines {
+            dl.set_delay_samples(stem_align_delay);
+        }
+        self.reset_state();
+        Ok(tier)
+    }
+
+    /// `true` when a real separator (async GPU worker or lockstep ONNX) feeds the stems. Without one
+    /// the node is an exact latency-compensated pass-through and stem rebalancing is unavailable.
+    #[inline]
+    pub fn separation_available(&self) -> bool {
+        self.async_gpu_worker.is_some() || self.lockstep_onnx.is_some() || self.has_test_mock()
     }
 
     /// Spawns a dedicated background worker thread running `OzoneBsrnnOnnxSeparator` on RTX 4080
@@ -596,6 +473,15 @@ impl RealTimeBsrnnStemNode {
         self.current_out_pos = 0;
         self.cushion_hops_remaining = ASYNC_GPU_CUSHION_HOPS;
         self.delay_line.reset();
+        self.current_hop_valid = false;
+        self.stems_available_gain = 0.0;
+        self.idle = false;
+        self.unity_idle_gating = true;
+        self.silent_run = usize::MAX;
+        self.input_history.fill([0.0; 2]);
+        self.history_pos = 0;
+        self.cushion_hops_valid = false;
+        self.avail_hold_samples = 0;
 
         // Update stem alignment delay to account for 2-hop ONNX lookahead + async cushion:
         // Total pre-stem delay = 2048 (STFT) + 1024 (2-hop lookahead) + 1024 (2-hop cushion) = 4,096 samples.
@@ -631,6 +517,8 @@ impl RealTimeBsrnnStemNode {
 
                 let mut local_epoch = initial_epoch;
                 let mut idle_spins = 0u32;
+                let mut idle_since: Option<std::time::Instant> = None;
+                let mut idle_sleep_us = WORKER_POLL_SLEEP_US;
                 while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     let target_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
                     if target_epoch != local_epoch {
@@ -639,6 +527,8 @@ impl RealTimeBsrnnStemNode {
                     }
                     if let Ok(in_hop) = in_rx.pop() {
                         idle_spins = 0;
+                        idle_since = None;
+                        idle_sleep_us = WORKER_POLL_SLEEP_US;
                         // Discard stale input hops queued prior to the latest `reset_state()` epoch
                         let latest_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
                         if latest_epoch != local_epoch {
@@ -663,7 +553,14 @@ impl RealTimeBsrnnStemNode {
                         if idle_spins < 64 {
                             std::hint::spin_loop();
                         } else {
-                            std::thread::sleep(std::time::Duration::from_micros(250));
+                            // Progressive idle backoff: the RT side submits no hops while idle-gated,
+                            // so after ~100 ms without work poll at up to 2 ms (resume needs a hop
+                            // within the 4-hop / 42.7 ms cushion, so 2 ms is still ample).
+                            let since = *idle_since.get_or_insert_with(std::time::Instant::now);
+                            if since.elapsed() >= WORKER_IDLE_BACKOFF_AFTER {
+                                idle_sleep_us = (idle_sleep_us * 2).min(WORKER_MAX_IDLE_SLEEP_US);
+                            }
+                            std::thread::sleep(std::time::Duration::from_micros(idle_sleep_us));
                         }
                     }
                 }
@@ -702,31 +599,200 @@ impl RealTimeBsrnnStemNode {
             && self.stem_gains_db.iter().all(|g| g.abs() < 1e-5)
     }
 
-    /// Drains pending input hops from the lock-free `in_rx` queue when in lockstep mode,
-    /// executes `BsrnnStreamingWorker`, and pushes separated stem hops into `out_tx`.
-    /// When `async_gpu_worker` is active, this is a zero-cost no-op because the dedicated
-    /// background GPU thread services `in_rx -> out_tx` concurrently. Zero Heap Allocation.
+    /// Lockstep mode: drains pending input hops and runs the ONNX separator inline. Without any
+    /// separator the input hops are discarded (no output hops -> stems read as unavailable).
+    /// When the async GPU worker is active this is a no-op (the worker owns the queues).
     #[inline]
     pub fn service_worker_queue(&mut self) {
-        if let (Some(in_rx), Some(out_tx)) = (&mut self.in_rx, &mut self.out_tx) {
+        if self.out_tx.is_none() {
+            return;
+        }
+        let inline_separator = self.lockstep_onnx.is_some() || self.has_test_mock();
+        loop {
+            let in_hop = match self.in_rx.as_mut() {
+                Some(in_rx) => match in_rx.pop() {
+                    Ok(hop) => hop,
+                    Err(_) => break,
+                },
+                None => break,
+            };
+            if in_hop.epoch != self.active_epoch || !inline_separator {
+                continue;
+            }
             let mut out_hop = BsrnnOutputHop::default();
-            while let Ok(in_hop) = in_rx.pop() {
-                if in_hop.epoch != self.active_epoch {
-                    continue;
-                }
-                self.worker.process_hop(&in_hop, &mut out_hop);
+            let produced = match &mut self.lockstep_onnx {
+                Some(sep) => sep.process_hop(&in_hop, &mut out_hop).is_ok(),
+                None => self.test_mock_process(&in_hop, &mut out_hop),
+            };
+            if produced {
                 out_hop.epoch = in_hop.epoch;
                 out_hop.seq = in_hop.seq;
-                let _ = out_tx.push(out_hop);
+                if let Some(out_tx) = &mut self.out_tx {
+                    let _ = out_tx.push(out_hop);
+                }
             }
         }
     }
 
+    /// `true` when the async GPU worker cushion (`ASYNC_GPU_CUSHION_HOPS`) is part of the pipeline.
+    #[inline]
+    fn uses_async_cushion(&self) -> bool {
+        self.async_gpu_worker.is_some() || self.test_mock_emulates_async()
+    }
+
+    #[inline]
+    fn base_cushion_hops(&self) -> usize {
+        if self.uses_async_cushion() {
+            ASYNC_GPU_CUSHION_HOPS
+        } else {
+            0
+        }
+    }
+
+    /// Resets the inline (lockstep / test) separator state. Allocation-free.
+    #[inline]
+    fn reset_inline_separator(&mut self) {
+        if let Some(sep) = &mut self.lockstep_onnx {
+            sep.reset();
+        }
+        self.reset_test_mock();
+    }
+
+    /// Restarts the separation pipeline when leaving idle, at the exact sample the idle condition
+    /// flips (the new input hop starts at this sample). Like `reset_state()` but the dry
+    /// `delay_line` (and therefore the output / reported latency) is left untouched.
+    ///
+    /// - `history_silent`: the whole dry window (`latency_samples`) was below `-120 dBFS`, so the
+    ///   separator's zero history is faithful: cushion/first hops are valid (zero) stems and the
+    ///   availability ramp starts immediately -> rebalance is fully applied at the first onset.
+    /// - otherwise: the last `RESTART_PRIME_HOPS` hops of real input are re-fed to the reset
+    ///   separator (true history, complete analysis frames), the hops carrying that warm-up are
+    ///   skipped, and the availability ramp is held until the first valid stems leave
+    ///   `stem_delay_lines` (`lat - 2560` samples), then fades in over the 10 ms ramp.
+    ///
+    /// Zero heap allocations (queue drains, atomics and fills of pre-allocated buffers only).
+    fn restart_pipeline(&mut self, history_silent: bool) {
+        self.active_epoch = self.active_epoch.wrapping_add(1);
+        if let Some(bg) = &self.async_gpu_worker {
+            bg.worker_epoch
+                .store(self.active_epoch, std::sync::atomic::Ordering::Release);
+        }
+        self.reset_inline_separator();
+        if let Some(in_rx) = &mut self.in_rx {
+            while in_rx.pop().is_ok() {}
+        }
+        while self.out_rx.pop().is_ok() {}
+        self.pending_out_hop = None;
+        for dl in &mut self.stem_delay_lines {
+            dl.reset();
+        }
+        self.current_out_hop = BsrnnOutputHop::default();
+        self.current_out_pos = 0;
+        self.staging_in_pos = 0;
+        self.next_in_seq = 0;
+        self.expected_out_seq = 0;
+        self.cushion_hops_remaining = self.base_cushion_hops();
+
+        if history_silent {
+            self.cushion_hops_valid = true;
+            self.current_hop_valid = true;
+            self.avail_hold_samples = 0;
+            return;
+        }
+
+        self.cushion_hops_valid = false;
+        self.current_hop_valid = false;
+        // Prime: virtual pipeline start `RESTART_PRIME_HOPS` hops in the past. Hop `k` carries input
+        // hop `k - SEPARATOR_ALGO_DELAY_HOPS`, so the first popped hop `RESTART_PRIME_HOPS` carries
+        // primed hop `RESTART_WARMUP_HOPS` (3 hops of true history before it), and its stems land
+        // exactly on the dry path via the unchanged `stem_delay_lines` alignment.
+        let mask = INPUT_HISTORY_LEN - 1;
+        let mut read = (self.history_pos + INPUT_HISTORY_LEN - RESTART_PRIME_HOPS * BSRNN_HOP_SIZE) & mask;
+        for h in 0..RESTART_PRIME_HOPS {
+            for i in 0..BSRNN_HOP_SIZE {
+                self.staging_in_hop.frames[i] = self.input_history[read];
+                read = (read + 1) & mask;
+            }
+            self.staging_in_hop.epoch = self.active_epoch;
+            self.staging_in_hop.seq = h as u64;
+            if self.in_tx.push(self.staging_in_hop).is_ok() {
+                self.pushed_hops = self.pushed_hops.wrapping_add(1);
+            }
+        }
+        self.next_in_seq = RESTART_PRIME_HOPS as u64;
+        self.expected_out_seq = RESTART_PRIME_HOPS as u64;
+        let stem_align_delay = self.latency_samples.saturating_sub(self.current_pre_stem_delay());
+        self.avail_hold_samples =
+            (self.cushion_hops_remaining + 1) * BSRNN_HOP_SIZE + stem_align_delay;
+        self.service_worker_queue();
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn has_test_mock(&self) -> bool {
+        self.test_mock.is_some()
+    }
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn has_test_mock(&self) -> bool {
+        false
+    }
+    #[cfg(test)]
+    #[inline]
+    fn test_mock_emulates_async(&self) -> bool {
+        self.test_mock.as_ref().is_some_and(|m| m.emulate_async)
+    }
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn test_mock_emulates_async(&self) -> bool {
+        false
+    }
+    #[cfg(test)]
+    #[inline]
+    fn reset_test_mock(&mut self) {
+        if let Some(m) = &mut self.test_mock {
+            m.reset();
+        }
+    }
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn reset_test_mock(&mut self) {}
+    #[cfg(test)]
+    #[inline]
+    fn test_mock_process(&mut self, in_hop: &BsrnnInputHop, out_hop: &mut BsrnnOutputHop) -> bool {
+        match &mut self.test_mock {
+            Some(m) => {
+                m.process_hop(in_hop, out_hop);
+                true
+            }
+            None => false,
+        }
+    }
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn test_mock_process(&mut self, _in_hop: &BsrnnInputHop, _out_hop: &mut BsrnnOutputHop) -> bool {
+        false
+    }
+
+    /// Installs a deterministic inline mock separator (test only, no GPU / model needed).
+    #[cfg(test)]
+    fn enable_test_mock_separator(&mut self, emulate_async: bool) {
+        self.test_mock = Some(Box::new(tests::MockSeparator::new(emulate_async)));
+        self.unity_idle_gating = true;
+        let stem_align_delay = self.latency_samples.saturating_sub(self.current_pre_stem_delay());
+        for dl in &mut self.stem_delay_lines {
+            dl.set_delay_samples(stem_align_delay);
+        }
+        self.reset_state();
+    }
+
     fn current_pre_stem_delay(&self) -> usize {
-        if self.async_gpu_worker.is_some() {
+        if self.uses_async_cushion() {
             BSRNN_N_FFT
                 + crate::bsrnn_onnx_gpu::OZONE_BSRNN_LOOKAHEAD_SAMPLES
                 + ASYNC_GPU_CUSHION_HOPS * BSRNN_HOP_SIZE
+        } else if self.lockstep_onnx.is_some() || self.has_test_mock() {
+            BSRNN_N_FFT + crate::bsrnn_onnx_gpu::OZONE_BSRNN_LOOKAHEAD_SAMPLES
         } else {
             BSRNN_N_FFT
         }
@@ -735,7 +801,7 @@ impl RealTimeBsrnnStemNode {
     /// Pops the exact output hop matching `(self.active_epoch, target_seq)` without heap allocations,
     /// discarding any stale epoch/late underflow hops and buffering at most 1 future hop.
     #[inline]
-    fn pop_aligned_output_hop(&mut self, target_seq: u64) -> BsrnnOutputHop {
+    fn pop_aligned_output_hop(&mut self, target_seq: u64) -> Option<BsrnnOutputHop> {
         if let Some(pending) = self.pending_out_hop {
             if pending.epoch < self.active_epoch
                 || (pending.epoch == self.active_epoch && pending.seq < target_seq)
@@ -743,9 +809,9 @@ impl RealTimeBsrnnStemNode {
                 self.pending_out_hop = None;
             } else if pending.epoch == self.active_epoch && pending.seq == target_seq {
                 self.pending_out_hop = None;
-                return pending;
+                return Some(pending);
             } else {
-                return BsrnnOutputHop::default();
+                return None;
             }
         }
 
@@ -756,14 +822,14 @@ impl RealTimeBsrnnStemNode {
                 continue;
             }
             if hop.epoch == self.active_epoch && hop.seq == target_seq {
-                return hop;
+                return Some(hop);
             }
             // Future hop (`hop.seq > target_seq` or newer epoch): preserve it for its exact sequence slot
             self.pending_out_hop = Some(hop);
             break;
         }
 
-        BsrnnOutputHop::default()
+        None
     }
 }
 
@@ -795,7 +861,10 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
         for dl in &mut self.stem_delay_lines {
             dl.reset();
         }
-        self.worker.reset();
+        self.reset_inline_separator();
+        self.stems_available_gain = 0.0;
+        self.applied_delta_gains = [0.0; BSRNN_STEM_COUNT];
+        self.current_hop_valid = false;
         self.active_epoch = self.active_epoch.wrapping_add(1);
         self.next_in_seq = 0;
         self.expected_out_seq = 0;
@@ -807,14 +876,19 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
         if let Some(bg) = &self.async_gpu_worker {
             bg.worker_epoch
                 .store(self.active_epoch, std::sync::atomic::Ordering::Release);
-            self.cushion_hops_remaining = ASYNC_GPU_CUSHION_HOPS;
-        } else {
-            self.cushion_hops_remaining = 0;
         }
+        self.cushion_hops_remaining = self.base_cushion_hops();
         self.staging_in_hop = BsrnnInputHop::default();
         self.staging_in_pos = 0;
         self.current_out_hop = BsrnnOutputHop::default();
         self.current_out_pos = 0;
+        // Everything is zero again == the node has "heard" silence forever.
+        self.idle = false;
+        self.silent_run = usize::MAX;
+        self.input_history.fill([0.0; 2]);
+        self.history_pos = 0;
+        self.cushion_hops_valid = false;
+        self.avail_hold_samples = 0;
     }
 
     fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
@@ -850,40 +924,70 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
 
     fn process_slice(
         &mut self,
-        _ctx: &ProcessContext,
+        ctx: &ProcessContext,
         main_io: &mut [StereoFrame],
         _sidechain_in: Option<&[StereoFrame]>,
         _aux_sends_out: &mut [&mut [StereoFrame]],
     ) {
-        let unity_fast_path = self.is_unity_bypass();
         let any_solo = self.stem_solo.iter().any(|&s| s);
-
-        let mut delta_gains = [0.0f32; BSRNN_STEM_COUNT];
-        if !unity_fast_path {
-            for s in 0..BSRNN_STEM_COUNT {
-                if self.stem_mute[s] || (any_solo && !self.stem_solo[s]) {
-                    // Mute subtracts 100% of the stem (`Delta = -1.0`)
-                    delta_gains[s] = -1.0;
-                } else {
-                    let g_lin = 10.0f32.powf(self.stem_gains_db[s].clamp(-24.0, 12.0) / 20.0);
-                    delta_gains[s] = g_lin - 1.0;
-                }
-            }
+        let mut target_delta = [0.0f32; BSRNN_STEM_COUNT];
+        for s in 0..BSRNN_STEM_COUNT {
+            target_delta[s] = if self.stem_mute[s] || (any_solo && !self.stem_solo[s]) {
+                // Mute subtracts 100% of the stem (`Delta = -1.0`)
+                -1.0
+            } else {
+                10.0f32.powf(self.stem_gains_db[s].clamp(-24.0, 12.0) / 20.0) - 1.0
+            };
         }
+        // ~10 ms de-zipper ramp for gain moves and for stem availability (GPU underflow fades).
+        let coeff = (1.0 - (-1.0 / (0.010 * ctx.sample_rate.max(8_000.0))).exp()) as f32;
+        let separation = self.separation_available();
+        // Idle gating (only with a real separator): no hops reach the separator while idle.
+        // Silence gate: every stem hop influenced by real audio has been played out.
+        let silence_gate = self.latency_samples + self.current_pre_stem_delay();
+        let unity_gate = separation && self.unity_idle_gating && self.is_unity_bypass();
+        let history_mask = INPUT_HISTORY_LEN - 1;
 
         for frame in main_io.iter_mut() {
             let raw_in = *frame;
 
+            // 0. Idle gating state machine (evaluated per sample so a restart happens exactly at
+            //    the first non-silent sample / first sample after leaving unity).
+            let prev_silent_run = self.silent_run;
+            // NaN compares false -> counted as signal (never gates on garbage).
+            let quiet = raw_in[0].abs() < IDLE_SILENCE_PEAK && raw_in[1].abs() < IDLE_SILENCE_PEAK;
+            self.silent_run = if quiet { prev_silent_run.saturating_add(1) } else { 0 };
+            if separation {
+                let want_idle = self.silent_run >= silence_gate
+                    || (unity_gate
+                        && self
+                            .applied_delta_gains
+                            .iter()
+                            .all(|d| d.abs() < IDLE_DELTA_EPS));
+                if want_idle != self.idle {
+                    self.idle = want_idle;
+                    if !want_idle {
+                        self.restart_pipeline(prev_silent_run >= self.latency_samples);
+                    }
+                }
+            }
+            self.input_history[self.history_pos] = raw_in;
+            self.history_pos = (self.history_pos + 1) & history_mask;
+
             // 1. Feed lock-free input hop staging buffer & service worker (lockstep or async SPSC)
-            self.staging_in_hop.frames[self.staging_in_pos] = raw_in;
-            self.staging_in_pos += 1;
-            if self.staging_in_pos >= BSRNN_HOP_SIZE {
-                self.staging_in_pos = 0;
-                self.staging_in_hop.epoch = self.active_epoch;
-                self.staging_in_hop.seq = self.next_in_seq;
-                self.next_in_seq = self.next_in_seq.wrapping_add(1);
-                let _ = self.in_tx.push(self.staging_in_hop);
-                self.service_worker_queue();
+            if !self.idle {
+                self.staging_in_hop.frames[self.staging_in_pos] = raw_in;
+                self.staging_in_pos += 1;
+                if self.staging_in_pos >= BSRNN_HOP_SIZE {
+                    self.staging_in_pos = 0;
+                    self.staging_in_hop.epoch = self.active_epoch;
+                    self.staging_in_hop.seq = self.next_in_seq;
+                    self.next_in_seq = self.next_in_seq.wrapping_add(1);
+                    if self.in_tx.push(self.staging_in_hop).is_ok() {
+                        self.pushed_hops = self.pushed_hops.wrapping_add(1);
+                    }
+                    self.service_worker_queue();
+                }
             }
 
             // 2. Advance exact 5,760-sample (`120 ms` @ 48 kHz) dry delay line
@@ -893,19 +997,45 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
 
             // 3. Pop next separated stem hop from lock-free `out_rx` when needed
             if self.current_out_pos >= BSRNN_HOP_SIZE {
-                if self.cushion_hops_remaining > 0 {
+                if self.idle {
+                    // Gated: no hops in flight, no underflow accounting; stems fade out.
+                    self.current_out_hop = BsrnnOutputHop::default();
+                    self.current_hop_valid = false;
+                } else if self.cushion_hops_remaining > 0 {
                     self.cushion_hops_remaining -= 1;
                     self.current_out_hop = BsrnnOutputHop::default();
+                    self.current_hop_valid = self.cushion_hops_valid;
                 } else {
                     let target_seq = self.expected_out_seq;
                     self.expected_out_seq = self.expected_out_seq.wrapping_add(1);
-                    self.current_out_hop = self.pop_aligned_output_hop(target_seq);
+                    match self.pop_aligned_output_hop(target_seq) {
+                        Some(hop) => {
+                            self.current_out_hop = hop;
+                            self.current_hop_valid = true;
+                        }
+                        None => {
+                            self.current_out_hop = BsrnnOutputHop::default();
+                            self.current_hop_valid = false;
+                            if separation {
+                                self.underflow_hops = self.underflow_hops.wrapping_add(1);
+                            }
+                        }
+                    }
                 }
                 self.current_out_pos = 0;
             }
 
             let pos = self.current_out_pos;
             self.current_out_pos += 1;
+
+            let avail_target = if self.current_hop_valid && self.avail_hold_samples == 0 {
+                1.0
+            } else {
+                0.0
+            };
+            self.avail_hold_samples = self.avail_hold_samples.saturating_sub(1);
+            self.stems_available_gain += coeff * (avail_target - self.stems_available_gain);
+            let avail = self.stems_available_gain;
 
             let mut out_l = x_delayed[0];
             let mut out_r = x_delayed[1];
@@ -918,17 +1048,340 @@ impl UnifiedDspNode for RealTimeBsrnnStemNode {
                 let db = 10.0 * (p_sq + 1e-12).log10();
                 self.stem_rms_db[s] = 0.995 * self.stem_rms_db[s] + 0.005 * db;
 
-                if !unity_fast_path {
-                    out_l += delta_gains[s] * stem_frame[0];
-                    out_r += delta_gains[s] * stem_frame[1];
+                self.applied_delta_gains[s] +=
+                    coeff * (target_delta[s] - self.applied_delta_gains[s]);
+                let g = self.applied_delta_gains[s] * avail;
+                out_l += g * stem_frame[0];
+                out_r += g * stem_frame[1];
+            }
+            *frame = [out_l, out_r];
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    //! Idle-gating tests. They use a deterministic inline mock separator with the exact
+    //! `OzoneBsrnnOnnxSeparator` hop structure (output hop `k` carries input hop `k - 5`) whose 4
+    //! stems are power-of-two fractions of the input, so `sum(stems) == input` bit-exactly. No GPU
+    //! or ONNX model is needed. `emulate_async = true` additionally runs the async GPU-worker
+    //! scheduling (4-hop cushion, async stem alignment) with inline servicing.
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    const MOCK_RING_HOPS: usize = SEPARATOR_ALGO_DELAY_HOPS + 1;
+    const MOCK_SPLIT: [f32; BSRNN_STEM_COUNT] = [0.5, 0.25, 0.125, 0.125];
+
+    pub(crate) struct MockSeparator {
+        ring: Box<[[StereoFrame; BSRNN_HOP_SIZE]; MOCK_RING_HOPS]>,
+        hops_seen: usize,
+        pub(crate) emulate_async: bool,
+        pub(crate) processed: u64,
+    }
+
+    impl MockSeparator {
+        pub(crate) fn new(emulate_async: bool) -> Self {
+            Self {
+                ring: Box::new([[[0.0; 2]; BSRNN_HOP_SIZE]; MOCK_RING_HOPS]),
+                hops_seen: 0,
+                emulate_async,
+                processed: 0,
+            }
+        }
+
+        pub(crate) fn reset(&mut self) {
+            for hop in self.ring.iter_mut() {
+                *hop = [[0.0; 2]; BSRNN_HOP_SIZE];
+            }
+            self.hops_seen = 0;
+        }
+
+        pub(crate) fn process_hop(&mut self, in_hop: &BsrnnInputHop, out_hop: &mut BsrnnOutputHop) {
+            self.ring[self.hops_seen % MOCK_RING_HOPS] = in_hop.frames;
+            // == (hops_seen - SEPARATOR_ALGO_DELAY_HOPS) mod ring; zeros until then (reset).
+            let src = (self.hops_seen + 1) % MOCK_RING_HOPS;
+            for s in 0..BSRNN_STEM_COUNT {
+                for i in 0..BSRNN_HOP_SIZE {
+                    let x = self.ring[src][i];
+                    out_hop.stems[s][i] = [x[0] * MOCK_SPLIT[s], x[1] * MOCK_SPLIT[s]];
                 }
             }
+            self.hops_seen += 1;
+            self.processed += 1;
+        }
+    }
 
-            if unity_fast_path {
-                *frame = x_delayed;
-            } else {
-                *frame = [out_l, out_r];
+    // ---- Per-thread allocation counter (verifies the RT path stays allocation-free) ----------
+    struct CountingAlloc;
+    thread_local! {
+        static THREAD_ALLOCS: Cell<u64> = const { Cell::new(0) };
+    }
+    #[inline]
+    fn bump_allocs() {
+        let _ = THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1));
+    }
+    unsafe impl GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            bump_allocs();
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            bump_allocs();
+            unsafe { System.alloc_zeroed(layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            bump_allocs();
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+    #[global_allocator]
+    static GLOBAL_COUNTING_ALLOC: CountingAlloc = CountingAlloc;
+    fn thread_allocs() -> u64 {
+        THREAD_ALLOCS.with(|c| c.get())
+    }
+
+    const SR: f64 = 48_000.0;
+
+    fn ctx() -> ProcessContext {
+        ProcessContext {
+            sample_rate: SR,
+            ..Default::default()
+        }
+    }
+
+    fn tone(n: usize) -> StereoFrame {
+        let t = n as f64 / SR;
+        let tau = 2.0 * std::f64::consts::PI;
+        [
+            (0.4 * (tau * 220.0 * t).sin() + 0.1 * (tau * 1375.0 * t).sin()) as f32,
+            (0.35 * (tau * 330.0 * t).cos()) as f32,
+        ]
+    }
+
+    fn mock_node(emulate_async: bool) -> RealTimeBsrnnStemNode {
+        let mut node = RealTimeBsrnnStemNode::new(SR);
+        node.prepare(SR, 256);
+        node.enable_test_mock_separator(emulate_async);
+        assert!(node.separation_available());
+        node
+    }
+
+    fn run(node: &mut RealTimeBsrnnStemNode, buf: &mut [StereoFrame], block: usize) {
+        let c = ctx();
+        for chunk in buf.chunks_mut(block) {
+            node.process_slice(&c, chunk, None, &mut []);
+        }
+    }
+
+    fn mock_processed(node: &RealTimeBsrnnStemNode) -> u64 {
+        node.test_mock.as_ref().unwrap().processed
+    }
+
+    #[test]
+    fn unity_bypass_submits_no_hops_and_is_exact_dry_delay() {
+        for emulate_async in [false, true] {
+            let mut node = mock_node(emulate_async);
+            let lat = node.latency_samples();
+            let n = 2 * 48_000;
+            let input: Vec<StereoFrame> = (0..n).map(tone).collect();
+            let mut buf = input.clone();
+            run(&mut node, &mut buf, 256);
+            assert!(node.is_idle_gated());
+            assert_eq!(node.pushed_hops(), 0, "async={emulate_async}");
+            assert_eq!(mock_processed(&node), 0);
+            assert_eq!(node.underflow_hops, 0);
+            assert_eq!(node.latency_samples(), lat);
+            for i in 0..n {
+                let exp = if i >= lat { input[i - lat] } else { [0.0; 2] };
+                assert_eq!(buf[i], exp, "async={emulate_async} i={i}");
             }
+        }
+    }
+
+    #[test]
+    fn long_silence_stops_hop_submission_after_tail() {
+        for emulate_async in [false, true] {
+            let mut node = mock_node(emulate_async);
+            node.stem_gains_db = [6.0, -3.0, 0.0, 2.0];
+            let gate = node.latency_samples() + node.current_pre_stem_delay();
+
+            // Silence from construction: gated immediately.
+            let mut sil = vec![[0.0f32; 2]; 48_000];
+            run(&mut node, &mut sil, 256);
+            assert!(node.is_idle_gated());
+            assert_eq!(node.pushed_hops(), 0);
+
+            // 0.5 s of audio streams normally (1 hop per 512 samples).
+            let mut loud: Vec<StereoFrame> = (0..24_064).map(tone).collect();
+            run(&mut node, &mut loud, 256);
+            assert!(!node.is_idle_gated());
+            let at_silence_start = node.pushed_hops();
+            assert_eq!(at_silence_start, 24_064 / 512);
+
+            // Tail: keeps submitting until `latency + pre_stem_delay` silent samples, then stops.
+            let mut tail = vec![[0.0f32; 2]; gate + 512];
+            run(&mut node, &mut tail, 256);
+            assert!(node.is_idle_gated());
+            let after_tail = node.pushed_hops();
+            assert!(after_tail - at_silence_start <= (gate / 512 + 1) as u64);
+            let underflows = node.underflow_hops;
+
+            let mut long = vec![[0.0f32; 2]; 3 * 48_000];
+            run(&mut node, &mut long, 256);
+            assert_eq!(node.pushed_hops(), after_tail, "async={emulate_async}");
+            assert_eq!(node.underflow_hops, underflows);
+            assert!(long.iter().all(|f| *f == [0.0, 0.0]));
+        }
+    }
+
+    #[test]
+    fn resume_from_silence_is_seamless_and_sample_exact() {
+        for emulate_async in [false, true] {
+            let mut node = mock_node(emulate_async);
+            let gain_db = 6.0f32;
+            let g = 10.0f32.powf(gain_db / 20.0);
+            node.stem_gains_db = [gain_db; BSRNN_STEM_COUNT];
+            let lat = node.latency_samples();
+            let onset = 48_000 + 77; // mid-block, not hop aligned
+            let n = onset + 72_000;
+            let input: Vec<StereoFrame> =
+                (0..n).map(|i| if i < onset { [0.0; 2] } else { tone(i) }).collect();
+            let mut buf = input.clone();
+            run(&mut node, &mut buf[..onset], 256);
+            assert!(node.is_idle_gated());
+            assert_eq!(node.pushed_hops(), 0);
+            run(&mut node, &mut buf[onset..], 256);
+            assert!(!node.is_idle_gated());
+            // Silent history -> no priming; the first hop starts exactly at the onset sample.
+            assert_eq!(node.pushed_hops(), ((n - onset) / 512) as u64, "async={emulate_async}");
+            assert_eq!(node.underflow_hops, 0);
+            for i in onset..onset + lat {
+                assert_eq!(buf[i], [0.0, 0.0], "async={emulate_async} i={i}");
+            }
+            // Rebalance is fully applied from the very first delayed onset sample.
+            let mut max_err = 0.0f32;
+            for i in onset + lat..n {
+                let x = input[i - lat];
+                max_err = max_err
+                    .max((buf[i][0] - g * x[0]).abs())
+                    .max((buf[i][1] - g * x[1]).abs());
+            }
+            assert!(max_err < 5e-5, "async={emulate_async} max_err={max_err}");
+        }
+    }
+
+    #[test]
+    fn resume_from_unity_primes_history_holds_dry_then_fades_in() {
+        for emulate_async in [false, true] {
+            let mut node = mock_node(emulate_async);
+            let lat = node.latency_samples();
+            let gain_db = 6.0f32;
+            let g = 10.0f32.powf(gain_db / 20.0);
+            let flip = 96_000 + 64 * 3; // block boundary for 64-frame blocks, not hop aligned
+            let n = flip + 48_000;
+            let input: Vec<StereoFrame> = (0..n).map(tone).collect();
+            let mut buf = input.clone();
+
+            run(&mut node, &mut buf[..flip], 64);
+            assert!(node.is_idle_gated());
+            assert_eq!(node.pushed_hops(), 0);
+
+            node.stem_gains_db = [gain_db; BSRNN_STEM_COUNT];
+            // Restart happens exactly at the flip sample: 8 history hops are primed at once.
+            run(&mut node, &mut buf[flip..flip + 1], 1);
+            assert!(!node.is_idle_gated());
+            assert_eq!(node.pushed_hops(), RESTART_PRIME_HOPS as u64);
+            // The first live hop starts at `flip`, so it completes at `flip + 511`.
+            run(&mut node, &mut buf[flip + 1..flip + 511], 1);
+            assert_eq!(node.pushed_hops(), RESTART_PRIME_HOPS as u64);
+            run(&mut node, &mut buf[flip + 511..flip + 512], 1);
+            assert_eq!(node.pushed_hops(), RESTART_PRIME_HOPS as u64 + 1);
+            run(&mut node, &mut buf[flip + 512..], 64);
+            assert_eq!(
+                node.pushed_hops(),
+                (RESTART_PRIME_HOPS + (n - flip) / 512) as u64,
+                "async={emulate_async}"
+            );
+            assert_eq!(node.underflow_hops, 0);
+
+            // Stems invalid (warm-up / in flight): output is exactly the dry delayed input.
+            let hold = lat - SEPARATOR_ALGO_DELAY_HOPS * BSRNN_HOP_SIZE; // 3,200 samples
+            for i in flip..flip + hold {
+                assert_eq!(buf[i], input[i - lat], "async={emulate_async} i={i}");
+            }
+            // Fade-in: monotone, bounded by the target gain (no step / click).
+            for i in flip + hold..n {
+                let x = input[i - lat];
+                assert!(buf[i][0].abs() <= g * x[0].abs() + 1e-6, "i={i}");
+                assert!(buf[i][1].abs() <= g * x[1].abs() + 1e-6, "i={i}");
+            }
+            // Settled: primed stems are sample-aligned with the dry path.
+            let mut max_err = 0.0f32;
+            for i in flip + hold + 6_000..n {
+                let x = input[i - lat];
+                max_err = max_err
+                    .max((buf[i][0] - g * x[0]).abs())
+                    .max((buf[i][1] - g * x[1]).abs());
+            }
+            // f32 one-pole ramps stall ~1.4e-5 short of their target (same 5e-5 floor as the
+            // lockstep ONNX verification test).
+            assert!(max_err < 5e-5, "async={emulate_async} max_err={max_err}");
+        }
+    }
+
+    #[test]
+    fn lockstep_without_unity_gating_keeps_streaming() {
+        let mut node = mock_node(false);
+        node.set_unity_idle_gating(false);
+        let lat = node.latency_samples();
+        let input: Vec<StereoFrame> = (0..48_128).map(tone).collect();
+        let mut buf = input.clone();
+        run(&mut node, &mut buf, 256);
+        assert!(!node.is_idle_gated());
+        assert_eq!(node.pushed_hops(), 48_128 / 512);
+        for i in lat..buf.len() {
+            assert_eq!(buf[i], input[i - lat]);
+        }
+    }
+
+    #[test]
+    fn idle_gating_transitions_are_allocation_free() {
+        for emulate_async in [false, true] {
+            let mut node = mock_node(emulate_async);
+            node.stem_gains_db = [6.0; BSRNN_STEM_COUNT];
+            let total = 6 * 48_000;
+            let mut buf: Vec<StereoFrame> = (0..total)
+                .map(|i| if i < 48_000 { [0.0; 2] } else { tone(i) })
+                .collect();
+            let c = ctx();
+            let mut restarts_seen = 0u32;
+            let mut was_idle = false;
+
+            let before = thread_allocs();
+            for (b, chunk) in buf.chunks_mut(256).enumerate() {
+                let pos = b * 256;
+                if pos == 2 * 48_000 {
+                    node.stem_gains_db = [0.0; BSRNN_STEM_COUNT]; // -> unity idle
+                }
+                if pos == 4 * 48_000 {
+                    node.stem_gains_db = [-6.0; BSRNN_STEM_COUNT]; // -> primed restart
+                }
+                node.process_slice(&c, chunk, None, &mut []);
+                if was_idle && !node.is_idle_gated() {
+                    restarts_seen += 1;
+                }
+                was_idle = node.is_idle_gated();
+            }
+            let allocs = thread_allocs() - before;
+
+            assert_eq!(allocs, 0, "async={emulate_async}: RT path allocated {allocs} times");
+            assert_eq!(restarts_seen, 2, "silence->audio and unity->rebalance restarts");
+            assert!(!node.is_idle_gated());
+            assert!(node.pushed_hops() > 0);
         }
     }
 }

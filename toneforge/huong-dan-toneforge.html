@@ -241,6 +241,9 @@
     <a href="#khu-mixer">6. 502-Track Mixer &amp; Patcher (Bàn trộn)</a>
     <a href="#khu-uvr5">7. UVR5 Stem Studio (Tách lời/nhạc bằng AI)</a>
     <a href="#khu-render">8. Offline Render &amp; Bounce (Xuất file WAV)</a>
+    <a href="#khu-vocal">9. Vocal Pitch (Pitcher RT &amp; NewTone)</a>
+    <a href="#khu-plugins">10. VST3 / CLAP Host (Plugin rời)</a>
+    <a href="#khu-du-an">11. Dự án, Thu âm &amp; Mixer (Lưu/Mở, M/S/Pan)</a>
     <div class="grp">Thực hành &amp; Cứu hộ</div>
     <a href="#phan-d">D · 4 Kịch bản cầm tay chỉ việc (1-2-3 là xong)</a>
     <a href="#phan-e">E · Sự cố &amp; Câu hỏi thường gặp</a>
@@ -250,7 +253,7 @@
     <section class="cover-wrap">
       <div class="cover">
         <h1>📖 Cẩm nang sử dụng ToneForge Studio (Dành cho người mới hoàn toàn)</h1>
-        <p>Phiên bản <b>1.1.0</b> · Kiến trúc <b>120 FPS WebGPU + 128 KB Zero-Copy SHM + AI GPU (CUDA 12 / DirectML)</b> · Viết riêng cho người <b>chưa từng dùng FL Studio hay bất kỳ plugin phòng thu nào trước đây</b>.</p>
+        <p>Phiên bản <b>2.0.0 (ToneForge v3 — Full FL Studio 26 &amp; Plugin Parity)</b> · Kiến trúc <b>120 FPS WebGPU + 128 KB Zero-Copy SHM + ASIO/WASAPI Duplex + VST3/CLAP Host + AI GPU (CUDA 12 / DirectML)</b> · Viết riêng cho người <b>chưa từng dùng FL Studio hay bất kỳ plugin phòng thu nào trước đây</b>.</p>
         <p>Giải thích bằng tiếng Việt đời thường cho từng màn hình, từng nút bấm, từng con số và từng thanh trượt. Không cần biết nhạc lý, không cần tự nối dây âm thanh — làm theo đúng các bước 1-2-3 trong cẩm nang này là ra sản phẩm.</p>
       </div>
     </section>
@@ -335,7 +338,7 @@
           <thead><tr><th>#</th><th>Nhãn / Nút trên màn hình</th><th>Là gì · Bấm/Kéo thì sao</th><th>Giá trị bình thường</th><th>Khi nào phải lo</th><th>Lùi lại được không</th></tr></thead>
           <tbody>
             <tr data-filter><td class="c-n"><span class="n">1</span></td><td class="c-label"><b>▶ Play / ⏸ Pause</b><br/><span class="ty">nút bấm</span></td><td><b>Bấm ▶ Play:</b> Phát âm thanh thật ra Loa/Tai nghe máy tính và chạy đường sóng phổ nhấp nhô ở 120 FPS.<br/><b>Bấm ⏸ Pause:</b> Ngắt tiếng loa ngay lập tức, đồng hồ Sample/PPQ đứng yên, và <b>đường sóng nhấp nhô tắt hẳn — chỉ còn lại đường EQ màu vàng phẳng lặng</b>.</td><td>Xanh lá (<code>⏸ Pause</code>) khi đang phát; Vàng (<code>▶ Play</code>) khi đã tạm dừng.</td><td><span class="none">—</span></td><td>Bấm qua lại giữa Play và Pause bất kỳ lúc nào.</td></tr>
-            <tr data-filter><td class="c-n"><span class="n">2</span></td><td class="c-label"><b>📂 Mở nhạc từ máy (.wav/.mp3/.flac) · 🎹 Chuyển về Nhạc mẫu Piano Roll · 🔊 Loa · ⏮ Reset</b><br/><span class="ty">chọn file, chuyển nguồn, âm lượng &amp; tua đầu bài</span></td><td><b>📂 Mở nhạc từ máy:</b> Mở hộp thoại Windows chọn bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>, <code>.m4a</code>, <code>.aac</code>, <code>.aiff</code> — đọc trọn vẹn 100% độ dài bài nhạc) để nghe qua Loa &amp; chỉnh trực tiếp bằng Pro-Q 4, Soothe3, Ozone 12. Khi muốn quay lại nghe nhịp 808/909 nội bộ, bấm <b>🎹 Chuyển về Nhạc mẫu Piano Roll</b>.<br/><b>🔊 Loa (0–100%):</b> Chỉnh âm lượng loa hoặc bấm để tắt tiếng.<br/><b>⏮ Reset:</b> Đưa kim phát nhạc về đầu bài (Sample 0, PPQ 0).</td><td>Loa mặc định <code>85%</code>.</td><td><span class="none">—</span></td><td>Đổi bài hát khác, bấm <code>🎹 Chuyển về Nhạc mẫu Piano Roll</code> hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">2</span></td><td class="c-label"><b>📂 Mở nhạc từ máy (.wav/.mp3/.flac) · ✕ Đóng file nhạc (Về Piano Roll / Playlist) · 🔊 Loa · ⏮ Reset</b><br/><span class="ty">chọn file, đóng file nhạc, âm lượng &amp; tua đầu bài</span></td><td><b>📂 Mở nhạc từ máy:</b> Mở hộp thoại Windows chọn bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>, <code>.m4a</code>, <code>.aac</code>, <code>.aiff</code> — đọc trọn vẹn 100% độ dài bài nhạc) để nghe qua Loa &amp; chỉnh trực tiếp bằng Pro-Q 4, Soothe3, Ozone 12. Khi muốn đóng bài hát đang nạp (vẫn giữ nguyên chuỗi FX Mixer) để quay về Piano Roll / Playlist, bấm <b>✕ Đóng file nhạc (Về Piano Roll / Playlist)</b>.<br/><b>🔊 Loa (0–100%):</b> Chỉnh âm lượng loa hoặc bấm để tắt tiếng.<br/><b>⏮ Reset:</b> Đưa kim phát nhạc về đầu bài (Sample 0, PPQ 0).</td><td>Loa mặc định <code>85%</code>.</td><td><span class="none">—</span></td><td>Đổi bài hát khác, bấm <code>✕ Đóng file nhạc (Về Piano Roll / Playlist)</code> hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td></tr>
             <tr data-filter><td class="c-n"><span class="n">3</span></td><td class="c-label"><b>BPM</b><br/><span class="ty">ô nhập số (10–999)</span></td><td><b>Đổi số thì:</b> Tăng hoặc giảm tốc độ chạy nhạc của toàn bộ bài hát ngay lập tức mà không làm méo giọng.</td><td><code>120</code> – <code>140</code> BPM (mặc định <code>128</code>).</td><td>Nhập quá thấp (&lt;40) nhạc bò rất chậm; quá cao (&gt;220) trống dồn dập.</td><td>Gõ lại số <code>128</code> hoặc số cũ bất kỳ lúc nào.</td></tr>
             <tr data-filter><td class="c-n"><span class="n">4</span></td><td class="c-label"><b>Seq / Sample / PPQ</b><br/><span class="ty">đồng hồ số</span></td><td>Cho biết thứ tự khung hình đồ họa 120Hz (<code>Seq</code>), vị trí mẫu âm thanh (<code>Sample</code>) và vị trí vạch nhịp hiện tại (<code>PPQ</code>).</td><td>Tăng đều đặn khi đang bật Play.</td><td><span class="none">—</span></td><td>Bấm <code>⏮ Reset</code> để về 0.</td></tr>
             <tr data-filter><td class="c-n"><span class="n">5</span></td><td class="c-label"><b>CPU</b><br/><span class="ty">con số %</span></td><td>Mức tải bộ vi xử lý âm thanh. Nhờ chạy bằng Rust + SIMD nên rất nhẹ.</td><td><code>3.0%</code> – <code>25.0%</code>.</td><td>Nếu vượt quá <code>85%</code> trên máy yếu thì âm thanh có thể bị khựng nhẹ.</td><td><span class="none">—</span></td></tr>
@@ -451,6 +454,47 @@
           </tbody>
         </table>
       </section>
+
+      <section class="page" id="khu-vocal" data-filter>
+        <h3><span class="num">9</span> Vocal Pitch — Pitcher Real-Time &amp; NewTone Graphical Editor (Chỉnh phô giọng hát giữ nguyên Formant)</h3>
+        <p class="purpose">Tự động kéo giọng hát về đúng tông nhạc theo thời gian thực (Pitcher RT) hoặc hiển thị từng âm tiết lên lưới nốt nhạc để kéo sửa phô, chỉnh độ ngân rung Vibrato và giữ nguyên màu giọng tự nhiên không bị méo "giọng sóc chuột" (True-Envelope Cepstral Formant Preservation).</p>
+        <table class="items">
+          <thead><tr><th>#</th><th>Nhãn / Nút trên màn hình</th><th>Là gì · Bấm/Kéo thì sao</th><th>Giá trị bình thường</th><th>Khi nào phải lo</th><th>Lùi lại được không</th></tr></thead>
+          <tbody>
+            <tr data-filter><td class="c-n"><span class="n">1</span></td><td class="c-label"><b>Pitcher RT (Root Key · Scale · Retune Speed · Formant Preserve)</b><br/><span class="ty">thanh chỉnh tự động</span></td><td>Chọn giọng chủ đạo của bài hát (<code>C..B</code>, <code>Major / Minor</code>) và tốc độ kéo nốt (<code>Retune ms</code>). Luôn bật <code>Formant Preserve</code> để khi lên nốt cao giọng ca sĩ vẫn dày ấm tự nhiên.</td><td>Retune <code>15–35 ms</code> (tự nhiên) hoặc <code>0–5 ms</code> (Auto-Tune hiện đại).</td><td>Chọn sai <code>Root Key</code> sẽ kéo giọng hát sang nốt lệch tông.</td><td>Bấm <code>↶ Undo (Ctrl+Z)</code> hoặc đổi lại Root Key bất kỳ lúc nào.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">2</span></td><td class="c-label"><b>🔍 Phân tích Giọng hát (pYIN) · 🧲 Snap All · ✅ Commit Vocal</b><br/><span class="ty">bộ nút NewTone</span></td><td>Tách đoạn thu giọng hát thành từng khối nốt (<code>VocalNoteBlob</code>), tự động bỏ qua âm gió <code>s/sh/ch</code> (Sibilant Guard 4–10 kHz), cho phép kéo lên/xuống đổi cao độ, kéo mép phải để co giãn nhịp (Time-Warp) rồi kết xuất vào Kênh #1.</td><td>Flatten Drift <code>65%–85%</code>; Vibrato <code>100%</code>.</td><td><span class="none">—</span></td><td>Hỗ trợ hoàn tác 64 bước <code>Ctrl+Z / Ctrl+Y</code> toàn cục.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="page" id="khu-plugins" data-filter>
+        <h3><span class="num">10</span> VST3 3.7 &amp; CLAP 1.2 External Plugin Host (Nạp nhạc cụ &amp; hiệu ứng rời bên thứ ba)</h3>
+        <p class="purpose">Quét các plugin <code>.vst3</code> và <code>.clap</code> cài trên máy tính trong tiến trình cô lập chống sập (Crash-Isolated Scanner), nạp thẳng vào 502 kênh Mixer với tự động bù trễ <code>5-Point APDC</code> và mở cửa sổ đồ họa gốc Win32 HWND.</p>
+        <table class="items">
+          <thead><tr><th>#</th><th>Nhãn / Nút trên màn hình</th><th>Là gì · Bấm/Kéo thì sao</th><th>Giá trị bình thường</th><th>Khi nào phải lo</th><th>Lùi lại được không</th></tr></thead>
+          <tbody>
+            <tr data-filter><td class="c-n"><span class="n">1</span></td><td class="c-label"><b>🔍 Quét Plugin VST3 / CLAP (Crash-Isolated)</b><br/><span class="ty">nút quét an toàn</span></td><td>Chạy <code>toneforge-plugin-scanner.exe</code> ở tiến trình riêng để kiểm tra từng plugin; nếu gặp plugin lỗi gây sập bộ nhớ, hệ thống tự cách ly vào danh sách Quarantine mà không làm văng ứng dụng DAW chính.</td><td>Quarantined: <code>0</code>.</td><td><span class="none">—</span></td><td>Bấm quét lại bất kỳ lúc nào sau khi cài thêm plugin mới.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">2</span></td><td class="c-label"><b>⚡ Load → Track/Slot &amp; 🗔 Mở Cửa Sổ Gốc (HWND)</b><br/><span class="ty">nạp &amp; mở giao diện plugin</span></td><td>Gắn plugin VST3 hoặc CLAP vào đúng Kênh &amp; Khay đã chọn (xử lý âm thanh không cấp phát bộ nhớ trên luồng RT), tự động đồng bộ độ trễ APDC và mở giao diện cửa sổ gốc của hãng sản xuất.</td><td>APDC tự bù chính xác tới từng sample.</td><td><span class="none">—</span></td><td>Bấm <code>✕ Đóng GUI gốc</code> hoặc <code>Ctrl+Z</code> để gỡ plugin vừa nạp.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="page" id="khu-du-an" data-filter>
+        <h3><span class="num">11</span> Dự án, Thu âm &amp; Mixer (Lưu/Mở .tfproj, Undo, ● REC, Clip, M/S/Pan, Khe FX)</h3>
+        <p class="purpose">Những thao tác hằng ngày của một phòng thu thật: lưu và mở lại toàn bộ bài đang làm, hoàn tác, thu âm Micro thành Clip nằm đúng chỗ trên Playlist, co giãn/đổi tông Clip, và trộn từng kênh bằng Fader dB, Pan, Mute/Solo cùng các khe hiệu ứng. Mọi thứ anh nghe khi phát trực tiếp cũng chính là thứ được xuất ra file WAV.</p>
+        <table class="items">
+          <thead><tr><th>#</th><th>Nhãn / Nút trên màn hình</th><th>Là gì · Bấm/Kéo thì sao</th><th>Giá trị bình thường</th><th>Khi nào phải lo</th><th>Lùi lại được không</th></tr></thead>
+          <tbody>
+            <tr data-filter><td class="c-n"><span class="n">1</span></td><td class="c-label"><b>💾 Lưu dự án · 📂 Mở dự án (.tfproj)</b><br/><span class="ty">nút trên thanh trên cùng · <code>Ctrl+S</code> / <code>Ctrl+Shift+S</code> / <code>Ctrl+O</code></span></td><td><b>Lưu:</b> Ghi toàn bộ bài đang làm vào một file <code>.tfproj</code>: các kênh Mixer (Fader, Pan, Mute/Solo), chuỗi hiệu ứng kể cả trạng thái plugin VST3/CLAP, nhạc cụ, nốt Piano Roll, Clip âm thanh, các Take thu âm, sơ đồ Patcher và preset FL26. Lần đầu bấm sẽ hỏi chỗ lưu; <code>Ctrl+Shift+S</code> là <i>Lưu thành</i> file khác.<br/><b>Mở:</b> Nạp lại đúng như lúc lưu — âm thanh, hiệu ứng và vị trí các Clip đều được khôi phục.</td><td>File thu âm nằm trong <code>Tài liệu\ToneForge\Recordings</code>, nhạc nhập trong <code>...\Imported</code>, stem UVR5 trong <code>...\Stems</code>.</td><td>Nếu xoá hoặc di chuyển các thư mục trên, dự án mở lại sẽ thiếu Clip tương ứng (ô <b>⚠ Lỗi engine</b> sẽ báo tên file thiếu).</td><td>Mở lại file <code>.tfproj</code> đã lưu trước đó bất kỳ lúc nào.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">2</span></td><td class="c-label"><b>↶ Undo (n) · ↷ Redo (n)</b><br/><span class="ty">nút · <code>Ctrl+Z</code> / <code>Ctrl+Y</code> (<code>Ctrl+Shift+Z</code>)</span></td><td>Hoàn tác / làm lại thao tác gần nhất. Con số trong ngoặc là số bước còn hoàn tác được; rê chuột lên nút để xem tên bước sắp hoàn tác. Một lần kéo Fader hay Pan liên tục chỉ tính là <b>một bước</b>, nên Undo không bị “ngập” hàng trăm bước nhỏ.</td><td>Tối đa 64 bước.</td><td><span class="none">—</span></td><td>Chính là nút lùi lại.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">3</span></td><td class="c-label"><b>● REC (T#n) · ⏹ Stop REC</b><br/><span class="ty">nút thu âm</span></td><td>Thu <b>tín hiệu thô từ Micro / ngõ vào</b> (chưa qua hiệu ứng) vào kênh đang được chọn. Mỗi lúc chỉ một kênh được thu. Khi bấm ⏹, bản thu tự trở thành <b>Clip</b> nằm đúng vạch nhịp nơi bắt đầu thu trên Playlist và phát lại được ngay; số <code>takes</code> cho biết đã thu bao nhiêu lần. Độ trễ của card âm thanh được bù tự động nên bản thu khớp nhịp.</td><td>Card 44.1 / 48 / 96 kHz đều dùng được — ToneForge tự chuyển đổi tần số mẫu chất lượng cao.</td><td>Nếu bản thu im lặng: kiểm tra đã chọn đúng ngõ vào Micro trong hộp chọn Driver bên cạnh.</td><td><code>Ctrl+Z</code> để bỏ Clip vừa thu (file WAV vẫn được giữ trong thư mục Recordings).</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">4</span></td><td class="c-label"><b>Clip đang chọn: Gain · Fade In · Fade Out · Stretch × · Pitch st</b><br/><span class="ty">thanh trượt dưới Playlist</span></td><td><b>Gain:</b> độ to riêng Clip. <b>Fade In/Out:</b> vuốt to dần / nhỏ dần ở đầu và cuối Clip để không bị “bụp”. <b>Stretch:</b> kéo dài hoặc rút ngắn Clip mà <b>giữ nguyên cao độ</b>. <b>Pitch:</b> nâng/hạ tông theo nửa cung mà <b>giữ nguyên độ dài</b>. Sau khi đổi Stretch/Pitch, ToneForge tính lại Clip ở chế độ chất lượng cao trong giây lát rồi phát bản mới.</td><td>Stretch <code>1.00×</code>; Pitch <code>0 st</code>; Fade <code>0</code>–vài nghìn mẫu.</td><td>Stretch quá xa (&lt;0.5× hoặc &gt;2×) hoặc Pitch quá ±7 nửa cung có thể làm giọng kém tự nhiên.</td><td>Đưa về <code>1.00×</code> / <code>0 st</code> hoặc <code>Ctrl+Z</code>.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">5</span></td><td class="c-label"><b>Dải kênh Mixer: Fader (dB) · Pan (L/C/R) · M · S · Peak L/R</b><br/><span class="ty">bàn trộn 502 kênh</span></td><td><b>Fader:</b> chỉnh độ to theo dB từ <code>-∞</code> đến <code>+6 dB</code>; nhấp đúp để về <code>0 dB</code>. <b>Pan:</b> đẩy tiếng sang trái/phải; nhấp đúp để về giữa <code>C</code>. <b>M (Mute):</b> tắt tiếng kênh. <b>S (Solo):</b> chỉ nghe kênh này — các kênh Bus/Master mà nó đi qua vẫn được giữ bật nên tiếng vẫn ra loa. Mọi thay đổi được làm mượt khoảng 5 ms nên không có tiếng “lách tách”. Bấm vào một kênh để chọn nó — phổ của Pro-Q 4 / Soothe3 sẽ hiển thị kênh đó.</td><td>Fader <code>0 dB</code>; Pan <code>C</code>; Peak dưới <code>0.0</code>.</td><td>Peak chạm <code>0.0</code> hoặc dương: kênh đang quá to, hạ Fader.</td><td>Nhấp đúp để về mặc định, hoặc <code>Ctrl+Z</code>.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">6</span></td><td class="c-label"><b>Khe hiệu ứng: ☑ Bật/Bypass · Wet % · ✕ Gỡ</b><br/><span class="ty">danh sách khe của kênh đang chọn</span></td><td><b>☑:</b> bỏ tích để tạm cho tiếng đi vòng qua hiệu ứng (so sánh trước/sau). <b>Wet %:</b> trộn song song tiếng gốc và tiếng đã qua hiệu ứng, độ trễ được bù tự động nên không bị lệch pha. <b>✕:</b> gỡ hẳn plugin khỏi khe (cửa sổ giao diện của plugin đó cũng tự đóng).</td><td>Bật; Wet <code>100%</code>.</td><td><span class="none">—</span></td><td><code>Ctrl+Z</code> sau khi gỡ nhầm.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">7</span></td><td class="c-label"><b>⚠ Lỗi engine: …</b><br/><span class="ty">dải báo đỏ trên cùng</span></td><td>Mọi thao tác không thành công (mở file hỏng, plugin từ chối nạp, driver không mở được…) đều hiện tại đây bằng lời nhắn cụ thể thay vì im lặng.</td><td>Không hiện.</td><td>Đọc nội dung báo lỗi và làm theo; nếu lặp lại, lưu dự án rồi khởi động lại ứng dụng.</td><td>Bấm <code>✕</code> ở cuối dải báo để ẩn đi.</td></tr>
+          </tbody>
+        </table>
+      </section>
     </section>
 
     <section class="part" id="phan-d" data-filter>
@@ -521,6 +565,14 @@
       <details class="trouble" data-filter>
         <summary>6. Làm sao biết phần mềm đã nhận diện và tận dụng Card đồ họa rời (như NVIDIA RTX 4080) của máy tôi chưa?</summary>
         <p><b>Cách kiểm tra trong 1 giây:</b> Nhìn lên góc trên bên trái thanh điều khiển cạnh logo ToneForge (hoặc góc phải trên của mục <b>UVR5 Stem Studio</b>): nếu hiện huy hiệu màu xanh <b>⚡ CUDA 12 • RTX 4080 ...</b> (hoặc <b>DirectML</b>) nghĩa là toàn bộ các tác vụ AI tách lời bài hát và cân chỉnh giọng hát đang chạy thẳng trên nhân GPU tốc độ cao mà anh không cần tự cài thêm bộ công cụ lập trình nào cả.</p>
+      </details>
+      <details class="trouble" data-filter>
+        <summary>7. Vì sao bấm ⏹ / ⏸ thì tiếng tắt êm chứ không “bụp”, và khi dừng tôi vẫn nghe được Micro qua hiệu ứng?</summary>
+        <p><b>Giải thích:</b> Khi dừng, ToneForge vuốt nhỏ tiếng trong khoảng 6 ms rồi mới tắt hẳn, đồng thời nhả mọi nốt nhạc đang ngân — vì vậy không còn tiếng nổ. Bàn trộn vẫn tiếp tục chạy khi dừng, nên Micro đang được bật nghe (monitor) và đuôi vang (reverb/delay) vẫn đi qua chuỗi hiệu ứng như một phòng thu thật.</p>
+      </details>
+      <details class="trouble" data-filter>
+        <summary>8. Card âm thanh ASIO / WASAPI của tôi đang chạy 44.1 kHz hoặc 96 kHz, nhạc có bị nhanh/chậm hay lệch tông không?</summary>
+        <p><b>Không.</b> Bộ xử lý của ToneForge luôn chạy ở 48 kHz và tự chuyển đổi tần số mẫu chất lượng phòng thu cho cả đường phát ra loa lẫn đường thu Micro. Bản thu được lưu kèm đúng tần số thật của card nên phát lại luôn đúng tông và đúng nhịp.</p>
       </details>
     </section>
   </main>

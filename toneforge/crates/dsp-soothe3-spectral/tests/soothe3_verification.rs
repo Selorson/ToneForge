@@ -9,9 +9,11 @@
 
 use daw_core_graph::{ProcessContext, Soothe3ReductionFrame, UnifiedDspNode};
 use dsp_soothe3_spectral::{
+    apply_min_phase_tail_taper, compute_bin_ballistic_taus_sec, smooth_gains_constant_q_filtfilt,
     BaseRateResampler, CepstralMinPhaseReconstructor, SidechainEq8Band, SidechainFilterShape,
-    Soothe3ParameterSet, Soothe3Processor, SootheProcessMode, TiltPair, TimeResolutionQuality,
-    SOOTHE3_BINS, SOOTHE3_FFT_SIZE, SOOTHE3_LINEAR_PHASE_LATENCY_1X, SOOTHE3_REGULAR_LATENCY_1X,
+    Soothe3ParameterSet, Soothe3Processor, Soothe3SpectralPipeline, SootheProcessMode, TiltPair,
+    TimeResolutionQuality, ZeroDelayPartitionedConvolver4096, MIN_PHASE_CAUSAL_TAPS, SOOTHE3_BINS,
+    SOOTHE3_FFT_SIZE, SOOTHE3_LINEAR_PHASE_LATENCY_1X, SOOTHE3_REGULAR_LATENCY_1X,
     SOOTHE3_TOTAL_PARAMS,
 };
 use rustfft::num_complex::Complex32;
@@ -521,4 +523,265 @@ fn test_high_rate_2x_4x_exact_impulse_alignment_and_midstream_sr_switching() {
         assert!(buf.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
     }
 }
+
+#[test]
+fn test_gate3a_4096_tap_partitioned_overlap_save_simd_convolver_snr() {
+    assert_eq!(MIN_PHASE_CAUSAL_TAPS, 4096);
+
+    // Build a realistic multi-resonance suppression mask including a narrow 80 Hz sub-bass notch
+    // so the causal minimum-phase impulse response rings significantly across taps 0..4096.
+    let bin_hz = 48_000.0_f32 / (SOOTHE3_FFT_SIZE as f32);
+    let mut raw_gains = [1.0f32; SOOTHE3_BINS];
+    for k in 1..SOOTHE3_BINS {
+        let f = (k as f32) * bin_hz;
+        let g80 = 1.0 - 0.80 * (-((f - 80.0) / 14.0).powi(2)).exp();
+        let g440 = 1.0 - 0.72 * (-((f - 440.0) / 35.0).powi(2)).exp();
+        let g3200 = 1.0 - 0.85 * (-((f - 3200.0) / 180.0).powi(2)).exp();
+        let g8500 = 1.0 - 0.65 * (-((f - 8500.0) / 500.0).powi(2)).exp();
+        raw_gains[k] = (g80 * g440 * g3200 * g8500).clamp(0.05, 1.0);
+    }
+
+    let mut smoothed_gains = [1.0f32; SOOTHE3_BINS];
+    smooth_gains_constant_q_filtfilt(&raw_gains, &mut smoothed_gains);
+
+    let mut recon = CepstralMinPhaseReconstructor::new();
+    let mut h_min_bins = [Complex32::new(0.0, 0.0); SOOTHE3_BINS];
+    let mut ir_4096 = [0.0f32; SOOTHE3_FFT_SIZE];
+    recon.reconstruct_minimum_phase_ir(&smoothed_gains, &mut h_min_bins, &mut ir_4096);
+    apply_min_phase_tail_taper(&mut ir_4096);
+
+    // Confirm genuine tail energy past tap 512 (proving no 512-tap truncation!)
+    let tail_energy_post_512: f64 = ir_4096[512..4096]
+        .iter()
+        .map(|&v| (v as f64) * (v as f64))
+        .sum();
+    assert!(
+        tail_energy_post_512 > 1e-7,
+        "Expected active sub-bass minimum-phase tail past tap 512, got energy={:.3e}",
+        tail_energy_post_512
+    );
+
+    let mut conv = ZeroDelayPartitionedConvolver4096::new();
+    conv.set_ir(&ir_4096, 0);
+
+    // Deterministic broadband multi-sine + LCG PRNG excitation (16,384 samples)
+    let n_samples = 16_384usize;
+    let mut x_in = vec![0.0f32; n_samples];
+    let mut rng_state = 0x9E37_79B9_7F4A_7C15_u64;
+    for (n, s) in x_in.iter_mut().enumerate() {
+        rng_state = rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let white = (((rng_state >> 33) as f32) / ((1u64 << 31) as f32)) - 1.0;
+        let t = (n as f32) / 48_000.0;
+        *s = 0.25 * (2.0 * PI * 80.0 * t).sin()
+            + 0.20 * (2.0 * PI * 440.0 * t).sin()
+            + 0.20 * (2.0 * PI * 3_200.0 * t).sin()
+            + 0.15 * white;
+    }
+
+    let mut sig_pow = 0.0f64;
+    let mut err_pow = 0.0f64;
+    for n in 0..n_samples {
+        let y_fast = conv.process_sample(x_in[n]) as f64;
+        let max_k = (n + 1).min(SOOTHE3_FFT_SIZE);
+        let mut y_ref = 0.0f64;
+        for k in 0..max_k {
+            y_ref += (ir_4096[k] as f64) * (x_in[n - k] as f64);
+        }
+        let diff = y_fast - y_ref;
+        sig_pow += y_ref * y_ref;
+        err_pow += diff * diff;
+    }
+
+    let snr_db = 10.0 * (sig_pow / err_pow.max(1e-30)).log10();
+    println!(
+        "[Gate 3a] ZeroDelayPartitionedConvolver4096 (64-tap f32x8 SIMD + 63x128-pt Overlap-Save) vs f64 4096-tap direct SNR = {:.2} dB (post-512 tail energy = {:.3e})",
+        snr_db, tail_energy_post_512
+    );
+    assert!(
+        snr_db >= 115.0,
+        "4096-tap partitioned convolver SNR {:.2} dB < 115.0 dB",
+        snr_db
+    );
+}
+
+#[test]
+fn test_gate3b_sub_bass_80hz_resonance_isolation_and_tilted_ballistics() {
+    // 1. Verify sub-150 Hz tilted temporal ballistics: >= 25 ms attack, >= 80 ms release across 50..100 Hz
+    for &f_low in &[50.0f32, 65.0, 80.0, 100.0] {
+        let (tau_att, tau_rel) = compute_bin_ballistic_taus_sec(f_low, 5.0, 3.0);
+        assert!(
+            tau_att >= 0.025 && tau_rel >= 0.080,
+            "Sub-bass ballistics too fast at {} Hz: tau_att={:.4}s, tau_rel={:.4}s",
+            f_low,
+            tau_att,
+            tau_rel
+        );
+    }
+    let (tau_att_hi, _) = compute_bin_ballistic_taus_sec(6_000.0, 6.0, 3.0);
+    assert!(
+        tau_att_hi < 0.012,
+        "High-frequency transient attack should stay fast at 6 kHz, got {:.4}s",
+        tau_att_hi
+    );
+
+    // 2. Multi-sine sub-bass resonance isolation test at 48 kHz:
+    //    55 Hz @ 0.10 + 80 Hz @ +15 dB (0.56234) + 110 Hz @ 0.10
+    let sr = 48_000.0_f64;
+    let mut proc = Soothe3Processor::new(sr as f32);
+    {
+        let p = proc.params_mut();
+        p.global.mode = SootheProcessMode::Hard;
+        p.global.depth = 8.5;
+        p.global.detail = 8.5;
+        p.global.max_cut_db = -24.0;
+        for b in &mut p.sc_bands {
+            b.enabled = false; // Unweighted flat sidechain across sub-bass
+        }
+    }
+
+    let ctx = ProcessContext {
+        sample_rate: sr,
+        ..ProcessContext::default()
+    };
+
+    let amp_55 = 0.10_f64;
+    let amp_80 = 0.10_f64 * 10.0_f64.powf(15.0 / 20.0); // 0.5623413 (+15 dB resonance)
+    let amp_110 = 0.10_f64;
+
+    let warmup = 24_000usize; // 0.5 s warm-up (includes 2,304 lookahead + slow sub-bass envelope settling)
+    let meas_n = 48_000usize; // Exact 1.0 s -> 1.0 Hz coherent integer DFT bins for 55, 80, 110, 160, 240 Hz!
+    let total = warmup + meas_n;
+
+    let mut out_meas = Vec::with_capacity(meas_n);
+    let mut block = [[0.0f32; 2]; 256];
+    let mut idx = 0usize;
+    while idx < total {
+        let chunk = (total - idx).min(256);
+        for i in 0..chunk {
+            let t = ((idx + i) as f64) / sr;
+            let s = (amp_55 * (2.0 * std::f64::consts::PI * 55.0 * t).sin()
+                + amp_80 * (2.0 * std::f64::consts::PI * 80.0 * t).sin()
+                + amp_110 * (2.0 * std::f64::consts::PI * 110.0 * t).sin())
+                as f32;
+            block[i] = [s, s];
+        }
+        proc.process_slice(&ctx, &mut block[..chunk], None, &mut []);
+        for i in 0..chunk {
+            if idx + i >= warmup {
+                out_meas.push(block[i][0] as f64);
+            }
+        }
+        idx += chunk;
+    }
+
+    let coherent_amp = |freq_hz: f64| -> f64 {
+        let mut re = 0.0f64;
+        let mut im = 0.0f64;
+        for (n, &y) in out_meas.iter().enumerate() {
+            let ph = 2.0 * std::f64::consts::PI * freq_hz * (n as f64) / sr;
+            re += y * ph.cos();
+            im -= y * ph.sin();
+        }
+        2.0 * (re * re + im * im).sqrt() / (meas_n as f64)
+    };
+
+    let out_55 = coherent_amp(55.0);
+    let out_80 = coherent_amp(80.0);
+    let out_110 = coherent_amp(110.0);
+    let out_160 = coherent_amp(160.0);
+    let out_240 = coherent_amp(240.0);
+
+    let atten_55_db = 20.0 * (amp_55 / out_55.max(1e-12)).log10();
+    let atten_80_db = 20.0 * (amp_80 / out_80.max(1e-12)).log10();
+    let atten_110_db = 20.0 * (amp_110 / out_110.max(1e-12)).log10();
+    let selectivity_vs_55_db = atten_80_db - atten_55_db;
+    let selectivity_vs_110_db = atten_80_db - atten_110_db;
+    let thd_80_db = 20.0
+        * ((out_160 * out_160 + out_240 * out_240).sqrt() / out_80.max(1e-12))
+            .max(1e-12)
+            .log10();
+
+    println!(
+        "[Gate 3b] Sub-bass 4096-tap selectivity: atten_55Hz={:.2} dB, atten_80Hz={:.2} dB, atten_110Hz={:.2} dB (delta_55={:.2} dB, delta_110={:.2} dB, 80Hz_THD={:.2} dB)",
+        atten_55_db, atten_80_db, atten_110_db, selectivity_vs_55_db, selectivity_vs_110_db, thd_80_db
+    );
+
+    assert!(
+        selectivity_vs_55_db >= 6.0 && selectivity_vs_110_db >= 6.0,
+        "80 Hz sub-bass resonance not selectively suppressed by >= 6.0 dB over 55/110 Hz neighbors: atten_55={:.2} dB, atten_80={:.2} dB, atten_110={:.2} dB",
+        atten_55_db,
+        atten_80_db,
+        atten_110_db
+    );
+    assert!(
+        thd_80_db < -35.0,
+        "Sub-bass waveform tearing / harmonic distortion too high at 80 Hz: THD = {:.2} dB",
+        thd_80_db
+    );
+}
+
+#[test]
+fn test_gate3c_dual_slot_convolver_abrupt_18db_step_click_free_crossfade() {
+    let sr = 48_000.0_f32;
+    let mut pipe_xfade = Soothe3SpectralPipeline::new(sr);
+    let mut pipe_hard = Soothe3SpectralPipeline::new(sr);
+
+    let unity_mask = [1.0f32; SOOTHE3_BINS];
+    let mut step_mask = [1.0f32; SOOTHE3_BINS];
+    let bin_hz = sr / (SOOTHE3_FFT_SIZE as f32);
+    let gain_minus_18db = 10.0_f32.powf(-18.0 / 20.0); // 0.12589254
+    for k in 1..SOOTHE3_BINS {
+        let f = (k as f32) * bin_hz;
+        if (40.0..=160.0).contains(&f) {
+            step_mask[k] = gain_minus_18db;
+        }
+    }
+
+    pipe_xfade.apply_direct_gain_mask(&unity_mask, 0);
+    pipe_hard.apply_direct_gain_mask(&unity_mask, 0);
+
+    // Choose step_idx so sin(2*pi*80*step_idx/48000) is near maximum (+0.8) where an un-crossfaded
+    // -18 dB step produces a severe ~0.70 amplitude cliff! (48000 / 80 = 600 samples/period, quarter = 150)
+    let step_idx = 6_000 + 150;
+    let total_samples = step_idx + 1_024;
+
+    let mut y_xfade = Vec::with_capacity(total_samples);
+    let mut y_hard = Vec::with_capacity(total_samples);
+
+    for n in 0..total_samples {
+        if n == step_idx {
+            pipe_xfade.apply_direct_gain_mask(&step_mask, 256);
+            pipe_hard.apply_direct_gain_mask(&step_mask, 0);
+        }
+        let x = 0.8 * (2.0 * PI * 80.0 * (n as f32) / sr).sin();
+        y_xfade.push(pipe_xfade.convolvers[0].process_sample(x));
+        y_hard.push(pipe_hard.convolvers[0].process_sample(x));
+    }
+
+    let mut max_d2_xfade = 0.0f32;
+    let mut max_d2_hard = 0.0f32;
+    for n in (step_idx - 4)..(step_idx + 512) {
+        let d2_x = (y_xfade[n] - 2.0 * y_xfade[n - 1] + y_xfade[n - 2]).abs();
+        let d2_h = (y_hard[n] - 2.0 * y_hard[n - 1] + y_hard[n - 2]).abs();
+        max_d2_xfade = max_d2_xfade.max(d2_x);
+        max_d2_hard = max_d2_hard.max(d2_h);
+    }
+
+    let click_reduction_db = 20.0 * (max_d2_hard.max(1e-12) / max_d2_xfade.max(1e-12)).log10();
+    println!(
+        "[Gate 3c] Abrupt 0 -> -18 dB mask step @ 80 Hz peak: uncrossfaded_max_d2={:.5e}, dual_slot_xfade_max_d2={:.5e} (transient reduction = {:.2} dB)",
+        max_d2_hard, max_d2_xfade, click_reduction_db
+    );
+
+    assert!(
+        max_d2_xfade < 5.0e-4 && click_reduction_db >= 25.0,
+        "Dual-slot crossfade failed click-free C^1 transition: max_d2_xfade={:.5e}, max_d2_hard={:.5e}, reduction={:.2} dB",
+        max_d2_xfade,
+        max_d2_hard,
+        click_reduction_db
+    );
+}
+
 

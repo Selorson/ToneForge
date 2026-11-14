@@ -584,6 +584,7 @@ fn test_combined_point1_generator_and_point2_hardware_input_diamond_null_cancell
             slice_frames: block_size,
             is_playing: true,
             is_offline_rendering: false,
+            ppq_resolution: daw_core_graph::DEFAULT_PPQ,
         };
         hw_gen_trk1.process_slice(
             &ctx,
@@ -1017,8 +1018,10 @@ fn test_pause_transport_freezes_slicer_and_silences_spectrum_and_meters() {
         master_out.iter().all(|f| f[0] == 0.0 && f[1] == 0.0),
         "master_out must be completely silent when paused"
     );
-    assert_eq!(paused_frame.track_meters[0].peak_l_db, -120.0);
-    assert_eq!(paused_frame.track_meters[1].peak_l_db, -120.0);
+    // The mixer graph keeps running while stopped (tails / monitoring), so silent tracks report
+    // their real floor rather than a forced placeholder value.
+    assert!(paused_frame.track_meters[0].peak_l_db <= -120.0);
+    assert!(paused_frame.track_meters[1].peak_l_db <= -120.0);
     assert_eq!(paused_frame.track_meters[1].gr_db, 0.0);
     assert_eq!(paused_frame.track_meters[1].activity_flags, TRACK_STATE_SILENT);
     assert!(
@@ -1058,3 +1061,118 @@ fn test_pause_transport_freezes_slicer_and_silences_spectrum_and_meters() {
 
 
 
+
+/// fs/4 sine at 45 deg phase: every sample sits at `0.7071` (-3.01 dBFS) while the waveform peaks at
+/// `1.0` between samples. The telemetry header's TP must report the inter-sample (4x) true peak.
+struct QuarterRateSineNode;
+
+impl UnifiedDspNode for QuarterRateSineNode {
+    fn name(&self) -> &'static str {
+        "fs/4 sine"
+    }
+    fn latency_samples(&self) -> usize {
+        0
+    }
+    fn prepare(&mut self, _sample_rate: f64, _max_block_size: usize) {}
+    fn reset_state(&mut self) {}
+    fn set_parameter_normalized(&mut self, _param_id: u32, _norm_val: f32) {}
+    fn process_slice(
+        &mut self,
+        ctx: &ProcessContext,
+        main_io: &mut [StereoFrame],
+        _sidechain_in: Option<&[StereoFrame]>,
+        _aux_sends_out: &mut [&mut [StereoFrame]],
+    ) {
+        for (i, frame) in main_io.iter_mut().enumerate() {
+            let n = (ctx.current_sample_pos + i as i64) as f64;
+            let v = (std::f64::consts::FRAC_PI_2 * n + std::f64::consts::FRAC_PI_4).sin() as f32;
+            *frame = [v, v];
+        }
+    }
+}
+
+#[test]
+fn test_master_header_reports_intersample_true_peak() {
+    let (mut engine, _cmd_prod, mut telem_out) = MixerEngine::new(48_000.0, 128.0, 0);
+    engine
+        .add_channel_generator(ChannelGenerator::new(0, 1, Box::new(QuarterRateSineNode)))
+        .unwrap();
+    engine.tracks[1].add_send(MASTER_TRACK_INDEX, 1.0, false);
+    engine.rebuild_graph().unwrap();
+    let mut master_out = [[0.0f32; 2]; 256];
+    for _ in 0..8 {
+        engine.process_audio_block(&mut master_out);
+    }
+    let frame = *telem_out.read();
+    let sample_peak_db = frame.track_meters[MASTER_TRACK_INDEX].peak_l_db;
+    let tp = frame.header.true_peak_db;
+    assert!((sample_peak_db - (-3.01)).abs() < 0.05, "sample peak {sample_peak_db:.2} dBFS");
+    // BS.1770-4 4x interpolation reaches the inter-sample crest within its passband ripple.
+    assert!(tp[0] > -0.6 && tp[0] < 0.3 && tp[1] > -0.6 && tp[1] < 0.3, "true peak {tp:?} dBTP");
+}
+
+/// Sample-accurate onset probe: outputs `1.0` from the note-on sample onwards (honours the event's
+/// offset relative to the block, like VST3/CLAP `sampleOffset` and the native synth).
+struct OnsetProbeNode {
+    onset: Option<i64>,
+}
+
+impl UnifiedDspNode for OnsetProbeNode {
+    fn name(&self) -> &'static str {
+        "onset probe"
+    }
+    fn latency_samples(&self) -> usize {
+        0
+    }
+    fn prepare(&mut self, _sample_rate: f64, _max_block_size: usize) {}
+    fn reset_state(&mut self) {}
+    fn set_parameter_normalized(&mut self, _param_id: u32, _norm_val: f32) {}
+    fn on_voice_event(&mut self, event: &daw_core_graph::SequencerVoiceEvent, _ctx: &ProcessContext) {
+        if event.kind == daw_core_graph::VoiceEventKind::NoteOn {
+            self.onset = Some(event.sample_pos);
+        }
+    }
+    fn process_slice(
+        &mut self,
+        ctx: &ProcessContext,
+        main_io: &mut [StereoFrame],
+        _sidechain_in: Option<&[StereoFrame]>,
+        _aux_sends_out: &mut [&mut [StereoFrame]],
+    ) {
+        for (i, frame) in main_io.iter_mut().enumerate() {
+            let pos = ctx.current_sample_pos + i as i64;
+            let on = self.onset.is_some_and(|o| pos >= o);
+            *frame = if on { [1.0, 1.0] } else { [0.0, 0.0] };
+        }
+    }
+}
+
+/// Live MIDI keeps its timing: a note arriving 100 samples into a block plays 100 samples into the
+/// next block (constant one-block latency), whether the transport is stopped or running.
+#[test]
+fn test_live_midi_note_keeps_arrival_offset_within_block() {
+    for playing in [false, true] {
+        let (mut engine, mut cmd_prod, _telem) = MixerEngine::new(48_000.0, 120.0, 0);
+        engine
+            .add_channel_generator(ChannelGenerator::new(7, 1, Box::new(OnsetProbeNode { onset: None })))
+            .unwrap();
+        engine.tracks[1].add_send(MASTER_TRACK_INDEX, 1.0, false);
+        engine.rebuild_graph().unwrap();
+        cmd_prod.push(EngineCommand::SetTransportPlaying(playing)).unwrap();
+        let (mut tx, rx) = rtrb::RingBuffer::new(16);
+        engine.midi_in_consumer = Some(rx);
+        let mut out = [[0.0f32; 2]; 256];
+        for _ in 0..4 {
+            engine.process_audio_block(&mut out);
+        }
+        assert!(out.iter().all(|f| f[0] == 0.0));
+        // Arrival 100 samples (at 48 kHz) after the start of the block just rendered.
+        let arrival_ns = engine.midi_prev_block_ns + (100.0 * 1.0e9 / 48_000.0) as i64;
+        let ev = daw_core_graph::decode_raw_midi_short_message(0x0064_3C90, arrival_ns, 7, 0.0)
+            .expect("note-on");
+        tx.push(ev).unwrap();
+        engine.process_audio_block(&mut out);
+        let first = out.iter().position(|f| f[0] != 0.0);
+        assert_eq!(first, Some(100), "playing={playing}: note onset sample in block");
+    }
+}

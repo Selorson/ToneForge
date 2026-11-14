@@ -253,6 +253,146 @@
         </div>
       {/each}
     </div>
+
+    <!-- 5. Low End Focus (20–300 Hz Envelope Contrast) -->
+    <div class="module-card">
+      <div class="card-head-inline">
+        <h3>Low End Focus (20–300 Hz)</h3>
+        <label class="chk-inline">
+          <input
+            type="checkbox"
+            bind:checked={telemetry.ozone12LefEnabled}
+            onchange={() => telemetry.syncOzone12LowEndFocus()}
+          />
+          Active
+        </label>
+      </div>
+      <div class="mode-pair">
+        <button
+          class="sm-btn {telemetry.ozone12LefPunchy ? 'solo active' : ''}"
+          onclick={() => {
+            telemetry.ozone12LefPunchy = true;
+            telemetry.ozone12LefEnabled = true;
+            telemetry.syncOzone12LowEndFocus();
+          }}
+        >
+          🥁 Punchy (Transient)
+        </button>
+        <button
+          class="sm-btn {!telemetry.ozone12LefPunchy ? 'solo active' : ''}"
+          onclick={() => {
+            telemetry.ozone12LefPunchy = false;
+            telemetry.ozone12LefEnabled = true;
+            telemetry.syncOzone12LowEndFocus();
+          }}
+        >
+          🌊 Smooth (Glue)
+        </button>
+        <button
+          class="sm-btn solo {telemetry.ozone12LefSolo ? 'active' : ''}"
+          onclick={() => {
+            telemetry.ozone12LefSolo = !telemetry.ozone12LefSolo;
+            telemetry.syncOzone12LowEndFocus();
+          }}
+          title="Nghe riêng dải trầm Low-End dưới ngưỡng Cutoff"
+        >
+          Solo Low
+        </button>
+      </div>
+      <label>
+        Cutoff: {telemetry.ozone12LefUpperHz.toFixed(0)} Hz
+        <input
+          type="range"
+          min="20"
+          max="300"
+          step="5"
+          bind:value={telemetry.ozone12LefUpperHz}
+          oninput={() => telemetry.syncOzone12LowEndFocus()}
+        />
+      </label>
+      <label>
+        Contrast: {telemetry.ozone12LefContrastPct >= 0 ? '+' : ''}{telemetry.ozone12LefContrastPct.toFixed(0)}% (Δ {telemetry.ozone12LefDeltaDb.toFixed(2)} dB)
+        <input
+          type="range"
+          min="-100"
+          max="100"
+          step="2"
+          bind:value={telemetry.ozone12LefContrastPct}
+          oninput={() => telemetry.syncOzone12LowEndFocus()}
+        />
+      </label>
+      <label>
+        Low Gain: {telemetry.ozone12LefGainDb >= 0 ? '+' : ''}{telemetry.ozone12LefGainDb.toFixed(1)} dB
+        <input
+          type="range"
+          min="-12"
+          max="12"
+          step="0.2"
+          bind:value={telemetry.ozone12LefGainDb}
+          oninput={() => telemetry.syncOzone12LowEndFocus()}
+        />
+      </label>
+    </div>
+
+    <!-- 6. Psychoacoustic Codec Preview (MDCT + 24-Bark Masking) -->
+    <div class="module-card">
+      <div class="card-head-inline">
+        <h3>Psychoacoustic Codec Preview</h3>
+        <label class="chk-inline">
+          <input
+            type="checkbox"
+            bind:checked={telemetry.ozone12CodecEnabled}
+            onchange={() => telemetry.syncOzone12CodecPreview()}
+          />
+          Audition
+        </label>
+      </div>
+      <label>
+        Streaming Codec Target:
+        <select
+          value={telemetry.ozone12CodecMode}
+          onchange={(e) => {
+            telemetry.ozone12CodecMode = parseInt(
+              (e.currentTarget as HTMLSelectElement).value,
+              10
+            ) as 0 | 1 | 2 | 3 | 4 | 5;
+            telemetry.ozone12CodecEnabled = telemetry.ozone12CodecMode !== 0;
+            telemetry.syncOzone12CodecPreview();
+          }}
+        >
+          <option value={0}>PCM Lossless Bypass</option>
+          <option value={1}>MP3 128 kbps (MDCT 24-Bark)</option>
+          <option value={2}>MP3 320 kbps (High Bitrate)</option>
+          <option value={3}>AAC 128 kbps (YouTube / Web)</option>
+          <option value={4}>AAC 256 kbps (Apple Music)</option>
+          <option value={5}>Opus 128 kbps (Spotify / VoIP)</option>
+        </select>
+      </label>
+      <div class="band-row">
+        <span>Artifact Solo (Nghe riêng nhiễu nén):</span>
+        <button
+          class="sm-btn {telemetry.ozone12CodecArtifactSolo ? 'mute active' : ''}"
+          onclick={() => {
+            telemetry.ozone12CodecArtifactSolo = !telemetry.ozone12CodecArtifactSolo;
+            telemetry.ozone12CodecEnabled = true;
+            telemetry.syncOzone12CodecPreview();
+          }}
+        >
+          {telemetry.ozone12CodecArtifactSolo ? '🔊 Artifact ON' : 'Artifact Solo'}
+        </button>
+      </div>
+      <div
+        class="codec-tp-box {Math.max(telemetry.ozone12PostCodecTpL, telemetry.ozone12PostCodecTpR) > -0.1 ? 'clip-warn' : ''}"
+      >
+        <span>
+          Post-Codec 4× TP:
+          <strong>
+            {telemetry.ozone12PostCodecTpL.toFixed(2)} / {telemetry.ozone12PostCodecTpR.toFixed(2)} dBTP
+          </strong>
+        </span>
+        <span>Artifact Noise: <strong>{telemetry.ozone12CodecArtifactRmsDb.toFixed(1)} dB</strong></span>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -266,9 +406,16 @@
   .ai-assist-btn { background: var(--accent); color: #0b2b1e; border: 1px solid var(--accent); border-radius: 6px; padding: 5px 10px; font-weight: 600; cursor: pointer; font-size: 0.75rem; }
   .lufs-readout { display: flex; gap: 12px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--sub-surface); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); }
   .lufs-readout strong { color: var(--accent); }
-  .ozone-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .ozone-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .module-card { background: var(--sub-surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-size: 0.75rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 6px; }
   .module-card select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  .card-head-inline { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .chk-inline { display: flex; align-items: center; gap: 4px; font-size: 0.71rem; color: var(--ok); font-weight: 600; }
+  .mode-pair { display: flex; gap: 5px; flex-wrap: wrap; }
+  .codec-tp-box { display: flex; flex-direction: column; gap: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 0.71rem; }
+  .codec-tp-box strong { color: var(--ok); }
+  .codec-tp-box.clip-warn { border-color: var(--err); background: rgba(239, 68, 68, 0.14); }
+  .codec-tp-box.clip-warn strong { color: var(--err); }
   h3 { margin: 0 0 4px 0; font-size: 0.82rem; font-family: var(--font-sans); color: var(--accent); font-weight: 600; }
   .band-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
   .stem-sm-btns { display: flex; gap: 3px; }

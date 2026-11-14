@@ -544,12 +544,12 @@ pub fn analyze_rendered_audio(
 
     let true_peak_dbtp = meter.true_peak_dbtp();
     let max_true_peak_dbtp = true_peak_dbtp[0].max(true_peak_dbtp[1]);
-    let integrated_lufs = if meter.lufs_integrated > -140.0 {
+    // ITU-R BS.1770-4 gated Integrated loudness over the whole render; a render shorter than one
+    // 400 ms gating block has no Integrated value, so its ungated programme loudness is reported.
+    let integrated_lufs = if meter.integrated_is_defined() {
         meter.lufs_integrated
-    } else if max_short_term_lufs > -140.0 {
-        max_short_term_lufs
     } else {
-        max_momentary_lufs
+        meter.ungated_programme_lufs()
     };
 
     // Streaming platform compliance evaluation:
@@ -895,8 +895,11 @@ impl OfflineRenderEngine {
             stem_engine.tracks[track_idx].add_send(MASTER_TRACK_INDEX, 1.0, false);
         }
 
-        // Master Track 0: iZotope Ozone 12 Master Chain with -1.0 dBTP True-Peak Ceiling
+        // Master Track 0: iZotope Ozone 12 Master Chain with -1.0 dBTP True-Peak Ceiling + Neural Unlimiter backend ready
         let mut ozone12 = Ozone12MasterChain::new(target_sr);
+        if let Ok(delimit_proc) = ai_uvr5_stem_engine::OzoneDelimitOnnxProcessor::from_default_assets() {
+            ozone12.set_unlimiter_neural_backend(Box::new(delimit_proc));
+        }
         ozone12.maximizer.ceiling_dbtp = -1.0;
         ozone12.maximizer.gain_db = 2.0;
         stem_engine.tracks[MASTER_TRACK_INDEX]
@@ -961,6 +964,10 @@ impl OfflineRenderEngine {
             &gpu_cfg,
         ) {
             return [gpu_out.vocals, gpu_out.drums, gpu_out.bass, gpu_out.other];
+        }
+
+        if let Some(mut gru_sep) = ai_uvr5_stem_engine::GruThreeStemSeparator::from_global_cache() {
+            return gru_sep.separate_4stems(mix, sample_rate_hz.clamp(8_000, 384_000));
         }
 
         let demucs = HTDemucs4::new(512, 128, 16, 4, 2);

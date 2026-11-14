@@ -1,0 +1,16 @@
+[package]
+name = "dsp-pitch-time"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+daw-core-graph.workspace = true
+rustfft.workspace = true
+realfft.workspace = true
+num-complex.workspace = true
+num-traits.workspace = true
+wide.workspace = true
+serde.workspace = true
+serde_json.workspace = true

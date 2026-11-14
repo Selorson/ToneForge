@@ -361,6 +361,7 @@ fn test_ozone12_core_modules_imager_stabilizer_impact_clarity_unlimiter_bass() {
         slice_frames: 256,
         is_playing: true,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
     let mut block: Vec<StereoFrame> = (0..256)
         .map(|n| {
@@ -472,6 +473,7 @@ fn test_ozone12_chain_dynamic_maximizer_bypass_latency_and_full_telemetry_export
         slice_frames: 256,
         is_playing: true,
         is_offline_rendering: false,
+        ppq_resolution: daw_core_graph::DEFAULT_PPQ,
     };
     let mut block: Vec<StereoFrame> = (0..256)
         .map(|n| {
@@ -670,5 +672,373 @@ fn test_low_end_focus_punchy_vs_smooth_and_spectral_shaper_in_master_chain() {
     assert!(master_buf.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
 }
 
+/// Measures combined power (in dBFS) across exact folded alias frequencies of `f0 = 11,300 Hz`
+/// at `fs = 48,000 Hz` (`3*f0 -> 14,100 Hz`, `4*f0 -> 2,800 Hz`, `5*f0 -> 8,500 Hz`,
+/// `6*f0 -> 19,800 Hz`, `7*f0 -> 16,900 Hz`, `8*f0 -> 5,600 Hz`, `9*f0 -> 5,700 Hz`),
+/// using a 4-term Blackman-Harris window for `> 92 dB` sidelobe suppression.
+fn measure_folded_alias_power_db_11k3_at_48k(signal: &[f32]) -> f64 {
+    const FS: f64 = 48_000.0;
+    const ALIAS_FREQS: [f64; 7] = [2_800.0, 5_600.0, 5_700.0, 8_500.0, 14_100.0, 16_900.0, 19_800.0];
+
+    let n = signal.len();
+    assert!(n >= 4096);
+    let mut win = vec![0.0_f64; n];
+    let mut win_sum = 0.0_f64;
+    let denom = (n - 1) as f64;
+    for (i, w) in win.iter_mut().enumerate() {
+        let p = 2.0 * PI * (i as f64) / denom;
+        let bh = 0.35875 - 0.48829 * p.cos() + 0.14128 * (2.0 * p).cos() - 0.01168 * (3.0 * p).cos();
+        *w = bh;
+        win_sum += bh;
+    }
+
+    let mut total_alias_power = 0.0_f64;
+    for &fa in &ALIAS_FREQS {
+        let mut re = 0.0_f64;
+        let mut im = 0.0_f64;
+        for (i, &s) in signal.iter().enumerate() {
+            let ang = 2.0 * PI * fa * (i as f64) / FS;
+            let sw = (s as f64) * win[i];
+            re += sw * ang.cos();
+            im -= sw * ang.sin();
+        }
+        let amp = 2.0 * (re * re + im * im).sqrt() / win_sum.max(1.0e-12);
+        total_alias_power += amp * amp;
+    }
+    10.0 * total_alias_power.max(1.0e-24).log10()
+}
+
+#[test]
+fn test_gate_1a_trapezoidal_rediscretization_and_4x_oversampled_triode_dualtriode_alias_suppression() {
+    use dsp_ozone12_mastering::{
+        DkDualTriodeLut, DkKStateBlock, DkTriodeMultibandExciter, IZOTOPE_DUALTRIODE_DAT_SIZE,
+        IZOTOPE_DUALTRIODE_LUT_MAGIC, IZOTOPE_TRIODE_DAT_SIZE, rediscretize_dk_matrices,
+    };
+
+    // 1. Verify exact trapezoidal bilinear re-discretization (`rediscretize_dk_matrices`) from
+    //    `48000.000000.dat` to `96000.0` matches `Mat[6..13]` in `96000.000000.dat` to `< 1e-9`!
+    let triode_48_path =
+        Path::new(r"f:\FL studio\toneforge\assets\exciter_luts\exciter-triode-48000.000000.dat");
+    let triode_96_path =
+        Path::new(r"f:\FL studio\toneforge\assets\exciter_luts\exciter-triode-96000.000000.dat");
+    let dual_48_path = Path::new(
+        r"f:\FL studio\toneforge\assets\exciter_luts\exciter-dualtriode-48000.000000.dat",
+    );
+    let dual_96_path = Path::new(
+        r"f:\FL studio\toneforge\assets\exciter_luts\exciter-dualtriode-96000.000000.dat",
+    );
+
+    assert_eq!(
+        std::fs::metadata(triode_48_path).unwrap().len() as usize,
+        IZOTOPE_TRIODE_DAT_SIZE
+    );
+    assert_eq!(
+        std::fs::metadata(dual_48_path).unwrap().len() as usize,
+        IZOTOPE_DUALTRIODE_DAT_SIZE
+    );
+
+    let check_kstate_rediscretization = |ks_48: &DkKStateBlock, ks_96: &DkKStateBlock, label: &str| {
+        let disc = rediscretize_dk_matrices(
+            ks_48.a_c,
+            ks_48.b_c,
+            ks_48.c_c,
+            ks_48.d_x,
+            ks_48.e_u,
+            ks_48.f_i,
+            96_000.0,
+        );
+        let mut max_err = 0.0_f64;
+        for r in 0..3 {
+            for c in 0..3 {
+                max_err = max_err
+                    .max((disc.m_inv[r][c] - ks_96.m_inv[r][c]).abs())
+                    .max((disc.a_d[r][c] - ks_96.a_d[r][c]).abs());
+            }
+            for c in 0..2 {
+                max_err = max_err
+                    .max((disc.b_d[r][c] - ks_96.b_d[r][c]).abs())
+                    .max((disc.c_d[r][c] - ks_96.c_d[r][c]).abs());
+            }
+        }
+        for r in 0..2 {
+            for c in 0..3 {
+                max_err = max_err.max((disc.d_d[r][c] - ks_96.d_d[r][c]).abs());
+            }
+            for c in 0..2 {
+                max_err = max_err
+                    .max((disc.e_d[r][c] - ks_96.e_d[r][c]).abs())
+                    .max((disc.f_d[r][c] - ks_96.f_d[r][c]).abs())
+                    .max((disc.g_d[r][c] - ks_96.g_d[r][c]).abs());
+            }
+        }
+        println!(
+            "[Gate 1a] {label} trapezoidal re-discretization (48k -> 96k) max |Mat[6..13] diff| = {max_err:.3e}"
+        );
+        assert!(
+            max_err < 1.0e-9,
+            "{label} re-discretized Mat[6..13] differed from 96000.000000.dat by {max_err:.3e} (>= 1e-9)"
+        );
+    };
+
+    let t48 = DkTriodeLut::from_dat_file(triode_48_path).unwrap();
+    let t96 = DkTriodeLut::from_dat_file(triode_96_path).unwrap();
+    check_kstate_rediscretization(&t48.kstate, &t96.kstate, "Triode KState");
+
+    let d48 = DkDualTriodeLut::from_dat_file(dual_48_path).unwrap();
+    let d96 = DkDualTriodeLut::from_dat_file(dual_96_path).unwrap();
+    assert_eq!(d48.magic, IZOTOPE_DUALTRIODE_LUT_MAGIC);
+    assert_eq!(d48.version, 4);
+    check_kstate_rediscretization(&d48.stage1, &d96.stage1, "DualTriode Stage1");
+    check_kstate_rediscretization(&d48.stage2, &d96.stage2, "DualTriode Stage2");
+
+    // 2. Gate 1a Alias Suppression: 11,300 Hz @ -1.0 dBFS (48 kHz) through DkTriodeMultibandExciter
+    //    in both `Triode` and `DualTriode` modes must reduce folded alias spurs by >= 30.0 dB vs 1x!
+    let sr = 48_000.0;
+    let f0 = 11_300.0;
+    let amp = 10.0_f64.powf(-1.0 / 20.0); // -1.0 dBFS
+    let warmup = 4096usize;
+    let n_fft = 16_384usize;
+
+    for mode in [ExciterMode::Triode, ExciterMode::DualTriode] {
+        let mut exc_1x = DkTriodeMultibandExciter::new(sr);
+        exc_1x.multiband_enabled = false;
+        exc_1x.set_oversampling_factor(1);
+        exc_1x.set_all_bands_mode(mode, 75.0, 1.0);
+
+        let mut exc_4x = DkTriodeMultibandExciter::new(sr);
+        exc_4x.multiband_enabled = false;
+        exc_4x.set_oversampling_factor(4);
+        exc_4x.set_all_bands_mode(mode, 75.0, 1.0);
+
+        let mut out_1x = Vec::with_capacity(n_fft);
+        let mut out_4x = Vec::with_capacity(n_fft);
+
+        for n in 0..(warmup + n_fft) {
+            let s = (amp * (2.0 * PI * f0 * (n as f64) / sr).sin()) as f32;
+            let [y1, _] = exc_1x.process_sample_pair(s, s);
+            let [y4, _] = exc_4x.process_sample_pair(s, s);
+            if n >= warmup {
+                out_1x.push(y1);
+                out_4x.push(y4);
+            }
+        }
+
+        let alias_1x_db = measure_folded_alias_power_db_11k3_at_48k(&out_1x);
+        let alias_4x_db = measure_folded_alias_power_db_11k3_at_48k(&out_4x);
+        let suppression_db = alias_1x_db - alias_4x_db;
+        println!(
+            "[Gate 1a] {:?} @ 11.3 kHz (-1 dBFS, 48 kHz): 1x alias={alias_1x_db:.2} dBFS, 4x alias={alias_4x_db:.2} dBFS, suppression={suppression_db:.2} dB",
+            mode
+        );
+        assert!(
+            suppression_db >= 30.0,
+            "Gate 1a failed for {:?}: folded alias suppression = {suppression_db:.2} dB (< 30.0 dB)",
+            mode
+        );
+    }
+}
+
+#[test]
+fn test_gate_1b_12ax7_rc_tone_frequency_response_invariance_48k_vs_96k() {
+    use dsp_ozone12_mastering::DkTriodeMultibandExciter;
+
+    let sweep_freqs = [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0];
+    let mut exc_48 = DkTriodeMultibandExciter::new(48_000.0);
+    exc_48.multiband_enabled = false;
+    exc_48.set_oversampling_factor(4);
+    exc_48.set_all_bands_mode(ExciterMode::Triode, 50.0, 1.0);
+
+    let mut exc_96 = DkTriodeMultibandExciter::new(96_000.0);
+    exc_96.multiband_enabled = false;
+    exc_96.set_oversampling_factor(4);
+    exc_96.set_all_bands_mode(ExciterMode::Triode, 50.0, 1.0);
+
+    let mut max_diff_db = 0.0_f64;
+    for &freq in &sweep_freqs {
+        exc_48.reset_state();
+        exc_96.reset_state();
+
+        let measure_rate = |exc: &mut DkTriodeMultibandExciter, sr: f64| -> f64 {
+            let settle = (0.12 * sr) as usize;
+            let meas = (0.20 * sr) as usize;
+            let mut out = Vec::with_capacity(meas);
+            for n in 0..(settle + meas) {
+                let s = (0.25 * (2.0 * PI * freq * (n as f64) / sr).sin()) as f32;
+                let [yl, _] = exc.process_sample_pair(s, s);
+                if n >= settle {
+                    out.push(yl);
+                }
+            }
+            measure_harmonic_magnitude_db(&out, sr, freq)
+        };
+
+        let db_48 = measure_rate(&mut exc_48, 48_000.0);
+        let db_96 = measure_rate(&mut exc_96, 96_000.0);
+        let diff_db = (db_48 - db_96).abs();
+        max_diff_db = max_diff_db.max(diff_db);
+        println!(
+            "[Gate 1b] f={freq:6.1} Hz: 48k={db_48:.4} dB, 96k={db_96:.4} dB, |diff|={diff_db:.4} dB"
+        );
+        assert!(
+            diff_db < 0.15,
+            "Gate 1b failed at {freq} Hz: |48k - 96k| = {diff_db:.4} dB (>= 0.15 dB)"
+        );
+    }
+    println!("[Gate 1b] Max 48k vs 96k RC tone deviation across 50..5000 Hz = {max_diff_db:.4} dB (< 0.15 dB)");
+}
+
+#[test]
+fn test_gate_1c_soft_clipper_4x_kaiser128_c5_polynomial_alias_suppression() {
+    use dsp_ozone12_mastering::{IrcVMaximizerCore, eval_maxflat_c5_poly_p4};
+
+    // Verify exact C^5 boundary conditions of P_4(t) at t=0 and t=2
+    assert!(eval_maxflat_c5_poly_p4(0.0).abs() < 1.0e-15);
+    assert!((eval_maxflat_c5_poly_p4(2.0) - 1.0).abs() < 1.0e-15);
+
+    let sr = 48_000.0_f32;
+    let f0 = 11_300.0_f64;
+    let amp = 10.0_f64.powf(-1.0 / 20.0); // -1.0 dBFS
+    let warmup = 4096usize;
+    let n_fft = 16_384usize;
+
+    for mode in [SoftClipMode::Light, SoftClipMode::Moderate, SoftClipMode::Heavy] {
+        let mut core_1x = IrcVMaximizerCore::new(sr);
+        core_1x.ceiling_linear = 1.0;
+        core_1x.soft_clip_mix = 1.0;
+        core_1x.soft_clip_mode = mode;
+        core_1x.soft_clip_oversample_4x = false;
+
+        let mut core_4x = IrcVMaximizerCore::new(sr);
+        core_4x.ceiling_linear = 1.0;
+        core_4x.soft_clip_mix = 1.0;
+        core_4x.soft_clip_mode = mode;
+        core_4x.soft_clip_oversample_4x = true;
+
+        let mut out_1x = Vec::with_capacity(n_fft);
+        let mut out_4x = Vec::with_capacity(n_fft);
+
+        for n in 0..(warmup + n_fft) {
+            let s = (amp * (2.0 * PI * f0 * (n as f64) / (sr as f64)).sin()) as f32;
+            let [y1, _] = core_1x.step_soft_clip_stereo(s, s, sr);
+            let [y4, _] = core_4x.step_soft_clip_stereo(s, s, sr);
+            if n >= warmup {
+                out_1x.push(y1);
+                out_4x.push(y4);
+            }
+        }
+
+        let alias_1x_db = measure_folded_alias_power_db_11k3_at_48k(&out_1x);
+        let alias_4x_db = measure_folded_alias_power_db_11k3_at_48k(&out_4x);
+        let suppression_db = alias_1x_db - alias_4x_db;
+        println!(
+            "[Gate 1c] SoftClipper {:?} @ 11.3 kHz (-1 dBFS, 48 kHz): 1x alias={alias_1x_db:.2} dBFS, 4x Kaiser-128 alias={alias_4x_db:.2} dBFS, suppression={suppression_db:.2} dB",
+            mode
+        );
+        assert!(
+            suppression_db >= 30.0,
+            "Gate 1c failed for SoftClipper {:?}: folded alias suppression = {suppression_db:.2} dB (< 30.0 dB)",
+            mode
+        );
+    }
+}
+
+#[test]
+fn test_gate_5a_irc5_true_peak_brickwall_hot_8db_multitone_and_dither_ceiling() {
+    let sr = 48_000.0;
+    let total_samples = 48_000usize; // 1.0 full second across many 128-sample blocks
+
+    for dither_on in [false, true] {
+        let mut maximizer = IrcVMultiBandMaximizer::new(sr);
+        maximizer.irc_mode = IrcMode::IrcV;
+        maximizer.character_mode = IrcCharacter::Modern;
+        maximizer.set_gain_db(8.0); // +8.0 dB hot drive
+        maximizer.set_ceiling_dbtp(-1.0);
+        maximizer.prevent_intersample_clipping = true;
+        maximizer.enable_soft_clip = true;
+        maximizer.soft_clip_mode = SoftClipMode::Moderate;
+        maximizer.soft_clip_mix = 0.55;
+        maximizer.dither.enabled = dither_on;
+        maximizer.dither.bit_depth = 16;
+
+        let mut meter = LufsTruePeakMeter::new(sr);
+        let mut stream: Vec<StereoFrame> = (0..total_samples)
+            .map(|n| {
+                // Worst-case ISP 11,025 Hz quarter-sample phase-shifted cosine + 997 Hz + sharp transient bursts
+                let t = (n as f64) / sr;
+                let isp_hi = (2.0 * PI * 11_025.0 * t + PI * 0.25).cos();
+                let mid = 0.65 * (2.0 * PI * 997.0 * t).sin();
+                let low = 0.45 * (2.0 * PI * 62.0 * t).sin();
+                let burst = if n % 3000 < 24 { 1.25 } else { 0.0 };
+                let l = (0.75 * isp_hi + mid + low + burst) as f32;
+                let r = (0.75 * (2.0 * PI * 12_000.0 * t + PI * 0.25).cos() - mid + low + burst) as f32;
+                [l, r]
+            })
+            .collect();
+
+        // Stream across arbitrary 128-sample real-time audio blocks to stress block boundaries!
+        let ctx = ProcessContext {
+            sample_rate: sr,
+            current_sample_pos: 0,
+            ppq_tick: 0,
+            bpm: 120.0,
+            slice_frames: 128,
+            is_playing: true,
+            is_offline_rendering: false,
+            ppq_resolution: daw_core_graph::DEFAULT_PPQ,
+        };
+        for chunk in stream.chunks_mut(128) {
+            maximizer.process_slice(&ctx, chunk, None, &mut []);
+            let gr_db = maximizer.last_gr_db;
+            for f in chunk.iter() {
+                meter.push_frame(f[0], f[1], gr_db);
+            }
+        }
+
+        let max_tp_dbtp = meter.max_true_peak_dbtp();
+        println!(
+            "[Gate 5a] IRC V (+8.0 dB drive, ceiling=-1.0 dBTP, dither={dither_on}) measured LufsTruePeakMeter 4x True-Peak = {max_tp_dbtp:.4} dBTP"
+        );
+        assert!(
+            max_tp_dbtp <= -0.98,
+            "Gate 5a failed (dither={dither_on}): measured True-Peak {max_tp_dbtp:.4} dBTP exceeded -0.98 dBTP!"
+        );
+    }
+}
 
 
+
+
+
+/// Integrated LUFS must gate over the whole programme (ITU-R BS.1770-4), not a recent window:
+/// 60 s at level L followed by 120 s at L - 10 dB must read 10*log10((60 + 120*0.1) / 180) + L.
+#[test]
+fn test_integrated_lufs_covers_full_programme_beyond_one_minute() {
+    let sr = 48_000.0f64;
+    let tone = |amp: f32, secs: usize, phase: &mut f64| -> Vec<StereoFrame> {
+        let n = (sr as usize) * secs;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            let s = (amp as f64) * phase.sin();
+            *phase += 2.0 * PI * 997.0 / sr;
+            v.push([s as f32, s as f32]);
+        }
+        v
+    };
+    let mut phase = 0.0f64;
+    let loud = tone(0.5, 60, &mut phase);
+    let quiet = tone(0.5 * 10f32.powf(-0.5), 120, &mut phase);
+
+    let mut ref_meter = LufsTruePeakMeter::new(sr);
+    ref_meter.push_block(&loud[..(sr as usize) * 10], 0.0);
+    let l_loud = ref_meter.lufs_integrated as f64;
+
+    let mut meter = LufsTruePeakMeter::new(sr);
+    meter.push_block(&loud, 0.0);
+    meter.push_block(&quiet, 0.0);
+    let expected = l_loud + 10.0 * ((60.0 + 120.0 * 0.1) / 180.0f64).log10();
+    let got = meter.lufs_integrated as f64;
+    assert!(
+        (got - expected).abs() < 0.1,
+        "Integrated LUFS over 180 s programme: got {got:.3}, expected {expected:.3} (loud ref {l_loud:.3})"
+    );
+}

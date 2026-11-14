@@ -10,198 +10,3055 @@
     360,
     360
   ],
+  "multi_rate_lut_count": 38,
+  "gru_stem_npz_count": 3,
   "extracted_files": [
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_BassControl.txt",
       "size_bytes": 620,
-      "sha256_prefix": "034bcc25146e3350"
+      "sha256_prefix": "034bcc25146e3350",
+      "sha256_full": "034bcc25146e3350d6bf1d3e4fc15d7ee8a12089a285d43692b27ad4e600c2b9"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Clarity.txt",
       "size_bytes": 411,
-      "sha256_prefix": "a9edc761d680135d"
+      "sha256_prefix": "a9edc761d680135d",
+      "sha256_full": "a9edc761d680135d808254f876314173a1054c6f8b9de95b8a3c5546b3b8013a"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_DynamicEQ.txt",
       "size_bytes": 9356,
-      "sha256_prefix": "9bad756a15002db1"
+      "sha256_prefix": "9bad756a15002db1",
+      "sha256_full": "9bad756a15002db16543479630163f37c93327edbadb28ee49e4a3e56edd5aae"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Dynamics.txt",
       "size_bytes": 6734,
-      "sha256_prefix": "1195f82eb31ea6c0"
+      "sha256_prefix": "1195f82eb31ea6c0",
+      "sha256_full": "1195f82eb31ea6c07847c44d49b8accc369f972e0d969de653adc01cc1d6000c"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_EQ.txt",
       "size_bytes": 4625,
-      "sha256_prefix": "37d835bc38f358f6"
+      "sha256_prefix": "37d835bc38f358f6",
+      "sha256_full": "37d835bc38f358f6f52aa61b503d7afe0c32ad01c30150b88c23475ab944c918"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_EQ2.txt",
       "size_bytes": 5225,
-      "sha256_prefix": "01bce08115e2bef3"
+      "sha256_prefix": "01bce08115e2bef3",
+      "sha256_full": "01bce08115e2bef38605a3907f9198c60e5e4e7e6555c9b436b9755fae1b9708"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Exciter.txt",
       "size_bytes": 1585,
-      "sha256_prefix": "6a99a70708c5528c"
+      "sha256_prefix": "6a99a70708c5528c",
+      "sha256_full": "6a99a70708c5528cb5281ce355dcf3b29d515fa95fc3d6d85f4228d0e90b046d"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Gain.txt",
       "size_bytes": 327,
-      "sha256_prefix": "0aa881da02242049"
+      "sha256_prefix": "0aa881da02242049",
+      "sha256_full": "0aa881da02242049e54a3089ac76a2f35a98d97bd0a3b979fbc18160258f39b1"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Global.txt",
       "size_bytes": 34,
-      "sha256_prefix": "eb29ec6e86410368"
+      "sha256_prefix": "eb29ec6e86410368",
+      "sha256_full": "eb29ec6e8641036876cfc75561d8ec6ed3e4b081cbe68caab7b7fb01e626d3d6"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Imager.txt",
       "size_bytes": 1176,
-      "sha256_prefix": "684a3004bc883e0f"
+      "sha256_prefix": "684a3004bc883e0f",
+      "sha256_full": "684a3004bc883e0f4096ae88d5c0812ecc84ccb4b01ee6de625d55f89bbb537c"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Impact.txt",
       "size_bytes": 828,
-      "sha256_prefix": "d51ee01506a90a1c"
+      "sha256_prefix": "d51ee01506a90a1c",
+      "sha256_full": "d51ee01506a90a1ce5a85a5da325c8f2b355da677c199d6d4b38459f84495a7c"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_LowEndFocus.txt",
       "size_bytes": 303,
-      "sha256_prefix": "b6d019dcb9f6236f"
+      "sha256_prefix": "b6d019dcb9f6236f",
+      "sha256_full": "b6d019dcb9f6236fd4225ccf25d55d68a6d926da0781a2c5fcede6e3c5e9b5dd"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_MasterRebalance.txt",
       "size_bytes": 80,
-      "sha256_prefix": "b9ccd32dd2a90ff5"
+      "sha256_prefix": "b9ccd32dd2a90ff5",
+      "sha256_full": "b9ccd32dd2a90ff57274a8904748d5ef1ef842383eca91cc61b72ff1226a86d3"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Match_EQ.txt",
       "size_bytes": 414,
-      "sha256_prefix": "30356b9d4b26fa43"
+      "sha256_prefix": "30356b9d4b26fa43",
+      "sha256_full": "30356b9d4b26fa43f0d399cd3d3a7bbddf07b20941e0f660405ffeee9a53520d"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Maximizer.txt",
       "size_bytes": 649,
-      "sha256_prefix": "5ceeb63c8dba24fd"
+      "sha256_prefix": "5ceeb63c8dba24fd",
+      "sha256_full": "5ceeb63c8dba24fd172ba0d9bd85b0b5cda002b44f0c9ea446affc556ae56eb4"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_SpectralShaper.txt",
       "size_bytes": 711,
-      "sha256_prefix": "e2112d8cb2566741"
+      "sha256_prefix": "e2112d8cb2566741",
+      "sha256_full": "e2112d8cb2566741174c23f11386cf1d6db89c0670c183860cf68996944be69f"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Stabilizer.txt",
       "size_bytes": 1011,
-      "sha256_prefix": "e67d7d6e02b2648a"
+      "sha256_prefix": "e67d7d6e02b2648a",
+      "sha256_full": "e67d7d6e02b2648ad1455ad24f43927db4a17e95c0c4d4cc32f2caf3881ddacb"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_StemEQ.txt",
       "size_bytes": 8351,
-      "sha256_prefix": "a0c8c831848cb825"
+      "sha256_prefix": "a0c8c831848cb825",
+      "sha256_full": "a0c8c831848cb82567dacca4967f2223347e06bea5cd8cdb4a6e986ad801852a"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_Unlimiter.txt",
       "size_bytes": 202,
-      "sha256_prefix": "9c6944f9a2ab0fbd"
+      "sha256_prefix": "9c6944f9a2ab0fbd",
+      "sha256_full": "9c6944f9a2ab0fbdf87b5b1b767b74266e10087e4f99643333f08a62e879e2e8"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_VintageCompressor.txt",
       "size_bytes": 1852,
-      "sha256_prefix": "6042b3e244f7448b"
+      "sha256_prefix": "6042b3e244f7448b",
+      "sha256_full": "6042b3e244f7448b54bd849fc2ce9019061ec502071eb7cf4c911565b8c058fb"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_VintageEQ.txt",
       "size_bytes": 1836,
-      "sha256_prefix": "2d398a3f83eec64a"
+      "sha256_prefix": "2d398a3f83eec64a",
+      "sha256_full": "2d398a3f83eec64a69f34a55adb9d6baaaba37489eed15ff5670cc5cebfc3318"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_VintageLimiter.txt",
       "size_bytes": 281,
-      "sha256_prefix": "f4cb2d7af5f62e2c"
+      "sha256_prefix": "f4cb2d7af5f62e2c",
+      "sha256_full": "f4cb2d7af5f62e2cea6a9401c3eb9db3ba6ec38b72ca0c589fd2f88bd26e1f05"
     },
     {
       "category": "ozone12_param_table",
       "relative_dest_path": "param_tables/AutomatableParamList_VintageTape.txt",
       "size_bytes": 296,
-      "sha256_prefix": "010ac8f3eaf33298"
+      "sha256_prefix": "010ac8f3eaf33298",
+      "sha256_full": "010ac8f3eaf33298ad353c66c059eb98a9873660d0b5e897f50340aecc563a66"
     },
     {
       "category": "bsrnn_realtime",
       "relative_dest_path": "models/bsrnn_realtime/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
       "size_bytes": 7230143,
-      "sha256_prefix": "fd58bc17d3d949fb"
+      "sha256_prefix": "fd58bc17d3d949fb",
+      "sha256_full": "fd58bc17d3d949fb7819b089ac342085b68d462a1ae15180df3abff273e9c43e"
+    },
+    {
+      "category": "bsrnn_realtime",
+      "relative_dest_path": "ozone12/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
+      "size_bytes": 7230143,
+      "sha256_prefix": "fd58bc17d3d949fb",
+      "sha256_full": "fd58bc17d3d949fb7819b089ac342085b68d462a1ae15180df3abff273e9c43e"
     },
     {
       "category": "bsrnn_realtime",
       "relative_dest_path": "models/bsrnn_realtime/delimit_exp009_ep080_fixed2.onnx",
       "size_bytes": 5580442,
-      "sha256_prefix": "8d00832ab265f526"
+      "sha256_prefix": "8d00832ab265f526",
+      "sha256_full": "8d00832ab265f5262b9000155cde707d00110e71204cf16aacbd8446428e3573"
+    },
+    {
+      "category": "bsrnn_realtime",
+      "relative_dest_path": "ozone12/models/delimit_exp009_ep080_fixed2.onnx",
+      "size_bytes": 5580442,
+      "sha256_prefix": "8d00832ab265f526",
+      "sha256_full": "8d00832ab265f5262b9000155cde707d00110e71204cf16aacbd8446428e3573"
     },
     {
       "category": "assistant_cnn",
       "relative_dest_path": "models/assistant_cnn/gparamsBN8.0.npz",
       "size_bytes": 6522880,
-      "sha256_prefix": "650969e7c5ffe544"
+      "sha256_prefix": "650969e7c5ffe544",
+      "sha256_full": "650969e7c5ffe5448e24c1f31e5cfa863da9ee17db9431d3456b1150675cf0fa"
     },
     {
       "category": "assistant_cnn",
       "relative_dest_path": "models/assistant_cnn/instrument_classifier_params.npz",
       "size_bytes": 19853709,
-      "sha256_prefix": "fadda21a950924b1"
+      "sha256_prefix": "fadda21a950924b1",
+      "sha256_full": "fadda21a950924b1e43d7ea5fb0b90f3db9748a59a33c905ed4c0d51e6ad6603"
     },
     {
       "category": "assistant_cnn",
       "relative_dest_path": "ozone12/models/instrument_classifier_params.npz",
       "size_bytes": 19853709,
-      "sha256_prefix": "fadda21a950924b1"
+      "sha256_prefix": "fadda21a950924b1",
+      "sha256_full": "fadda21a950924b1e43d7ea5fb0b90f3db9748a59a33c905ed4c0d51e6ad6603"
     },
     {
       "category": "assistant_cnn",
       "relative_dest_path": "ozone12/models/gparamsBN8.0.npz",
       "size_bytes": 6522880,
-      "sha256_prefix": "650969e7c5ffe544"
+      "sha256_prefix": "650969e7c5ffe544",
+      "sha256_full": "650969e7c5ffe5448e24c1f31e5cfa863da9ee17db9431d3456b1150675cf0fa"
     },
     {
       "category": "npz_gru_stems",
       "relative_dest_path": "ozone12/models/vocals-small_sanitized.npz",
       "size_bytes": 26261516,
-      "sha256_prefix": "fe652a1f334b984f"
+      "sha256_prefix": "fe652a1f334b984f",
+      "sha256_full": "fe652a1f334b984fe7197476e9959115bb312d01d1ceb506ad8b74a2949512e6"
     },
     {
       "category": "npz_gru_stems",
       "relative_dest_path": "models/npz_gru_stems/vocals-small_sanitized.npz",
       "size_bytes": 26261516,
-      "sha256_prefix": "fe652a1f334b984f"
+      "sha256_prefix": "fe652a1f334b984f",
+      "sha256_full": "fe652a1f334b984fe7197476e9959115bb312d01d1ceb506ad8b74a2949512e6"
+    },
+    {
+      "category": "npz_gru_stems",
+      "relative_dest_path": "ozone12/models/drums-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256_prefix": "0416bd7af310da05",
+      "sha256_full": "0416bd7af310da05e6319cfc316478dd7e98d3a14986c44550968085b500ee22"
+    },
+    {
+      "category": "npz_gru_stems",
+      "relative_dest_path": "models/npz_gru_stems/drums-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256_prefix": "0416bd7af310da05",
+      "sha256_full": "0416bd7af310da05e6319cfc316478dd7e98d3a14986c44550968085b500ee22"
+    },
+    {
+      "category": "npz_gru_stems",
+      "relative_dest_path": "ozone12/models/bass-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256_prefix": "fb292f8089ef6598",
+      "sha256_full": "fb292f8089ef65981cbc2d8cfb768784191dbc353580846c396c3ab174cb8129"
+    },
+    {
+      "category": "npz_gru_stems",
+      "relative_dest_path": "models/npz_gru_stems/bass-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256_prefix": "fb292f8089ef6598",
+      "sha256_full": "fb292f8089ef65981cbc2d8cfb768784191dbc353580846c396c3ab174cb8129"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-11025.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "70d6363dca68cb1d",
+      "sha256_full": "70d6363dca68cb1d6b1cbdc498204ccb4cef85339e6eadf7725924281374a319"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-128000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "d786289e8c20d1d9",
+      "sha256_full": "d786289e8c20d1d925151a6822bf628210d8fc1b2ea2aadf3296f0632595f2bd"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-16000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "26da4d29a38b0a17",
+      "sha256_full": "26da4d29a38b0a1740614a9fc20d3e05169d35b669f917eef94641dffdbabf1c"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-176400.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "2311c6dc8a7fc8d0",
+      "sha256_full": "2311c6dc8a7fc8d02cfe116b8540e01b8d27cd330f03364232b052ae2ba6911e"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-192000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "5ee914e1a6412ec1",
+      "sha256_full": "5ee914e1a6412ec1e0c4282784d90d0c48196b044178984af7e6101e6ca2d341"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-22050.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "59275810b0d87e26",
+      "sha256_full": "59275810b0d87e26dc9b14526743d992ff98e1344eadaf68e9370a900f1b4b15"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-256000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "4640bd0189c4a0f1",
+      "sha256_full": "4640bd0189c4a0f1dfc6201c9dfd6c7e78f526704ba3b1dc84f18fa5b6ca98ef"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-32000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "0502559e931f8b54",
+      "sha256_full": "0502559e931f8b547655363dff8b9842a0cff1ccc2f05720820ee9bde9fcf763"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-352800.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "ff69d935fab3735d",
+      "sha256_full": "ff69d935fab3735d884ddee70c1bac16a41f78bb05e2ecf5f18648971b1a6247"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-384000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "5965d43e02e6327b",
+      "sha256_full": "5965d43e02e6327b6d9448f569cfee908415d5175bcc4b06bd1bff33d43ef11e"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-44100.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "292dcec03f18bedf",
+      "sha256_full": "292dcec03f18bedf737e60e0682f3c3e1b2e7426f406ee8d1dd1ad76ea64332b"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-48000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "35c90fa4b5606f57",
+      "sha256_full": "35c90fa4b5606f578cf50752ad5d5ef028ec1463c202d75c991e498394ce89bb"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-512000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "808d16f26c52fbfe",
+      "sha256_full": "808d16f26c52fbfe18adbd92b4baf7f2b3c874560653d2ed4e6b062d41afd74c"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-64000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "5e812ab9d4d3677f",
+      "sha256_full": "5e812ab9d4d3677f146cf17639a2670e437de9e29ca2a62dc8fc614ef96334bd"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-705600.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "57ed9dfb031bd32e",
+      "sha256_full": "57ed9dfb031bd32ea65d69ea9bef9d0e0338b4419fd2033b58d4a7ef05ee7005"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-768000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "658dae317635430c",
+      "sha256_full": "658dae317635430cd9e1aeeeee3e1dfac71b9690063d3fa229e3b09e8fb0c565"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-8000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "e1a4812ddbff4db8",
+      "sha256_full": "e1a4812ddbff4db88ccdba260a28bb2bd1dc89caa00acd01ae45b9abdea682d2"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-88200.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "0049c4c135df6a24",
+      "sha256_full": "0049c4c135df6a2466c8a8870c39f7d31bb512a361ecddf398a855e70b6cefab"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-dualtriode-96000.000000.dat",
+      "size_bytes": 4149044,
+      "sha256_prefix": "66ece585bcfcfc71",
+      "sha256_full": "66ece585bcfcfc719b874ce8e39eb2d1b8d43de88a2f4ae892a7f74dfd98ecb8"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-11025.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "7c0441f9b17d779a",
+      "sha256_full": "7c0441f9b17d779ae43c5d44ebc4aca62a32c87f51432d6152a82e0f14e3b7d6"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-128000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "f542ffe2cc72aa42",
+      "sha256_full": "f542ffe2cc72aa4260fc509cbe71c01a5cef602eec363d037b1b8167afa3a4a6"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-16000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "8c7b092b17a469d8",
+      "sha256_full": "8c7b092b17a469d8155ebfde8b6d013d9556687481348979237136fb21832a7e"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-176400.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "4452b6fa0753ef5f",
+      "sha256_full": "4452b6fa0753ef5f685573ae34cc4336f1284ce0a426c9abf62b21ab1c7f3b88"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-192000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "a09d60f7f23b0d06",
+      "sha256_full": "a09d60f7f23b0d064c0a00f2fa3cd1d24661cea41b1ceb1a0ca9f293567f7152"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-22050.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "73204661e4c55436",
+      "sha256_full": "73204661e4c55436a1b26114db3d1334b5328d81fc2d45e3e9c8d569062d48bd"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-256000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "c70ffc24e2ea9dd5",
+      "sha256_full": "c70ffc24e2ea9dd509e5f91ecf3028326d14c04a659f56135fdea7bad8a21b24"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-32000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "1f325642ceee8ed4",
+      "sha256_full": "1f325642ceee8ed4b4df16cfde9b21989a409d78db5aaa6289dbf2a563ffd4d2"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-352800.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "e498811975985b05",
+      "sha256_full": "e498811975985b05de2c036b7b74ab01c2d73b8e9b43e72994efe26881e0dd8b"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-384000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "a98f345a6f8446cc",
+      "sha256_full": "a98f345a6f8446cc65a72e3b3afbf2789ec1a0fe9e6f3bda0b20f5283f62bd5f"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-44100.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "f4b41a66f5600bd0",
+      "sha256_full": "f4b41a66f5600bd0e6e2dbed59b19adf748600e4152bb77fd3d8438337f4c365"
     },
     {
       "category": "dk_triode_lut",
       "relative_dest_path": "exciter_luts/exciter-triode-48000.000000.dat",
       "size_bytes": 2074532,
-      "sha256_prefix": "bcee55de2d057c46"
+      "sha256_prefix": "bcee55de2d057c46",
+      "sha256_full": "bcee55de2d057c4600c1842bc28c844968a1446d5a0b8a3e36fe315cd9763187"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-512000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "a77c0706905e5aa8",
+      "sha256_full": "a77c0706905e5aa819da7ea054bb9e4bbea68507be0c8fa3656eab13c38f6042"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-64000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "d3bec78f295c50de",
+      "sha256_full": "d3bec78f295c50de94c6ea72aa760a675def28475937181a836d8b79509c38ae"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-705600.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "14ea31f32d9030c5",
+      "sha256_full": "14ea31f32d9030c5106831b713ae213db6c4f078a8986adcc11089e372f4f3d1"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-768000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "be7056ff0ba43a18",
+      "sha256_full": "be7056ff0ba43a1857f5110c46893ffb0d4a1422822ebd9ff9564466fc82a148"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-8000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "cf842658b101b6b7",
+      "sha256_full": "cf842658b101b6b795566a06d32f2999bf75b24baad09c693ebe21e55704d1ac"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-88200.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "d1bdd3a62beff9aa",
+      "sha256_full": "d1bdd3a62beff9aa32984b7972aeff26c0e9c5c3be0b01bcf282bba99342aeee"
+    },
+    {
+      "category": "dk_triode_lut",
+      "relative_dest_path": "exciter_luts/exciter-triode-96000.000000.dat",
+      "size_bytes": 2074532,
+      "sha256_prefix": "ce1ce0d6793d2039",
+      "sha256_full": "ce1ce0d6793d2039a4e226e1d9926055b16def0f218798aaf4fd85ef3fc3b176"
+    }
+  ],
+  "onnx_model_signatures": [
+    {
+      "relative_path": "models/bsrnn_realtime/delimit_exp009_ep080_fixed2.onnx",
+      "size_bytes": 5580442,
+      "sha256": "8d00832ab265f5262b9000155cde707d00110e71204cf16aacbd8446428e3573",
+      "ir_version": 8,
+      "producer_name": "pytorch",
+      "graph_name": "main_graph",
+      "inputs": [
+        {
+          "name": "input_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "1",
+            "1025",
+            "2",
+            "2"
+          ]
+        },
+        {
+          "name": "input_states",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "1",
+            "1",
+            "1025",
+            "1",
+            "2"
+          ]
+        },
+        {
+          "name": "output_states",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        }
+      ],
+      "initializer_count": 218
+    },
+    {
+      "relative_path": "models/bsrnn_realtime/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
+      "size_bytes": 7230143,
+      "sha256": "fd58bc17d3d949fb7819b089ac342085b68d462a1ae15180df3abff273e9c43e",
+      "ir_version": 8,
+      "producer_name": "pytorch",
+      "graph_name": "main_graph",
+      "inputs": [
+        {
+          "name": "input_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "1",
+            "1025",
+            "3",
+            "2"
+          ]
+        },
+        {
+          "name": "input_states",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        },
+        {
+          "name": "input_states_normalize",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "1"
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "3",
+            "1",
+            "1025",
+            "1",
+            "2"
+          ]
+        },
+        {
+          "name": "output_states",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        },
+        {
+          "name": "output_states_normalize",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "1"
+          ]
+        }
+      ],
+      "initializer_count": 218
+    },
+    {
+      "relative_path": "ozone12/models/delimit_exp009_ep080_fixed2.onnx",
+      "size_bytes": 5580442,
+      "sha256": "8d00832ab265f5262b9000155cde707d00110e71204cf16aacbd8446428e3573",
+      "ir_version": 8,
+      "producer_name": "pytorch",
+      "graph_name": "main_graph",
+      "inputs": [
+        {
+          "name": "input_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "1",
+            "1025",
+            "2",
+            "2"
+          ]
+        },
+        {
+          "name": "input_states",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "1",
+            "1",
+            "1025",
+            "1",
+            "2"
+          ]
+        },
+        {
+          "name": "output_states",
+          "elem_type": "float32",
+          "shape": [
+            "1",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        }
+      ],
+      "initializer_count": 218
+    },
+    {
+      "relative_path": "ozone12/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
+      "size_bytes": 7230143,
+      "sha256": "fd58bc17d3d949fb7819b089ac342085b68d462a1ae15180df3abff273e9c43e",
+      "ir_version": 8,
+      "producer_name": "pytorch",
+      "graph_name": "main_graph",
+      "inputs": [
+        {
+          "name": "input_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "1",
+            "1025",
+            "3",
+            "2"
+          ]
+        },
+        {
+          "name": "input_states",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        },
+        {
+          "name": "input_states_normalize",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "1"
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output_spectrogram",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "3",
+            "1",
+            "1025",
+            "1",
+            "2"
+          ]
+        },
+        {
+          "name": "output_states",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "2",
+            "2",
+            "1",
+            "13",
+            "128"
+          ]
+        },
+        {
+          "name": "output_states_normalize",
+          "elem_type": "float32",
+          "shape": [
+            "2",
+            "1"
+          ]
+        }
+      ],
+      "initializer_count": 218
+    },
+    {
+      "relative_path": "uvr5/models/MDX_Net_Models/Kim_Vocal_2.onnx",
+      "size_bytes": 66759214,
+      "sha256": "ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b",
+      "ir_version": 6,
+      "producer_name": "pytorch",
+      "graph_name": "torch-jit-export",
+      "inputs": [
+        {
+          "name": "input",
+          "elem_type": "float32",
+          "shape": [
+            "batch_size",
+            "4",
+            "3072",
+            "256"
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "elem_type": "float32",
+          "shape": [
+            "batch_size",
+            "4",
+            "3072",
+            "256"
+          ]
+        }
+      ],
+      "initializer_count": 220
+    },
+    {
+      "relative_path": "uvr5/models/MDX_Net_Models/UVR-MDX-NET-Inst_HQ_3.onnx",
+      "size_bytes": 66759214,
+      "sha256": "317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc",
+      "ir_version": 6,
+      "producer_name": "pytorch",
+      "graph_name": "torch-jit-export",
+      "inputs": [
+        {
+          "name": "input",
+          "elem_type": "float32",
+          "shape": [
+            "batch_size",
+            "4",
+            "3072",
+            "256"
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "elem_type": "float32",
+          "shape": [
+            "batch_size",
+            "4",
+            "3072",
+            "256"
+          ]
+        }
+      ],
+      "initializer_count": 220
+    }
+  ],
+  "npz_archive_signatures": [
+    {
+      "relative_path": "models/assistant_cnn/gparamsBN8.0.npz",
+      "size_bytes": 6522880,
+      "sha256": "650969e7c5ffe5448e24c1f31e5cfa863da9ee17db9431d3456b1150675cf0fa",
+      "tensors": [
+        {
+          "name": "arr_24",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_25",
+          "dtype": "<f4",
+          "shape": [
+            256,
+            64
+          ],
+          "byte_len": 65536
+        },
+        {
+          "name": "arr_26",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_27",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            6272,
+            256
+          ],
+          "byte_len": 6422528
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_22",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_23",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_28",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_29",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_31",
+          "dtype": "<f4",
+          "shape": [
+            10
+          ],
+          "byte_len": 40
+        },
+        {
+          "name": "arr_30",
+          "dtype": "<f4",
+          "shape": [
+            64,
+            10
+          ],
+          "byte_len": 2560
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            128,
+            32,
+            3,
+            3
+          ],
+          "byte_len": 147456
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            64,
+            128,
+            3,
+            3
+          ],
+          "byte_len": 294912
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            64,
+            1,
+            3,
+            3
+          ],
+          "byte_len": 2304
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            32,
+            64,
+            3,
+            3
+          ],
+          "byte_len": 73728
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "mu",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        },
+        {
+          "name": "sigma",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        }
+      ]
+    },
+    {
+      "relative_path": "models/assistant_cnn/instrument_classifier_params.npz",
+      "size_bytes": 19853709,
+      "sha256": "fadda21a950924b1e43d7ea5fb0b90f3db9748a59a33c905ed4c0d51e6ad6603",
+      "tensors": [
+        {
+          "name": "layer2_W",
+          "dtype": "<f4",
+          "shape": [
+            4320,
+            1000
+          ],
+          "byte_len": 17280000
+        },
+        {
+          "name": "layer1_W",
+          "dtype": "<f4",
+          "shape": [
+            32,
+            16,
+            2,
+            2
+          ],
+          "byte_len": 8192
+        },
+        {
+          "name": "layer4_W",
+          "dtype": "<f4",
+          "shape": [
+            1000,
+            10
+          ],
+          "byte_len": 40000
+        },
+        {
+          "name": "layer3_b",
+          "dtype": "<f4",
+          "shape": [
+            1000
+          ],
+          "byte_len": 4000
+        },
+        {
+          "name": "layer0_W",
+          "dtype": "<f4",
+          "shape": [
+            16,
+            1,
+            1,
+            4
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "mu",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        },
+        {
+          "name": "layer1_b",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "layer2_b",
+          "dtype": "<f4",
+          "shape": [
+            1000
+          ],
+          "byte_len": 4000
+        },
+        {
+          "name": "layer3_W",
+          "dtype": "<f4",
+          "shape": [
+            1000,
+            1000
+          ],
+          "byte_len": 4000000
+        },
+        {
+          "name": "layer0_b",
+          "dtype": "<f4",
+          "shape": [
+            16
+          ],
+          "byte_len": 64
+        },
+        {
+          "name": "sigma",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        },
+        {
+          "name": "layer4_b",
+          "dtype": "<f4",
+          "shape": [
+            10
+          ],
+          "byte_len": 40
+        }
+      ]
+    },
+    {
+      "relative_path": "models/npz_gru_stems/bass-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256": "fb292f8089ef65981cbc2d8cfb768784191dbc353580846c396c3ab174cb8129",
+      "tensors": [
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            2050
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            2050
+          ],
+          "byte_len": 8200
+        },
+        {
+          "name": "FFT_SIZE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "STFT_MASK_EPSILON",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "SIR_REGULARIZER",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "FFT_STRIDE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "SAMPLING_RATE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        }
+      ]
+    },
+    {
+      "relative_path": "models/npz_gru_stems/drums-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256": "0416bd7af310da05e6319cfc316478dd7e98d3a14986c44550968085b500ee22",
+      "tensors": [
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            2050
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            2050
+          ],
+          "byte_len": 8200
+        },
+        {
+          "name": "FFT_SIZE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "STFT_MASK_EPSILON",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "SIR_REGULARIZER",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "FFT_STRIDE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "SAMPLING_RATE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        }
+      ]
+    },
+    {
+      "relative_path": "models/npz_gru_stems/vocals-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256": "fe652a1f334b984fe7197476e9959115bb312d01d1ceb506ad8b74a2949512e6",
+      "tensors": [
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            2050
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            2050
+          ],
+          "byte_len": 8200
+        },
+        {
+          "name": "FFT_SIZE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "STFT_MASK_EPSILON",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "SIR_REGULARIZER",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "FFT_STRIDE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "SAMPLING_RATE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        }
+      ]
+    },
+    {
+      "relative_path": "ozone12/models/bass-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256": "fb292f8089ef65981cbc2d8cfb768784191dbc353580846c396c3ab174cb8129",
+      "tensors": [
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            2050
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            2050
+          ],
+          "byte_len": 8200
+        },
+        {
+          "name": "FFT_SIZE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "STFT_MASK_EPSILON",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "SIR_REGULARIZER",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "FFT_STRIDE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "SAMPLING_RATE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        }
+      ]
+    },
+    {
+      "relative_path": "ozone12/models/drums-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256": "0416bd7af310da05e6319cfc316478dd7e98d3a14986c44550968085b500ee22",
+      "tensors": [
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            2050
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            2050
+          ],
+          "byte_len": 8200
+        },
+        {
+          "name": "FFT_SIZE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "STFT_MASK_EPSILON",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "SIR_REGULARIZER",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "FFT_STRIDE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "SAMPLING_RATE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        }
+      ]
+    },
+    {
+      "relative_path": "ozone12/models/gparamsBN8.0.npz",
+      "size_bytes": 6522880,
+      "sha256": "650969e7c5ffe5448e24c1f31e5cfa863da9ee17db9431d3456b1150675cf0fa",
+      "tensors": [
+        {
+          "name": "arr_24",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_25",
+          "dtype": "<f4",
+          "shape": [
+            256,
+            64
+          ],
+          "byte_len": 65536
+        },
+        {
+          "name": "arr_26",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_27",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            6272,
+            256
+          ],
+          "byte_len": 6422528
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_22",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_23",
+          "dtype": "<f4",
+          "shape": [
+            256
+          ],
+          "byte_len": 1024
+        },
+        {
+          "name": "arr_28",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_29",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_31",
+          "dtype": "<f4",
+          "shape": [
+            10
+          ],
+          "byte_len": 40
+        },
+        {
+          "name": "arr_30",
+          "dtype": "<f4",
+          "shape": [
+            64,
+            10
+          ],
+          "byte_len": 2560
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            128,
+            32,
+            3,
+            3
+          ],
+          "byte_len": 147456
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            64,
+            128,
+            3,
+            3
+          ],
+          "byte_len": 294912
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            128
+          ],
+          "byte_len": 512
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            64,
+            1,
+            3,
+            3
+          ],
+          "byte_len": 2304
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            32,
+            64,
+            3,
+            3
+          ],
+          "byte_len": 73728
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            64
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "mu",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        },
+        {
+          "name": "sigma",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        }
+      ]
+    },
+    {
+      "relative_path": "ozone12/models/instrument_classifier_params.npz",
+      "size_bytes": 19853709,
+      "sha256": "fadda21a950924b1e43d7ea5fb0b90f3db9748a59a33c905ed4c0d51e6ad6603",
+      "tensors": [
+        {
+          "name": "layer2_W",
+          "dtype": "<f4",
+          "shape": [
+            4320,
+            1000
+          ],
+          "byte_len": 17280000
+        },
+        {
+          "name": "layer1_W",
+          "dtype": "<f4",
+          "shape": [
+            32,
+            16,
+            2,
+            2
+          ],
+          "byte_len": 8192
+        },
+        {
+          "name": "layer4_W",
+          "dtype": "<f4",
+          "shape": [
+            1000,
+            10
+          ],
+          "byte_len": 40000
+        },
+        {
+          "name": "layer3_b",
+          "dtype": "<f4",
+          "shape": [
+            1000
+          ],
+          "byte_len": 4000
+        },
+        {
+          "name": "layer0_W",
+          "dtype": "<f4",
+          "shape": [
+            16,
+            1,
+            1,
+            4
+          ],
+          "byte_len": 256
+        },
+        {
+          "name": "mu",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        },
+        {
+          "name": "layer1_b",
+          "dtype": "<f4",
+          "shape": [
+            32
+          ],
+          "byte_len": 128
+        },
+        {
+          "name": "layer2_b",
+          "dtype": "<f4",
+          "shape": [
+            1000
+          ],
+          "byte_len": 4000
+        },
+        {
+          "name": "layer3_W",
+          "dtype": "<f4",
+          "shape": [
+            1000,
+            1000
+          ],
+          "byte_len": 4000000
+        },
+        {
+          "name": "layer0_b",
+          "dtype": "<f4",
+          "shape": [
+            16
+          ],
+          "byte_len": 64
+        },
+        {
+          "name": "sigma",
+          "dtype": "<f4",
+          "shape": [
+            80
+          ],
+          "byte_len": 320
+        },
+        {
+          "name": "layer4_b",
+          "dtype": "<f4",
+          "shape": [
+            10
+          ],
+          "byte_len": 40
+        }
+      ]
+    },
+    {
+      "relative_path": "ozone12/models/vocals-small_sanitized.npz",
+      "size_bytes": 26261516,
+      "sha256": "fe652a1f334b984fe7197476e9959115bb312d01d1ceb506ad8b74a2949512e6",
+      "tensors": [
+        {
+          "name": "arr_20",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            2050
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_21",
+          "dtype": "<f4",
+          "shape": [
+            2050
+          ],
+          "byte_len": 8200
+        },
+        {
+          "name": "FFT_SIZE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "STFT_MASK_EPSILON",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "SIR_REGULARIZER",
+          "dtype": "<f4",
+          "shape": [],
+          "byte_len": 4
+        },
+        {
+          "name": "arr_19",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_18",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_11",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_10",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_13",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_12",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_15",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_14",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_17",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_16",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_1",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_0",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_3",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_2",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_5",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_4",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_7",
+          "dtype": "<f4",
+          "shape": [
+            512,
+            512
+          ],
+          "byte_len": 1048576
+        },
+        {
+          "name": "arr_6",
+          "dtype": "<f4",
+          "shape": [
+            2050,
+            512
+          ],
+          "byte_len": 4198400
+        },
+        {
+          "name": "arr_9",
+          "dtype": "<f4",
+          "shape": [
+            1,
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "arr_8",
+          "dtype": "<f4",
+          "shape": [
+            512
+          ],
+          "byte_len": 2048
+        },
+        {
+          "name": "FFT_STRIDE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        },
+        {
+          "name": "SAMPLING_RATE",
+          "dtype": "<i8",
+          "shape": [],
+          "byte_len": 8
+        }
+      ]
     }
   ]
 }

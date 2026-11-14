@@ -1,0 +1,94 @@
+{
+  "id": "ev_0c09fd7da4265e35b55c8020743ae90d5f0c2f5d3129985bdf8dcf3dbf0041a3",
+  "subject": {
+    "kind": "pe",
+    "sha256": "b96354e1ee4f096208432e9a31fd9838c9cc5cf36d4ac078f9cf5c94faaf1760",
+    "name": "ildsp_x64.dll"
+  },
+  "operation": "core_target_triage",
+  "params": {
+    "path": null
+  },
+  "result": {
+    "architecture": "x86_64",
+    "bits": 64,
+    "dotnet_arch": null,
+    "entry_point": "0x1801ace88",
+    "format": "pe",
+    "format_name": "PE (Windows)",
+    "kind": "shared-library",
+    "libraries": [
+      "KERNEL32.dll"
+    ],
+    "next_steps": [
+      {
+        "tool": "core_overview_show",
+        "why": "a one-page summary: sections, imports, counts"
+      },
+      {
+        "tool": "native_functions_list",
+        "why": "every function we found"
+      },
+      {
+        "tool": "native_strings_find",
+        "why": "find text the program shows or uses"
+      },
+      {
+        "tool": "native_function_study",
+        "why": "a full dossier on one function (start with main or the entry point)"
+      },
+      {
+        "tool": "core_feature_find",
+        "why": "follow a word you see in the app to the code behind it"
+      },
+      {
+        "tool": "native_pe_resources_list",
+        "why": "icons, version information and the manifest"
+      }
+    ],
+    "operating_system": "Windows",
+    "plain_english": "ildsp_x64.dll is a library (code other programs load) for Windows, built for x86_64 (64-bit). Its internal names were removed (stripped), so most functions will have generated names.",
+    "recommended_toolsets": [
+      "core",
+      "native",
+      "formats"
+    ],
+    "stripped": true,
+    "symbol_table_stripped": true,
+    "toolchain_hints": [
+      {
+        "category": "compiler",
+        "evidence": "Rich header",
+        "id": "msvc",
+        "label": "Microsoft Visual C++ toolchain",
+        "strength": "strong"
+      }
+    ]
+  },
+  "summary": "ildsp_x64.dll is a library (code other programs load) for Windows, built for x86_64 (64-bit). Its internal names were removed (stripped), so most functions will have generated names.",
+  "confidence": "observed",
+  "authority": "original-files",
+  "environment": {
+    "clean_room": false,
+    "engine": "builtin",
+    "engine_version": "0.4.0",
+    "host": "windows-x86_64"
+  },
+  "limitations": [
+    {
+      "code": "heuristic_hints",
+      "message": "toolchain and packer hints come from markers that can be faked or borrowed"
+    }
+  ],
+  "coverage": {
+    "status": "unknown"
+  },
+  "locations": [
+    {
+      "kind": "address",
+      "value": "0x1801ace88",
+      "label": "entry point"
+    }
+  ],
+  "links": []
+}

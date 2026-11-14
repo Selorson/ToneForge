@@ -13,6 +13,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 daw-core-graph.workspace = true
+daw-plugin-host.workspace = true
+dsp-pitch-time.workspace = true
+dsp-proq4-eq.workspace = true
+dsp-soothe3-spectral.workspace = true
 daw-tauri-host = { path = "../../crates/daw-tauri-host" }
 tauri = { version = "2", features = [] }
 parking_lot.workspace = true

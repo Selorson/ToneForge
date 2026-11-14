@@ -27,12 +27,16 @@ fn main() {
     match run_cleanroom_extraction(&extracted_dir, &assets_dir, !metadata_only) {
         Ok(manifest) => {
             println!(
-                "[ToneForge Clean-Room Extractor] Verified {} IZRESEMBED entries ({} .onnx, {} .npz, {} param tables), 12AX7 LUT fs={} Hz, extracted {} files.",
+                "[ToneForge Clean-Room Extractor] Verified {} IZRESEMBED entries ({} .onnx, {} .npz, {} param tables), {} multi-rate 12AX7 LUTs (48k ref={} Hz), {} GRU-512 stem .npz models, {} ONNX tensor signatures, {} NPZ tensor archives, extracted {} files.",
                 manifest.izresembed_total_entries,
                 manifest.onnx_models_count,
                 manifest.npz_models_count,
                 manifest.param_lists_count,
+                manifest.multi_rate_lut_count,
                 manifest.triode_lut_sample_rate,
+                manifest.gru_stem_npz_count,
+                manifest.onnx_model_signatures.len(),
+                manifest.npz_archive_signatures.len(),
                 manifest.extracted_files.len()
             );
         }

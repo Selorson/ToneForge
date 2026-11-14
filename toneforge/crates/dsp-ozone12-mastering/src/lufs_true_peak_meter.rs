@@ -285,8 +285,13 @@ impl KWeightingStereoFilter {
 
 /// Number of `100 ms` sub-blocks kept for Short-Term (`3.0 s` = 30 sub-blocks) and Momentary (`400 ms` = 4 sub-blocks).
 const SHORT_TERM_SUBBLOCKS: usize = 30;
-/// Maximum number of `400 ms` gating blocks stored in the pre-allocated ring buffer for Integrated LUFS.
-const MAX_GATING_BLOCKS: usize = 512;
+/// Integrated LUFS gating histogram: `400 ms` block loudness from `-70` to `+10` LUFS in `0.01 LU`
+/// bins. Every gating block of the whole programme is kept (exact energy sum per bin), so Integrated
+/// loudness covers the full measurement period as ITU-R BS.1770-4 / EBU R128 require, with fixed
+/// memory and no allocation on the audio thread.
+const GATING_HIST_MIN_LUFS: f64 = -70.0;
+const GATING_HIST_BIN_LU: f64 = 0.01;
+const GATING_HIST_BINS: usize = 8_000;
 
 /// Broadcast-standard ITU-R BS.1770-4 Loudness (`Momentary`, `Short-Term`, `Integrated` LUFS)
 /// and `4x` Oversampled True-Peak (`dBTP`) Meter with Gain Reduction trace.
@@ -312,10 +317,11 @@ pub struct LufsTruePeakMeter {
     subblock_write_pos: usize,
     subblock_filled: usize,
 
-    // Circular buffer of 400ms block powers for ITU-R BS.1770-4 Integrated LUFS gating
-    gating_blocks: [f64; MAX_GATING_BLOCKS],
-    gating_write_pos: usize,
-    gating_filled: usize,
+    // Whole-programme histogram of 400ms block powers for ITU-R BS.1770-4 Integrated LUFS gating
+    gating_hist_energy: Vec<f64>,
+    gating_hist_count: Vec<u32>,
+    gating_total_energy: f64,
+    gating_total_count: u64,
 
     // Published LUFS readings
     pub lufs_momentary: f32,
@@ -351,9 +357,10 @@ impl LufsTruePeakMeter {
             subblock_ring: [0.0; SHORT_TERM_SUBBLOCKS],
             subblock_write_pos: 0,
             subblock_filled: 0,
-            gating_blocks: [0.0; MAX_GATING_BLOCKS],
-            gating_write_pos: 0,
-            gating_filled: 0,
+            gating_hist_energy: vec![0.0; GATING_HIST_BINS],
+            gating_hist_count: vec![0; GATING_HIST_BINS],
+            gating_total_energy: 0.0,
+            gating_total_count: 0,
             lufs_momentary: -70.0,
             lufs_short_term: -70.0,
             lufs_integrated: -70.0,
@@ -382,9 +389,10 @@ impl LufsTruePeakMeter {
         self.subblock_ring = [0.0; SHORT_TERM_SUBBLOCKS];
         self.subblock_write_pos = 0;
         self.subblock_filled = 0;
-        self.gating_blocks = [0.0; MAX_GATING_BLOCKS];
-        self.gating_write_pos = 0;
-        self.gating_filled = 0;
+        self.gating_hist_energy.fill(0.0);
+        self.gating_hist_count.fill(0);
+        self.gating_total_energy = 0.0;
+        self.gating_total_count = 0;
         self.lufs_momentary = -70.0;
         self.lufs_short_term = -70.0;
         self.lufs_integrated = -70.0;
@@ -446,9 +454,6 @@ impl LufsTruePeakMeter {
             let inst_lufs = Self::energy_to_lufs(z_inst);
             self.lufs_momentary = inst_lufs;
             self.lufs_short_term = inst_lufs;
-            if inst_lufs > -70.0 {
-                self.lufs_integrated = inst_lufs;
-            }
         }
     }
 
@@ -464,9 +469,6 @@ impl LufsTruePeakMeter {
             let inst_lufs = Self::energy_to_lufs(z_inst);
             self.lufs_momentary = inst_lufs;
             self.lufs_short_term = inst_lufs;
-            if inst_lufs > -70.0 {
-                self.lufs_integrated = inst_lufs;
-            }
         }
     }
 
@@ -494,44 +496,58 @@ impl LufsTruePeakMeter {
         let z_st = st_sum / (st_count as f64);
         self.lufs_short_term = Self::energy_to_lufs(z_st);
 
-        // When at least 4 sub-blocks (400ms) are available, push 400ms block power `z_mom` into Integrated gating
+        // When at least 4 sub-blocks (400ms) are available, the 400ms block power `z_mom` (75%
+        // overlap, 100ms hop) enters Integrated gating.
         if self.subblock_filled >= 4 {
-            // Absolute gate threshold: -70.0 LUFS -> z_abs = 10^((-70.0 + 0.691) / 10.0)
-            let z_abs_gate = 10.0f64.powf((-70.0 + 0.691) / 10.0);
+            // Absolute gate: -70 LUFS
+            let z_abs_gate = 10.0f64.powf((GATING_HIST_MIN_LUFS + 0.691) / 10.0);
             if z_mom > z_abs_gate {
-                self.gating_blocks[self.gating_write_pos] = z_mom;
-                self.gating_write_pos = (self.gating_write_pos + 1) % MAX_GATING_BLOCKS;
-                if self.gating_filled < MAX_GATING_BLOCKS {
-                    self.gating_filled += 1;
-                }
+                let block_lufs = -0.691 + 10.0 * z_mom.log10();
+                let bin = (((block_lufs - GATING_HIST_MIN_LUFS) / GATING_HIST_BIN_LU) as usize)
+                    .min(GATING_HIST_BINS - 1);
+                self.gating_hist_energy[bin] += z_mom;
+                self.gating_hist_count[bin] += 1;
+                self.gating_total_energy += z_mom;
+                self.gating_total_count += 1;
             }
 
-            if self.gating_filled > 0 {
-                // Step 1: Average all blocks above absolute gate (-70 LUFS)
-                let mut sum_abs = 0.0f64;
-                for i in 0..self.gating_filled {
-                    sum_abs += self.gating_blocks[i];
-                }
-                let mean_abs = sum_abs / (self.gating_filled as f64);
-                // Step 2: Relative threshold is -10 LU below ungated average (`mean_abs * 0.1`)
-                let z_rel_gate = mean_abs * 0.1;
+            if self.gating_total_count > 0 {
+                // Relative gate: -10 LU below the absolute-gated mean loudness of the programme.
+                let mean_abs = self.gating_total_energy / (self.gating_total_count as f64);
+                let rel_gate_lufs = -0.691 + 10.0 * (mean_abs * 0.1).log10();
+                let first_bin = (((rel_gate_lufs - GATING_HIST_MIN_LUFS) / GATING_HIST_BIN_LU)
+                    .ceil()
+                    .max(0.0) as usize)
+                    .min(GATING_HIST_BINS);
                 let mut sum_rel = 0.0f64;
-                let mut count_rel = 0usize;
-                for i in 0..self.gating_filled {
-                    let z = self.gating_blocks[i];
-                    if z >= z_rel_gate {
-                        sum_rel += z;
-                        count_rel += 1;
-                    }
+                let mut count_rel = 0u64;
+                for bin in first_bin..GATING_HIST_BINS {
+                    sum_rel += self.gating_hist_energy[bin];
+                    count_rel += self.gating_hist_count[bin] as u64;
                 }
-                if count_rel > 0 {
-                    self.lufs_integrated = Self::energy_to_lufs(sum_rel / (count_rel as f64));
+                self.lufs_integrated = if count_rel > 0 {
+                    Self::energy_to_lufs(sum_rel / (count_rel as f64))
                 } else {
-                    self.lufs_integrated = Self::energy_to_lufs(mean_abs);
-                }
+                    Self::energy_to_lufs(mean_abs)
+                };
             }
+        }
+    }
+
+    /// `true` once at least one 400 ms gating block exists (Integrated LUFS is defined).
+    #[inline]
+    pub fn integrated_is_defined(&self) -> bool {
+        self.gating_total_count > 0
+    }
+
+    /// Ungated K-weighted loudness of everything measured so far (used only to describe
+    /// programmes shorter than one 400 ms gating block, where BS.1770 Integrated is undefined).
+    #[inline]
+    pub fn ungated_programme_lufs(&self) -> f32 {
+        if self.total_samples == 0 {
+            -70.0
         } else {
-            self.lufs_integrated = self.lufs_momentary;
+            Self::energy_to_lufs(self.total_energy_sum / (self.total_samples as f64))
         }
     }
 

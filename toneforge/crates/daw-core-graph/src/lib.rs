@@ -19,6 +19,7 @@
 pub mod apdc_engine;
 pub mod audio_io;
 pub mod automation_spline;
+pub mod empty_slot;
 pub mod mixer_dag;
 pub mod native_fx;
 pub mod patcher_modular;
@@ -56,6 +57,8 @@ pub struct ProcessContext {
     pub slice_frames: usize,
     pub is_playing: bool,
     pub is_offline_rendering: bool,
+    /// Ticks per quarter note of `ppq_tick` (musical position = `ppq_tick / ppq_resolution`).
+    pub ppq_resolution: u32,
 }
 
 impl Default for ProcessContext {
@@ -68,6 +71,7 @@ impl Default for ProcessContext {
             slice_frames: 64,
             is_playing: true,
             is_offline_rendering: false,
+            ppq_resolution: DEFAULT_PPQ,
         }
     }
 }
@@ -105,6 +109,17 @@ pub trait UnifiedDspNode: Send {
     /// or `Soothe3ReductionFrame`) directly into `VisualTelemetryFrame` with Zero Heap Allocation.
     fn export_visual_telemetry(&self, _frame: &mut VisualTelemetryFrame) {}
 
+    /// Audio clip players only: swaps in a new timeline region table (`regions[..count]` valid,
+    /// `regions.len() == MAX_STEM_CLIP_REGIONS`) without allocating. The displaced table is left in
+    /// `regions` for retirement off the real-time thread. Returns `false` for every other node type.
+    fn swap_stem_clip_regions(
+        &mut self,
+        _regions: &mut Vec<sequencer_pianoroll::StemClipRegion>,
+        _count: usize,
+    ) -> bool {
+        false
+    }
+
     /// Processes a real-time audio slice (Zero Heap Allocation).
     fn process_slice(
         &mut self,
@@ -121,10 +136,19 @@ pub use apdc_engine::{
     SampleAccurateAutomationQueue, VoiceEventKind,
 };
 pub use audio_io::{
-    ASIO_INT32_SCALE_F32, AsioSampleFormat, MmcssThreadPriority, ProAudioThreadGuard,
-    WasapiAsioBlockAdapter, asio_planar_f32_to_int32_lsb, asio_planar_to_stereo_frames,
+    ASIO_INT32_SCALE_F32, AdaptiveDllDriftResampler, AsioDriverInfo, AsioHardwareStream,
+    AsioSampleFormat, AsioStreamStatusSnapshot, DiskTrackRecorder, MidiInputDeviceInfo,
+    MmcssThreadPriority, ProAudioThreadGuard, RECORD_RING_DEFAULT_CAPACITY_FRAMES,
+    RecordedTakeInfo, RtRecordTap, WASAPI_ENGINE_RENDER_QUANTUM, WasapiAsioBlockAdapter,
+    WasapiCaptureStatusSnapshot, WasapiCaptureStream, WasapiEndpointInfo, WasapiHardwareStream,
+    WasapiSampleFormat, WasapiSharedControl, WasapiStreamStatusSnapshot, WasapiStreamingResampler,
+    Win32MidiInputPort, asio_planar_f32_to_int32_lsb, asio_planar_to_stereo_frames,
     convert_f32_to_int16_lsb, convert_f32_to_int24_lsb, convert_f32_to_int32_lsb,
-    convert_int32_lsb_to_f32, stereo_frames_to_asio_planar, stereo_frames_to_wasapi_interleaved,
+    convert_int32_lsb_to_f32, decode_raw_midi_short_message, enumerate_asio_drivers,
+    enumerate_midi_input_devices, enumerate_wasapi_input_devices, enumerate_wasapi_output_devices,
+    pack_stereo_frames_to_hardware_buffer, pack_telemetry_record_status, read_wav_f32_stereo,
+    stereo_frames_to_asio_planar, stereo_frames_to_wasapi_interleaved,
+    unpack_hardware_capture_to_stereo, unpack_telemetry_record_status,
     wasapi_interleaved_to_stereo_frames,
 };
 pub use automation_spline::{
@@ -132,9 +156,13 @@ pub use automation_spline::{
     NUM_INTERNAL_CONTROLLERS, TensionControlPoint, TensionSpline, fixed30_to_normalized,
     normalized_to_fixed30,
 };
+pub use empty_slot::{EMPTY_SLOT_NODE_NAME, EmptySlotNode};
 pub use mixer_dag::{
-    ChannelGenerator, GraphCycleError, LockFreeAudioThreadPool, MixerEngine, MixerSendRoute,
-    MixerTrack, TRACK_STATE_ACTIVE, TRACK_STATE_SILENT, TopologicalMixerScheduler,
+    ChannelGenerator, DEFAULT_RT_GC_RING_CAPACITY, DEFAULT_RT_MUTATION_RING_CAPACITY,
+    GraphCycleError, LockFreeAudioThreadPool, MAX_RT_CHANNELS, MAX_SENDS_PER_TRACK, MixerEngine,
+    MixerSendRoute, MixerTrack, RetiredPluginDisposer, RetiredRtResource, RtGarbageCollector,
+    RtGraphMutation, TRACK_STATE_ACTIVE, TRACK_STATE_SILENT, TopologicalMixerScheduler,
+    create_rt_mutation_channels,
 };
 pub use native_fx::{
     DeterministicGeneratorNode, EmphasisLimiterNode, FixedLatencyTransformNode,
@@ -146,11 +174,11 @@ pub use patcher_modular::{
     PATCHER_HOST_OUTPUT_NODE, PatcherGraphNode, SugiyamaLayout,
 };
 pub use sequencer_pianoroll::{
-    AudioStemClipPlayerNode, MAX_AUTOMATION_ARTICULATORS, MAX_GENERATOR_VOICE_EVENTS,
-    MAX_NOTES_PER_PATTERN, MAX_PLAYLIST_CLIPS, MAX_SEQUENCER_PATTERNS, MAX_STEM_CLIP_REGIONS,
-    MAX_SYNTH_VOICES, PianoRollNote, PianoRollPattern, PlaylistClip, PlaylistClipKind,
-    PlaylistSequencer, PolyphonicSynthGeneratorNode, SequencerVoiceEvent, StemClipRegion,
-    SynthOscWaveform,
+    ArpDirection, AudioStemClipPlayerNode, MAX_AUTOMATION_ARTICULATORS,
+    MAX_GENERATOR_VOICE_EVENTS, MAX_NOTES_PER_PATTERN, MAX_PLAYLIST_CLIPS, MAX_SEQUENCER_PATTERNS,
+    MAX_STEM_CLIP_REGIONS, MAX_SYNTH_VOICES, PianoRollNote, PianoRollPattern, PlaylistClip,
+    PlaylistClipKind, PlaylistSequencer, PolyphonicSynthGeneratorNode, SequencerVoiceEvent,
+    StemClipRegion, SynthOscWaveform,
 };
 pub use slicer_ppq::{
     DEFAULT_PPQ, HybridPpqSlicer, HybridTickSlicer, MAX_PPQ, MIN_PPQ, SUPPORTED_PPQ_RESOLUTIONS,

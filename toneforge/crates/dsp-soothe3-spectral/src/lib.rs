@@ -23,8 +23,11 @@ pub mod sidechain_eq_8band;
 pub mod tilt_curves;
 
 pub use cepstral_min_phase::{
-    CepstralMinPhaseReconstructor, Soothe3SpectralPipeline, SOOTHE3_BINS, SOOTHE3_FFT_SIZE,
-    SOOTHE3_LINEAR_PHASE_LATENCY_1X, SOOTHE3_REGULAR_LATENCY_1X,
+    CONV_HEAD_TAPS, CONV_NUM_TAIL_PARTS, CONV_PART_FFT_SIZE, CepstralMinPhaseReconstructor,
+    MIN_PHASE_CAUSAL_TAPS, MIN_PHASE_TAPER_START, SOOTHE3_BINS, SOOTHE3_FFT_SIZE,
+    SOOTHE3_LINEAR_PHASE_LATENCY_1X, SOOTHE3_LOG_MAG_FLOOR, SOOTHE3_REGULAR_LATENCY_1X,
+    Soothe3SpectralPipeline, ZeroDelayPartitionedConvolver4096, apply_filtfilt_1pole,
+    apply_min_phase_tail_taper, smooth_gains_constant_q_filtfilt,
 };
 pub use params_143::{
     SidechainEqBandParams, SidechainFilterShape, Soothe3GlobalParams, Soothe3ParameterSet,
@@ -34,7 +37,7 @@ pub use params_143::{
 pub use polyphase_resampler::BaseRateResampler;
 pub use resonance_detector::ResonanceDetector;
 pub use sidechain_eq_8band::SidechainEq8Band;
-pub use tilt_curves::TiltPair;
+pub use tilt_curves::{TiltPair, compute_bin_ballistic_taus_sec, integrate_asym};
 
 use daw_core_graph::{
     ProcessContext, Soothe3ReductionFrame, StereoFrame, UnifiedDspNode, VisualTelemetryFrame,
@@ -147,6 +150,18 @@ impl Soothe3Processor {
     pub fn export_reduction_frame(&self, out_frame: &mut Soothe3ReductionFrame) {
         self.pipeline.export_telemetry(out_frame);
     }
+
+    /// Exports the latest 1,024-bin external sidechain spectrum in dB (`-120 .. +24 dB`) for dual-spectrum UI.
+    pub fn export_sidechain_spectrum_db(&self, out_sc_db: &mut [f32; 1024]) {
+        out_sc_db.copy_from_slice(&self.pipeline.latest_sc_spec_db);
+    }
+
+    #[inline]
+    pub fn set_external_sidechain_enabled(&mut self, enabled: bool) {
+        self.params.global.set_external_sidechain(enabled);
+        self.params.sync_mirror_from_structured();
+        self.params_dirty = true;
+    }
 }
 
 impl UnifiedDspNode for Soothe3Processor {
@@ -185,6 +200,12 @@ impl UnifiedDspNode for Soothe3Processor {
 
     fn export_visual_telemetry(&self, frame: &mut VisualTelemetryFrame) {
         self.export_reduction_frame(&mut frame.soothe3_reduction);
+        if self.params.global.is_external_sidechain_active() {
+            frame
+                .proq4_spectrum
+                .sc_db
+                .copy_from_slice(&self.pipeline.latest_sc_spec_db);
+        }
         let row = (frame.header.frame_seq as usize) % 20;
         frame.spectrogram_ring[row] = frame.soothe3_reduction.input_spec_db;
     }
@@ -217,7 +238,7 @@ impl UnifiedDspNode for Soothe3Processor {
         let trim_lin = 10.0f32.powf(self.params.global.out_trim_db / 20.0);
         let delta_solo = self.params.global.delta_solo;
         let sc_listen = self.params.global.sidechain_listen;
-        let use_ext_sc = self.params.global.sidechain;
+        let use_ext_sc = self.params.global.is_external_sidechain_active();
         let factor = self.resampler.oversample_factor();
         let total_lat = self.resampler.total_latency_samples(
             self.params.global.linear_phase,
@@ -283,5 +304,136 @@ impl UnifiedDspNode for Soothe3Processor {
             frame[0] = out_l;
             frame[1] = out_r;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn goertzel_mag_db(samples: &[f32], freq_hz: f64, sample_rate: f64) -> f64 {
+        let n = samples.len();
+        let omega = std::f64::consts::TAU * freq_hz / sample_rate;
+        let coeff = 2.0 * omega.cos();
+        let mut s0 = 0.0f64;
+        let mut s1 = 0.0f64;
+        let mut s2;
+        for &x in samples {
+            s2 = s1;
+            s1 = s0;
+            s0 = (x as f64) + coeff * s1 - s2;
+        }
+        let re = s0 - s1 * omega.cos();
+        let im = s1 * omega.sin();
+        let mag = (2.0 * (re * re + im * im).sqrt()) / (n as f64);
+        20.0 * mag.max(1e-12).log10()
+    }
+
+    #[test]
+    fn test_external_sidechain_unmasking_2k5_pad_ducking_and_dual_spectrum() {
+        let sr = 48_000.0;
+        let mut soothe = Soothe3Processor::new(sr as f32);
+        soothe.set_external_sidechain_enabled(true);
+        soothe.params_mut().global.depth = 5.5;
+        soothe.params_mut().global.detail = 6.0;
+        soothe.params_mut().global.max_cut_db = -24.0;
+        soothe.prepare(sr, 512);
+
+        let ctx = ProcessContext {
+            sample_rate: sr,
+            slice_frames: 512,
+            ..ProcessContext::default()
+        };
+
+        // Phase 1: Pad (200 Hz + 2500 Hz + 8000 Hz) with SILENT external sidechain
+        let total_frames = 16_384usize;
+        let mut pad_no_sc = Vec::with_capacity(total_frames);
+        let mut sc_silent = [[0.0f32; 2]; 512];
+        for blk in 0..(total_frames / 512) {
+            let mut buf = [[0.0f32; 2]; 512];
+            for i in 0..512 {
+                let t = ((blk * 512 + i) as f64) / sr;
+                let p = (0.25 * (std::f64::consts::TAU * 200.0 * t).sin()
+                    + 0.25 * (std::f64::consts::TAU * 2500.0 * t).sin()
+                    + 0.25 * (std::f64::consts::TAU * 8000.0 * t).sin())
+                    as f32;
+                buf[i] = [p, p];
+                sc_silent[i] = [0.0, 0.0];
+            }
+            soothe.process_slice(&ctx, &mut buf, Some(&sc_silent), &mut []);
+            for f in &buf {
+                pad_no_sc.push(f[0]);
+            }
+        }
+
+        // Phase 2: Same Pad, now with Vocal lead resonant peak at 2.5 kHz on `sidechain_in`
+        let mut pad_with_sc = Vec::with_capacity(total_frames);
+        let mut prev_sample = *pad_no_sc.last().unwrap_or(&0.0);
+        let mut max_step_delta = 0.0f32;
+        for blk in 0..(total_frames / 512) {
+            let mut buf = [[0.0f32; 2]; 512];
+            let mut sc_buf = [[0.0f32; 2]; 512];
+            for i in 0..512 {
+                let n = blk * 512 + i;
+                let t = ((total_frames + n) as f64) / sr;
+                let p = (0.25 * (std::f64::consts::TAU * 200.0 * t).sin()
+                    + 0.25 * (std::f64::consts::TAU * 2500.0 * t).sin()
+                    + 0.25 * (std::f64::consts::TAU * 8000.0 * t).sin())
+                    as f32;
+                let env = ((n as f32) / 256.0).min(1.0);
+                let v = env * (0.55 * (std::f64::consts::TAU * 2500.0 * t).sin()) as f32;
+                buf[i] = [p, p];
+                sc_buf[i] = [v, v];
+            }
+            soothe.process_slice(&ctx, &mut buf, Some(&sc_buf), &mut []);
+            for f in &buf {
+                max_step_delta = max_step_delta.max((f[0] - prev_sample).abs());
+                prev_sample = f[0];
+                pad_with_sc.push(f[0]);
+            }
+        }
+
+        let steady = 8_192..total_frames;
+        let db_200_off = goertzel_mag_db(&pad_no_sc[steady.clone()], 200.0, sr);
+        let db_2500_off = goertzel_mag_db(&pad_no_sc[steady.clone()], 2500.0, sr);
+        let db_8000_off = goertzel_mag_db(&pad_no_sc[steady.clone()], 8000.0, sr);
+
+        let db_200_on = goertzel_mag_db(&pad_with_sc[steady.clone()], 200.0, sr);
+        let db_2500_on = goertzel_mag_db(&pad_with_sc[steady.clone()], 2500.0, sr);
+        let db_8000_on = goertzel_mag_db(&pad_with_sc[steady], 8000.0, sr);
+
+        let cut_2500_db = db_2500_off - db_2500_on;
+        let diff_200_db = (db_200_off - db_200_on).abs();
+        let diff_8000_db = (db_8000_off - db_8000_on).abs();
+
+        assert!(
+            cut_2500_db >= 8.0,
+            "Expected >= 8.0 dB dynamic unmasking cut at 2.5 kHz, got {cut_2500_db:.2} dB"
+        );
+        assert!(
+            diff_200_db < 1.0,
+            "200 Hz band on Pad must change < 1.0 dB, got {diff_200_db:.3} dB"
+        );
+        assert!(
+            diff_8000_db < 1.0,
+            "8 kHz band on Pad must change < 1.0 dB, got {diff_8000_db:.3} dB"
+        );
+        assert!(
+            max_step_delta < 0.45,
+            "Expected click-free transition (< 0.45 max sample step), got {max_step_delta:.4}"
+        );
+
+        // Verify dual-spectrum independence: Main spectrum has 200 Hz energy while SC spectrum only has 2.5 kHz
+        let mut red_frame = Soothe3ReductionFrame::default();
+        let mut sc_spec = [0.0f32; 1024];
+        soothe.export_reduction_frame(&mut red_frame);
+        soothe.export_sidechain_spectrum_db(&mut sc_spec);
+        // Bin near 200 Hz (~342): Main >> SC
+        let bin_200 = ((200.0f32.ln() - 20.0f32.ln()) / (20_000.0f32.ln() - 20.0f32.ln()) * 1023.0)
+            .round() as usize;
+        assert!(
+            red_frame.input_spec_db[bin_200] > sc_spec[bin_200] + 25.0,
+            "Main spectrum must preserve 200 Hz Pad energy independently of Sidechain"
+        );
     }
 }

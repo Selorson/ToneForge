@@ -13,21 +13,20 @@ use crate::project_state::{
     PluginSlotStateDto, ProQ4StateDto, Soothe3StateDto, ToneForgeProjectState,
 };
 use crate::shm_telemetry_server::ZeroCopyBinaryTelemetryStreamer;
+use crate::undo_history::ProjectUndoHistory;
 use ai_uvr5_stem_engine::{
     CascadedASPPNet, HTDemucs4, Mdx23cSeparator, RealTimeBsrnnStemNode, SpectralEnsembleMode,
     SpectralEnsembler,
 };
 use daw_core_graph::{
-    ChannelGenerator, EmphasisLimiterNode, EngineCommand, GrossBeatTimeBufferNode,
-    LuxeVerbFdnShimmerNode, MASTER_TRACK_INDEX, MAX_BLOCK_SIZE, MAX_INSERT_SLOTS,
-    MAX_MIXER_TRACKS, MaximusMultibandNode, MixerEngine, ProcessContext, SparseCompressorNode,
-    StereoFrame, TopologicalMixerScheduler, UnifiedDspNode, VISUAL_TELEMETRY_FRAME_BYTES,
-    VisualTelemetryFrame,
+    ChannelGenerator, EngineCommand, MASTER_TRACK_INDEX, MAX_BLOCK_SIZE, MAX_INSERT_SLOTS,
+    MAX_MIXER_TRACKS, MixerEngine, ProcessContext, StereoFrame, TopologicalMixerScheduler,
+    UnifiedDspNode, VISUAL_TELEMETRY_FRAME_BYTES, VisualTelemetryFrame,
 };
 use dsp_ozone12_mastering::Ozone12MasterChain;
 use dsp_proq4_eq::{
     EqBandParams, FilterShape, PROQ4_BAND_PARAMS_TOTAL, PROQ4_NUM_BANDS, PROQ4_PARAMS_PER_BAND,
-    PROQ4_TOTAL_PARAMS, ProQ4GlobalParams, ProQ4ParameterSet, ProQ4Processor,
+    PROQ4_TOTAL_PARAMS, ProQ4CollisionBus, ProQ4GlobalParams, ProQ4ParameterSet, ProQ4Processor,
 };
 use dsp_soothe3_spectral::params_143::{
     SOOTHE3_GLOBAL_PARAMS_COUNT, SOOTHE3_NUM_SC_BANDS, SOOTHE3_PARAMS_PER_SC_BAND,
@@ -124,6 +123,8 @@ pub struct AudioStreamController {
     pub telemetry_streamer: ZeroCopyBinaryTelemetryStreamer,
     pub mixer_engine: Box<MixerEngine>,
     pub project_state: ToneForgeProjectState,
+    pub undo_history: ProjectUndoHistory,
+    pub collision_bus: Arc<ProQ4CollisionBus>,
     pub sample_rate: f64,
     pub max_block_size: usize,
     pub is_streaming: Arc<AtomicBool>,
@@ -148,6 +149,8 @@ impl AudioStreamController {
             telemetry_streamer: ZeroCopyBinaryTelemetryStreamer::new(telem_out),
             mixer_engine: Box::new(engine),
             project_state,
+            undo_history: ProjectUndoHistory::default(),
+            collision_bus: ProQ4CollisionBus::new_arc(),
             sample_rate: sr,
             max_block_size: blk,
             is_streaming: Arc::new(AtomicBool::new(true)),
@@ -169,6 +172,74 @@ impl AudioStreamController {
         let template = ToneForgeProjectState::new_mastering_template(sample_rate, 128.0);
         ctrl.apply_project_state(template)?;
         Ok(ctrl)
+    }
+
+    /// Creates a 100% blank initial DAW session (`ToneForgeProjectState::new_blank_project`)
+    /// with empty Piano Roll / Playlist / Automation / ControllerLinks and stopped transport.
+    pub fn with_blank_project(sample_rate: f64, max_block_size: usize) -> Result<Self, String> {
+        let mut ctrl = Self::new(sample_rate, max_block_size, 0);
+        let blank = ToneForgeProjectState::new_blank_project(sample_rate, 128.0);
+        ctrl.apply_project_state(blank)?;
+        Ok(ctrl)
+    }
+
+    /// Creates a new `AudioStreamController` wired with lock-free `RtGraphMutation` SPSC channels
+    /// and a background `RtGarbageCollector` (`toneforge-rt-gc`) for zero-lock, zero-allocation,
+    /// zero-drop WASAPI hardware execution.
+    pub fn new_with_rt_gc(
+        sample_rate: f64,
+        max_block_size: usize,
+        worker_threads: usize,
+    ) -> (Self, daw_core_graph::RtGarbageCollector) {
+        let sr = sample_rate.max(8000.0);
+        let blk = max_block_size.clamp(16, MAX_BLOCK_SIZE);
+        let bpm = 128.0;
+        let (engine, cmd_prod, mut_prod, gc_worker, telem_out) =
+            MixerEngine::new_with_rt_gc(sr, bpm, worker_threads);
+        let mut project_state = ToneForgeProjectState::new_default(sr, bpm);
+        project_state.max_block_size = blk;
+
+        let mut controller = Self {
+            app_state: DawAppState::new_with_rt_mutations(cmd_prod, mut_prod),
+            telemetry_streamer: ZeroCopyBinaryTelemetryStreamer::new(telem_out),
+            mixer_engine: Box::new(engine),
+            project_state,
+            undo_history: ProjectUndoHistory::default(),
+            collision_bus: ProQ4CollisionBus::new_arc(),
+            sample_rate: sr,
+            max_block_size: blk,
+            is_streaming: Arc::new(AtomicBool::new(true)),
+            mdx23c_separator: Mdx23cSeparator::default(),
+            htdemucs4_separator: HTDemucs4::default(),
+            vr_aspp_separator: CascadedASPPNet::default(),
+            spectral_ensembler: SpectralEnsembler::default(),
+        };
+        let _ = controller.mixer_engine.route_inserts_to_master(4);
+        (controller, gc_worker)
+    }
+
+    /// Creates an `AudioStreamController` preloaded with the full ToneForge Mastering Template AND
+    /// lock-free `RtGraphMutation` + `RtGarbageCollector` (`toneforge-rt-gc`).
+    pub fn with_mastering_template_rt_gc(
+        sample_rate: f64,
+        max_block_size: usize,
+    ) -> Result<(Self, daw_core_graph::RtGarbageCollector), String> {
+        let (mut ctrl, gc_worker) = Self::new_with_rt_gc(sample_rate, max_block_size, 0);
+        let template = ToneForgeProjectState::new_mastering_template(sample_rate, 128.0);
+        ctrl.apply_project_state(template)?;
+        Ok((ctrl, gc_worker))
+    }
+
+    /// Creates an `AudioStreamController` initialized to a 100% blank session AND
+    /// lock-free `RtGraphMutation` + `RtGarbageCollector` (`toneforge-rt-gc`).
+    pub fn with_blank_project_rt_gc(
+        sample_rate: f64,
+        max_block_size: usize,
+    ) -> Result<(Self, daw_core_graph::RtGarbageCollector), String> {
+        let (mut ctrl, gc_worker) = Self::new_with_rt_gc(sample_rate, max_block_size, 0);
+        let blank = ToneForgeProjectState::new_blank_project(sample_rate, 128.0);
+        ctrl.apply_project_state(blank)?;
+        Ok((ctrl, gc_worker))
     }
 
     /// Pushes a command into the wait-free SPSC `rtrb::Producer<EngineCommand>`.
@@ -376,8 +447,10 @@ impl AudioStreamController {
         if track_index >= MAX_MIXER_TRACKS {
             return Err(format!("Track index {} out of range", track_index));
         }
-        let mut proc = ProQ4Processor::new();
-        proc.instance_id = (track_index as u32) + 1;
+        let mut proc = ProQ4Processor::with_collision_bus(
+            track_index as u32,
+            Arc::clone(&self.collision_bus),
+        );
         proc.prepare(self.sample_rate, self.max_block_size);
         let slot_idx = self.mixer_engine.tracks[track_index]
             .add_plugin_slot(Box::new(proc), wet_mix)
@@ -427,7 +500,9 @@ impl AudioStreamController {
             .get_mut(trk)
             .and_then(|t| t.slots.get_mut(slot_index as usize))
         {
-            slot_dto.plugin = PluginConfigDto::ProQ4(ProQ4StateDto::from_parameter_set(preset));
+            if !matches!(slot_dto.plugin, PluginConfigDto::Empty) {
+                slot_dto.plugin = PluginConfigDto::ProQ4(ProQ4StateDto::from_parameter_set(preset));
+            }
         }
         Ok(())
     }
@@ -599,7 +674,9 @@ impl AudioStreamController {
             .get_mut(trk)
             .and_then(|t| t.slots.get_mut(slot_index as usize))
         {
-            slot_dto.plugin = PluginConfigDto::Soothe3(Soothe3StateDto::from_parameter_set(&cloned));
+            if !matches!(slot_dto.plugin, PluginConfigDto::Empty) {
+                slot_dto.plugin = PluginConfigDto::Soothe3(Soothe3StateDto::from_parameter_set(&cloned));
+            }
         }
         Ok(())
     }
@@ -860,13 +937,47 @@ impl AudioStreamController {
             target_sample_pos: None,
         })?;
 
+        // Low End Focus (69..=74) & Codec Preview (85..=87)
+        let v3_params: [(u32, f32); 9] = [
+            (69, if cfg.low_end_focus_enabled { 1.0 } else { 0.0 }),
+            (70, if cfg.low_end_focus_punchy { 0.0 } else { 1.0 }),
+            (
+                71,
+                ((cfg.low_end_focus_contrast_pct + 100.0) / 200.0).clamp(0.0, 1.0),
+            ),
+            (
+                72,
+                ((cfg.low_end_focus_upper_hz.clamp(20.0, 300.0) - 20.0) / 280.0).clamp(0.0, 1.0),
+            ),
+            (73, ((cfg.low_end_focus_gain_db + 12.0) / 24.0).clamp(0.0, 1.0)),
+            (74, if cfg.low_end_focus_solo { 1.0 } else { 0.0 }),
+            (85, if cfg.codec_preview_enabled { 1.0 } else { 0.0 }),
+            (
+                86,
+                ((cfg.codec_preview_codec.min(5) as f32) / 5.0).clamp(0.0, 1.0),
+            ),
+            (87, if cfg.codec_preview_artifact_solo { 1.0 } else { 0.0 }),
+        ];
+        for (pid, val) in v3_params {
+            self.push_command(EngineCommand::SetPluginParamNormalized {
+                track_index,
+                slot_index,
+                param_id: pid,
+                norm_val: val,
+                target_sample_pos: None,
+            })?;
+        }
+        self.push_command(EngineCommand::RefreshApdc)?;
+
         if let Some(slot_dto) = self
             .project_state
             .mixer_tracks
             .get_mut(trk)
             .and_then(|t| t.slots.get_mut(slot_index as usize))
         {
-            slot_dto.plugin = PluginConfigDto::Ozone12Master(cfg.clone());
+            if !matches!(slot_dto.plugin, PluginConfigDto::Empty) {
+                slot_dto.plugin = PluginConfigDto::Ozone12Master(cfg.clone());
+            }
         }
         Ok(())
     }
@@ -1056,6 +1167,20 @@ impl AudioStreamController {
             };
         }
 
+        if let Some(mut gru_sep) = ai_uvr5_stem_engine::GruThreeStemSeparator::from_global_cache() {
+            let sr_hz = (self.sample_rate.round() as u32).clamp(8_000, 384_000);
+            let [vocals, drums, bass, other] = gru_sep.separate_4stems(mix, sr_hz);
+            let inverted_instrumental =
+                SpectralEnsembler::invert_audio_waveform(mix, &vocals);
+            return Uvr5EnsembleStudioOutput {
+                vocals,
+                drums,
+                bass,
+                other,
+                inverted_instrumental,
+            };
+        }
+
         let (mdx_vocals, _mdx_inst) = self.mdx23c_separator.separate_offline(mix);
         let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
             self.htdemucs4_separator.separate_4stems(mix);
@@ -1150,144 +1275,19 @@ impl AudioStreamController {
     // ========================================================================
 
     #[inline(never)]
-    fn build_proq4_boxed(
-        idx: usize,
-        sr: f64,
-        blk: usize,
-        pq_dto: &ProQ4StateDto,
-    ) -> Box<dyn UnifiedDspNode> {
-        let mut proc = Box::new(ProQ4Processor::new());
-        proc.instance_id = (idx as u32) + 1;
-        proc.prepare(sr, blk);
-        let ps = pq_dto.to_parameter_set();
-        for pid in 0..PROQ4_TOTAL_PARAMS {
-            proc.set_parameter_normalized(pid as u32, ps.get_normalized(pid as u32));
-        }
-        proc
-    }
-
-    #[inline(never)]
-    fn build_soothe3_boxed(
-        sr: f64,
-        blk: usize,
-        s3_dto: &Soothe3StateDto,
-    ) -> Box<dyn UnifiedDspNode> {
-        let mut proc = Box::new(Soothe3Processor::new(sr as f32));
-        proc.prepare(sr, blk);
-        let ps = s3_dto.to_parameter_set();
-        for pid in 0..SOOTHE3_TOTAL_PARAMS {
-            proc.set_parameter_normalized(pid as u32, ps.get_normalized(pid as u32));
-        }
-        proc
-    }
-
-    #[inline(never)]
-    fn build_ozone12_boxed(
+    fn build_ozone12_chain_configured(
         sr: f64,
         blk: usize,
         oz_dto: &Ozone12MasterConfigDto,
-    ) -> Box<dyn UnifiedDspNode> {
-        let mut chain = Box::new(Ozone12MasterChain::new(sr));
-        chain.prepare(sr, blk);
-        let updates: [(u32, f32); 20] = [
-            (0, if oz_dto.maximizer_bypass { 1.0 } else { 0.0 }),
-            (
-                1,
-                ((oz_dto.maximizer_gain_db + 20.0) / 40.0).clamp(0.0, 1.0),
-            ),
-            (
-                2,
-                ((oz_dto.maximizer_ceiling_dbtp + 20.0) / 20.0).clamp(0.0, 1.0),
-            ),
-            (5, oz_dto.maximizer_upward_comp_wet.clamp(0.0, 1.0)),
-            (
-                6,
-                if oz_dto.maximizer_soft_clip_enabled {
-                    1.0
-                } else {
-                    0.0
-                },
-            ),
-            (7, oz_dto.maximizer_soft_clip_mix.clamp(0.0, 1.0)),
-            (8, (oz_dto.maximizer_soft_clip_mode.min(2) as f32) * 0.5),
-            (
-                9,
-                ((oz_dto.maximizer_transient_shaping + 1.0) * 0.5).clamp(0.0, 1.0),
-            ),
-            (65, (oz_dto.maximizer_irc_mode.min(8) as f32) / 8.0),
-            (66, if oz_dto.maximizer_true_peak { 1.0 } else { 0.0 }),
-            (10, if oz_dto.exciter_bypass { 1.0 } else { 0.0 }),
-            (33, if oz_dto.imager_stereoizer_enabled { 1.0 } else { 0.0 }),
-            (
-                34,
-                if oz_dto.imager_stereoizer_mode > 0 {
-                    1.0
-                } else {
-                    0.0
-                },
-            ),
-            (36, (oz_dto.stabilizer_amount_pct * 0.01).clamp(0.0, 1.0)),
-            (37, (oz_dto.stabilizer_speed_pct * 0.01).clamp(0.0, 1.0)),
-            (
-                39,
-                (oz_dto.stabilizer_tame_transients_pct * 0.01).clamp(0.0, 1.0),
-            ),
-            (40, if oz_dto.stabilizer_cut_mode { 1.0 } else { 0.0 }),
-            (55, (oz_dto.clarity_amount_pct * 0.01).clamp(0.0, 1.0)),
-            (
-                56,
-                ((oz_dto.clarity_tilt_db_oct + 6.0) / 12.0).clamp(0.0, 1.0),
-            ),
-            (4, 0.5),
-        ];
-        for (pid, val) in updates {
-            chain.set_parameter_normalized(pid, val);
-        }
-        for b in 0..4 {
-            let exc_base = 11 + (b as u32) * 3;
-            chain.set_parameter_normalized(
-                exc_base,
-                (oz_dto.exciter_band_drives_pct[b] * 0.01).clamp(0.0, 1.0),
-            );
-            chain.set_parameter_normalized(exc_base + 1, oz_dto.exciter_band_mixes[b].clamp(0.0, 1.0));
-            chain.set_parameter_normalized(
-                exc_base + 2,
-                ((oz_dto.exciter_band_modes[b].min(6) as f32) / 6.0).clamp(0.0, 1.0),
-            );
-            chain.set_parameter_normalized(
-                25 + (b as u32),
-                ((oz_dto.imager_band_widths_pct[b] + 100.0) / 200.0).clamp(0.0, 1.0),
-            );
-            chain.set_parameter_normalized(
-                29 + (b as u32),
-                (oz_dto.imager_band_stereoize_pct[b] * 0.01).clamp(0.0, 1.0),
-            );
-            chain.set_parameter_normalized(
-                45 + (b as u32),
-                ((oz_dto.impact_band_amounts[b] + 100.0) / 200.0).clamp(0.0, 1.0),
-            );
-        }
-        chain
-    }
-
-    #[inline(never)]
-    fn build_bsrnn_boxed(
-        sr: f64,
-        blk: usize,
-        bsrnn_dto: &BsrnnStemStateDto,
-    ) -> Box<dyn UnifiedDspNode> {
-        let mut node = Box::new(RealTimeBsrnnStemNode::new(sr));
-        node.prepare(sr, blk);
-        node.stem_gains_db = bsrnn_dto.stem_gains_db;
-        node.stem_solo = bsrnn_dto.stem_solo;
-        node.stem_mute = bsrnn_dto.stem_mute;
-        node
+    ) -> Box<Ozone12MasterChain> {
+        crate::undo_history::build_ozone12_chain_boxed(sr, blk, oz_dto)
     }
 
     /// Applies a complete [`ToneForgeProjectState`] to this `AudioStreamController`, rebuilding
     /// all 502 Mixer Tracks, routing edges, FX plugin chains (`ProQ4`, `Soothe3`, `Ozone12MasterChain`,
-    /// `RealTimeBsrnnStemNode`, `PatcherGraphNode`, Native FX), `ControllerLink`s on the 30-Bit
-    /// Fixed-Point Controller Bus, and the 5-Point APDC topological schedule in-place.
+    /// `RealTimeBsrnnStemNode`, `PatcherGraphNode`, `AutoPitchCorrectorNode`, `Vst3HostedPluginNode`,
+    /// `ClapHostedPluginNode`, Native FX), `ControllerLink`s on the 30-Bit Fixed-Point Controller Bus,
+    /// and the 5-Point APDC topological schedule in-place.
     pub fn apply_project_state(&mut self, state: ToneForgeProjectState) -> Result<(), String> {
         state.validate()?;
 
@@ -1329,8 +1329,13 @@ impl AudioStreamController {
             let track = &mut self.mixer_engine.tracks[idx];
             track.gain = trk_dto.gain;
             track.polarity_inverted = trk_dto.polarity_inverted;
-            track.has_hw_input = trk_dto.has_hw_input;
+            track.pan = trk_dto.pan.clamp(-1.0, 1.0);
+            track.muted = trk_dto.muted;
+            track.soloed = trk_dto.soloed && idx != MASTER_TRACK_INDEX;
+            track.has_hw_input = trk_dto.has_hw_input || trk_dto.input_source_bus.is_some();
             track.hw_input_latency_samples = trk_dto.hw_input_latency_samples;
+            track.input_source_bus = trk_dto.input_source_bus;
+            track.record_armed = trk_dto.record_armed;
             track.sends.clear();
             for send_dto in &trk_dto.sends {
                 track.add_send(
@@ -1341,60 +1346,13 @@ impl AudioStreamController {
             }
             track.slots.clear();
             for slot_dto in &trk_dto.slots {
-                let plugin_box: Box<dyn UnifiedDspNode> = match &slot_dto.plugin {
-                    PluginConfigDto::ProQ4(pq_dto) => Self::build_proq4_boxed(idx, sr, blk, pq_dto),
-                    PluginConfigDto::Soothe3(s3_dto) => Self::build_soothe3_boxed(sr, blk, s3_dto),
-                    PluginConfigDto::Ozone12Master(oz_dto) => {
-                        Self::build_ozone12_boxed(sr, blk, oz_dto)
-                    }
-                    PluginConfigDto::RealTimeBsrnnStem(bsrnn_dto) => {
-                        Self::build_bsrnn_boxed(sr, blk, bsrnn_dto)
-                    }
-                    PluginConfigDto::PatcherModular(patcher_dto) => {
-                        let mut patcher = patcher_dto.build_patcher_node(sr, blk)?;
-                        patcher.prepare(sr, blk);
-                        Box::new(patcher)
-                    }
-                    PluginConfigDto::NativeSparseCompressor {
-                        threshold_linear,
-                        ratio,
-                        makeup_gain,
-                        lookahead_samples,
-                    } => {
-                        let mut node = SparseCompressorNode::new(
-                            *threshold_linear,
-                            *ratio,
-                            *makeup_gain,
-                            *lookahead_samples,
-                        );
-                        node.prepare(sr, blk);
-                        Box::new(node)
-                    }
-                    PluginConfigDto::NativeMaximusMultiband => {
-                        let mut node = MaximusMultibandNode::new();
-                        node.prepare(sr, blk);
-                        Box::new(node)
-                    }
-                    PluginConfigDto::NativeEmphasisLimiter {
-                        ceiling_linear,
-                        drive_linear: _,
-                    } => {
-                        let ceiling_db = 20.0 * ceiling_linear.max(1e-6).log10();
-                        let mut node = EmphasisLimiterNode::new(64, ceiling_db);
-                        node.prepare(sr, blk);
-                        Box::new(node)
-                    }
-                    PluginConfigDto::NativeGrossBeat => {
-                        let mut node = GrossBeatTimeBufferNode::new((sr as usize) * 2);
-                        node.prepare(sr, blk);
-                        Box::new(node)
-                    }
-                    PluginConfigDto::NativeLuxeVerbFdn => {
-                        let mut node = LuxeVerbFdnShimmerNode::new();
-                        node.prepare(sr, blk);
-                        Box::new(node)
-                    }
-                };
+                let plugin_box = crate::undo_history::build_plugin_node_from_dto(
+                    idx,
+                    sr,
+                    blk,
+                    &slot_dto.plugin,
+                    Some(&self.collision_bus),
+                )?;
 
                 let s_idx = track
                     .add_plugin_slot(plugin_box, slot_dto.wet_mix)
@@ -1413,6 +1371,7 @@ impl AudioStreamController {
         self.mixer_engine
             .rebuild_graph()
             .map_err(|e| e.to_string())?;
+        self.mixer_engine.recompute_solo_state();
 
         self.sample_rate = sr;
         self.max_block_size = blk;
@@ -1424,6 +1383,42 @@ impl AudioStreamController {
         self.mixer_engine.drain_commands();
 
         Ok(())
+    }
+
+    /// Instantiates every project medium that lives outside the mixer DTOs: audio asset players
+    /// (songs, UVR5 stems, committed vocals, recorded takes + stretched clip renders) and external
+    /// VST3/CLAP channel instruments. Call after `apply_project_state` on a non-real-time engine
+    /// (offline render / project load). `frames_for` supplies asset audio at the engine rate.
+    pub fn load_project_media<F>(&mut self, frames_for: F) -> Result<(), String>
+    where
+        F: FnMut(
+            &crate::audio_assets::AudioAssetDto,
+        ) -> Result<std::sync::Arc<Vec<daw_core_graph::StereoFrame>>, String>,
+    {
+        let sr = self.sample_rate;
+        let blk = self.max_block_size.max(daw_core_graph::MAX_BLOCK_SIZE);
+        let asset_channels =
+            crate::audio_assets::build_all_asset_channels(&self.project_state, sr, frames_for)?;
+        let asset_ids: Vec<u32> = asset_channels.iter().map(|c| c.id).collect();
+        self.mixer_engine
+            .channels
+            .retain(|c| !asset_ids.contains(&c.id));
+        self.mixer_engine.channels.extend(asset_channels);
+
+        for trk in &self.project_state.mixer_tracks {
+            if let Some(cfg) = &trk.channel_instrument {
+                let node =
+                    crate::undo_history::build_plugin_node_from_dto(trk.index, sr, blk, cfg, None)?;
+                let id = 200 + trk.index as u32;
+                self.mixer_engine.channels.retain(|c| c.id != id);
+                let mut ch = ChannelGenerator::new(id, trk.index, node);
+                ch.prepare(sr, blk);
+                self.mixer_engine.channels.push(ch);
+            }
+        }
+        self.mixer_engine
+            .rebuild_graph()
+            .map_err(|e| e.to_string())
     }
 
     /// Saves the current `ToneForgeProjectState` to a file on disk.
@@ -1547,6 +1542,215 @@ impl AudioStreamController {
             .rebuild_graph()
             .map_err(|e| e.to_string())?;
         Ok(tier)
+    }
+
+    /// Attaches the lock-free `RealtimeDelimitOnnxWorker` (`delimit_exp009_ep080_fixed2.onnx` on
+    /// `CUDA -> DirectML -> CPU`) to Master Track 0 Slot 1 (`Ozone12MasterChain::unlimiter`).
+    /// Must be called during startup / outside the real-time audio callback thread.
+    pub fn enable_realtime_onnx_delimit_on_master(
+        &mut self,
+    ) -> Result<ai_uvr5_stem_engine::GpuExecutionTier, String> {
+        if self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots.len() < 2 {
+            return Err("Master Track 0 has no Slot 1 for Ozone12MasterChain".to_string());
+        }
+        let worker =
+            ai_uvr5_stem_engine::RealtimeDelimitOnnxWorker::from_default_assets(self.sample_rate)?;
+        let tier = worker.active_tier();
+
+        let oz_dto = self.project_state.mixer_tracks[MASTER_TRACK_INDEX]
+            .slots
+            .get(1)
+            .and_then(|s| match &s.plugin {
+                PluginConfigDto::Ozone12Master(cfg) => Some(cfg.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let mut chain = Self::build_ozone12_chain_configured(
+            self.sample_rate,
+            self.max_block_size,
+            &oz_dto,
+        );
+        chain.set_unlimiter_neural_backend(Box::new(worker));
+        chain.prepare(self.sample_rate, self.max_block_size);
+
+        self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots[1].plugin = chain;
+        self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots[1]
+            .prepare(self.sample_rate, self.max_block_size);
+        self.mixer_engine
+            .rebuild_graph()
+            .map_err(|e| e.to_string())?;
+        Ok(tier)
+    }
+
+    /// Offline-render counterpart of the live GPU workers: runs the real BSRNN separator and the
+    /// DeLimit neural unlimiter *inline* (lockstep) on Master so the export is deterministic and
+    /// matches the live mix. Without ONNX Runtime both stay in exact pass-through, as live does.
+    pub fn enable_offline_onnx_on_master(&mut self) -> Result<(), String> {
+        let sr = self.sample_rate;
+        let blk = self.max_block_size;
+        let master = &self.project_state.mixer_tracks[MASTER_TRACK_INDEX];
+        if let Some(PluginSlotStateDto {
+            plugin: PluginConfigDto::RealTimeBsrnnStem(dto),
+            enabled,
+            ..
+        }) = master.slots.first()
+        {
+            if let Ok(mut node) = RealTimeBsrnnStemNode::new_with_onnx_lockstep(sr) {
+                node.stem_gains_db = dto.stem_gains_db;
+                node.stem_solo = dto.stem_solo;
+                node.stem_mute = dto.stem_mute;
+                node.prepare(sr, blk);
+                let slot = &mut self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots[0];
+                slot.plugin = Box::new(node);
+                slot.enabled = *enabled;
+                slot.prepare(sr, blk);
+            }
+        }
+        if let Some(PluginSlotStateDto {
+            plugin: PluginConfigDto::Ozone12Master(oz_dto),
+            enabled,
+            ..
+        }) = master.slots.get(1)
+        {
+            if let Ok(proc) = ai_uvr5_stem_engine::OzoneDelimitOnnxProcessor::from_default_assets() {
+                let mut chain = Self::build_ozone12_chain_configured(sr, blk, oz_dto);
+                chain.set_unlimiter_neural_backend(Box::new(proc));
+                chain.prepare(sr, blk);
+                let slot = &mut self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots[1];
+                slot.plugin = chain;
+                slot.enabled = *enabled;
+                slot.prepare(sr, blk);
+            }
+        }
+        self.mixer_engine
+            .rebuild_graph()
+            .map_err(|e| e.to_string())
+    }
+
+    // ========================================================================
+    // 8. TONEFORGE v3: GLOBAL UNDO/REDO, COLLISION/SKETCH, PITCHER & VST3/CLAP
+    // ========================================================================
+
+    /// Snapshots `self.project_state` onto the 64-step `ProjectUndoHistory` BEFORE a mutation.
+    pub fn record_undo_snapshot(&mut self, action_label: impl Into<String>) {
+        self.undo_history
+            .record_before_action(action_label, &self.project_state);
+    }
+
+    pub fn undo_redo_status(&self) -> crate::undo_history::UndoRedoStatusDto {
+        self.undo_history.status()
+    }
+
+    /// Steps backward one action (`Ctrl+Z`) and synchronizes the live `MixerEngine` (lock-free when
+    /// `rt_mutations` is attached, or deterministic full graph apply in standalone test mode).
+    pub fn undo_project_action(
+        &mut self,
+    ) -> Result<Option<crate::undo_history::UndoRedoTransition>, String> {
+        let Some(transition) = self.undo_history.undo(&mut self.project_state) else {
+            return Ok(None);
+        };
+        if self.app_state.has_rt_mutations() {
+            crate::undo_history::sync_project_state_diff_to_rt(
+                &transition.previous_state,
+                &transition.restored_state,
+                &self.app_state,
+                Some(&self.collision_bus),
+            )?;
+            self.mixer_engine.drain_commands();
+        } else {
+            self.apply_project_state(transition.restored_state.clone())?;
+        }
+        Ok(Some(transition))
+    }
+
+    /// Steps forward one action (`Ctrl+Y` / `Ctrl+Shift+Z`) and synchronizes the live `MixerEngine`.
+    pub fn redo_project_action(
+        &mut self,
+    ) -> Result<Option<crate::undo_history::UndoRedoTransition>, String> {
+        let Some(transition) = self.undo_history.redo(&mut self.project_state) else {
+            return Ok(None);
+        };
+        if self.app_state.has_rt_mutations() {
+            crate::undo_history::sync_project_state_diff_to_rt(
+                &transition.previous_state,
+                &transition.restored_state,
+                &self.app_state,
+                Some(&self.collision_bus),
+            )?;
+            self.mixer_engine.drain_commands();
+        } else {
+            self.apply_project_state(transition.restored_state.clone())?;
+        }
+        Ok(Some(transition))
+    }
+
+    /// Inserts `AutoPitchCorrectorNode` (`Pitcher` Real-Time Vocal Pitch & Formant Corrector) onto `track_idx`.
+    pub fn insert_pitcher_on_track(
+        &mut self,
+        track_idx: usize,
+        cfg: &crate::project_state::PitcherStateDto,
+    ) -> Result<usize, String> {
+        if track_idx >= MAX_MIXER_TRACKS {
+            return Err(format!("Track index {track_idx} out of range"));
+        }
+        let node = crate::undo_history::build_pitcher_node(self.sample_rate, self.max_block_size, cfg);
+        let slot_idx = self.mixer_engine.tracks[track_idx]
+            .add_plugin_slot(node, 1.0)
+            .map_err(|e| e.to_string())?;
+        self.mixer_engine.tracks[track_idx].slots[slot_idx]
+            .prepare(self.sample_rate, self.max_block_size);
+        self.mixer_engine.rebuild_graph().map_err(|e| e.to_string())?;
+
+        self.project_state.mixer_tracks[track_idx]
+            .slots
+            .push(PluginSlotStateDto {
+                slot_index: slot_idx as u8,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: PluginConfigDto::AutoPitchCorrector(cfg.clone()),
+            });
+        Ok(slot_idx)
+    }
+
+    /// Inserts a compiled Steinberg VST3 (`.vst3`) or CLAP 1.2 (`.clap`) external plugin onto `track_idx`.
+    pub fn insert_external_plugin_on_track(
+        &mut self,
+        track_idx: usize,
+        is_clap: bool,
+        ext_dto: &crate::project_state::ExternalPluginStateDto,
+    ) -> Result<usize, String> {
+        if track_idx >= MAX_MIXER_TRACKS {
+            return Err(format!("Track index {track_idx} out of range"));
+        }
+        let plugin_cfg = if is_clap {
+            PluginConfigDto::ExternalClap(ext_dto.clone())
+        } else {
+            PluginConfigDto::ExternalVst3(ext_dto.clone())
+        };
+        let node = crate::undo_history::build_plugin_node_from_dto(
+            track_idx,
+            self.sample_rate,
+            self.max_block_size,
+            &plugin_cfg,
+            Some(&self.collision_bus),
+        )?;
+        let slot_idx = self.mixer_engine.tracks[track_idx]
+            .add_plugin_slot(node, 1.0)
+            .map_err(|e| e.to_string())?;
+        self.mixer_engine.tracks[track_idx].slots[slot_idx]
+            .prepare(self.sample_rate, self.max_block_size);
+        self.mixer_engine.rebuild_graph().map_err(|e| e.to_string())?;
+
+        self.project_state.mixer_tracks[track_idx]
+            .slots
+            .push(PluginSlotStateDto {
+                slot_index: slot_idx as u8,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: plugin_cfg,
+            });
+        Ok(slot_idx)
     }
 }
 

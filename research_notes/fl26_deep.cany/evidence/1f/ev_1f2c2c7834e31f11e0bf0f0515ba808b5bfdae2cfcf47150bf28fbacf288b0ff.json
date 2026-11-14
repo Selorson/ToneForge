@@ -1,0 +1,113 @@
+{
+  "id": "ev_1f2c2c7834e31f11e0bf0f0515ba808b5bfdae2cfcf47150bf28fbacf288b0ff",
+  "subject": {
+    "kind": "pe",
+    "sha256": "498d8f8dffbfda3fdb3b290e3c919d2764fdaa9729220bd5e18d7f53b0b819e6",
+    "name": "LuxeVerb_x64.dll"
+  },
+  "operation": "core_target_triage",
+  "params": {
+    "path": null
+  },
+  "result": {
+    "architecture": "x86_64",
+    "bits": 64,
+    "dotnet_arch": null,
+    "entry_point": "0x73b6e0",
+    "format": "pe",
+    "format_name": "PE (Windows)",
+    "kind": "shared-library",
+    "libraries": [
+      "advapi32.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "comctl32.dll",
+      "comdlg32.dll",
+      "gdi32.dll",
+      "kernel32.dll",
+      "msacm32.dll",
+      "ole32.dll",
+      "oleaut32.dll",
+      "shell32.dll",
+      "user32.dll",
+      "version.dll",
+      "winmm.dll",
+      "wtsapi32.dll",
+      "msimg32.dll",
+      "windowscodecs.dll",
+      "imm32.dll",
+      "uxtheme.dll",
+      "DWMAPI.DLL",
+      "Shcore.dll"
+    ],
+    "next_steps": [
+      {
+        "tool": "core_overview_show",
+        "why": "a one-page summary: sections, imports, counts"
+      },
+      {
+        "tool": "native_functions_list",
+        "why": "every function we found"
+      },
+      {
+        "tool": "native_strings_find",
+        "why": "find text the program shows or uses"
+      },
+      {
+        "tool": "native_function_study",
+        "why": "a full dossier on one function (start with main or the entry point)"
+      },
+      {
+        "tool": "core_feature_find",
+        "why": "follow a word you see in the app to the code behind it"
+      },
+      {
+        "tool": "native_pe_resources_list",
+        "why": "icons, version information and the manifest"
+      }
+    ],
+    "operating_system": "Windows",
+    "plain_english": "LuxeVerb_x64.dll is a library (code other programs load) for Windows, built for x86_64 (64-bit). It looks like it was made with Delphi or C++Builder. Its internal names were removed (stripped), so most functions will have generated names.",
+    "recommended_toolsets": [
+      "core",
+      "native",
+      "formats"
+    ],
+    "stripped": true,
+    "symbol_table_stripped": true,
+    "toolchain_hints": [
+      {
+        "category": "language",
+        "evidence": "Borland/Embarcadero markers",
+        "id": "delphi",
+        "label": "Delphi or C++Builder",
+        "strength": "weak"
+      }
+    ]
+  },
+  "summary": "LuxeVerb_x64.dll is a library (code other programs load) for Windows, built for x86_64 (64-bit). It looks like it was made with Delphi or C++Builder. Its internal names were removed (stripped), so most functions will have generated names.",
+  "confidence": "inferred",
+  "authority": "original-files",
+  "environment": {
+    "clean_room": false,
+    "engine": "builtin",
+    "engine_version": "0.4.0",
+    "host": "windows-x86_64"
+  },
+  "limitations": [
+    {
+      "code": "heuristic_hints",
+      "message": "toolchain and packer hints come from markers that can be faked or borrowed"
+    }
+  ],
+  "coverage": {
+    "status": "unknown"
+  },
+  "locations": [
+    {
+      "kind": "address",
+      "value": "0x73b6e0",
+      "label": "entry point"
+    }
+  ],
+  "links": []
+}

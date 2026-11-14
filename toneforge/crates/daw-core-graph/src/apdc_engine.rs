@@ -7,8 +7,9 @@
 
 use crate::{FIXED_POINT_30BIT_SCALE, MAX_BLOCK_SIZE, ProcessContext, StereoFrame, UnifiedDspNode};
 
-/// Default pre-allocated capacity in stereo frames for track/slot APDC delay lines.
-pub const DEFAULT_APDC_CAPACITY: usize = 8192;
+/// Default pre-allocated capacity in stereo frames for track/slot APDC delay lines
+/// (`32,768` frames accommodates full Linear-Phase FIR + Soothe3 + Mastering Lookahead APDC on RT without resizing).
+pub const DEFAULT_APDC_CAPACITY: usize = 32_768;
 
 /// Default pre-allocated capacity for sample-accurate automation & voice event queues.
 pub const DEFAULT_AUTOMATION_QUEUE_CAPACITY: usize = 4096;

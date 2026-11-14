@@ -5,9 +5,13 @@ members = [
     "crates/dsp-proq4-eq",
     "crates/dsp-soothe3-spectral",
     "crates/dsp-ozone12-mastering",
+    "crates/dsp-pitch-time",
+    "crates/daw-plugin-host",
+    "crates/test-vst3-clap-plugin",
     "crates/ai-uvr5-stem-engine",
     "crates/daw-tauri-host",
     "tools/extract_cleanroom_assets",
+    "apps/akunarch-audio-cli",
     "shell/src-tauri",
 ]
 default-members = [
@@ -15,6 +19,9 @@ default-members = [
     "crates/dsp-proq4-eq",
     "crates/dsp-soothe3-spectral",
     "crates/dsp-ozone12-mastering",
+    "crates/dsp-pitch-time",
+    "crates/daw-plugin-host",
+    "crates/test-vst3-clap-plugin",
     "crates/ai-uvr5-stem-engine",
     "crates/daw-tauri-host",
     "tools/extract_cleanroom_assets",
@@ -32,6 +39,9 @@ daw-core-graph = { path = "crates/daw-core-graph" }
 dsp-proq4-eq = { path = "crates/dsp-proq4-eq" }
 dsp-soothe3-spectral = { path = "crates/dsp-soothe3-spectral" }
 dsp-ozone12-mastering = { path = "crates/dsp-ozone12-mastering" }
+dsp-pitch-time = { path = "crates/dsp-pitch-time" }
+daw-plugin-host = { path = "crates/daw-plugin-host" }
+test-vst3-clap-plugin = { path = "crates/test-vst3-clap-plugin" }
 ai-uvr5-stem-engine = { path = "crates/ai-uvr5-stem-engine" }
 extract-cleanroom-assets = { path = "tools/extract_cleanroom_assets" }
 
@@ -51,10 +61,14 @@ realfft = { version = "3.4", path = "vendor/realfft" }
 num-complex = "0.4"
 num-traits = "0.2"
 windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
     "Win32_Media_Audio",
     "Win32_System_Threading",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
+    "Win32_Graphics_Gdi",
 ] }
 
 # GPU ONNX Runtime, Studio Resampling, Multi-Format Audio Decoding & Native Dialogs

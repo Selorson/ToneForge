@@ -1,0 +1,20 @@
+[package]
+name = "akunarch-audio-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Akunarch Zero-OOM Audio Mastering Sidecar powered by ToneForge DSP (Pro-Q 4 + Soothe3 + Ozone 12 IRC V -14 LUFS)"
+
+[[bin]]
+name = "akunarch-audio-cli"
+path = "src/main.rs"
+
+[dependencies]
+daw-core-graph.workspace = true
+dsp-proq4-eq.workspace = true
+dsp-soothe3-spectral.workspace = true
+dsp-ozone12-mastering.workspace = true
+symphonia.workspace = true
+serde.workspace = true
+serde_json.workspace = true

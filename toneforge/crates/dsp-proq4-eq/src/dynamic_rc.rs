@@ -219,6 +219,31 @@ impl DynamicEqBandProcessor {
         gain_q_interaction: bool,
         sample_rate: f64,
     ) -> f64 {
+        self.step_dynamic_band_full(
+            band_params,
+            biquad_band,
+            None,
+            sc_l,
+            sc_r,
+            global_gain_scale,
+            gain_q_interaction,
+            sample_rate,
+        )
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_dynamic_band_full(
+        &mut self,
+        band_params: &EqBandParams,
+        biquad_band: &mut FractionalSlopeBiquadBand,
+        natural_phase_band_2x: Option<&mut FractionalSlopeBiquadBand>,
+        sc_l: f64,
+        sc_r: f64,
+        global_gain_scale: f32,
+        gain_q_interaction: bool,
+        sample_rate: f64,
+    ) -> f64 {
         let filt_l = self.detector.filter_sidechain_sample(0, sc_l);
         let filt_r = self.detector.filter_sidechain_sample(1, sc_r);
         let peak_sc = filt_l.abs().max(filt_r.abs());
@@ -231,7 +256,7 @@ impl DynamicEqBandProcessor {
         );
         let smoothed_db = self.capacitor.step(target_db, sample_rate);
 
-        // Update biquad coefficients every 8 samples when dynamic gain moves by > 0.01 dB
+        // Update biquad / Cytomic SVF coefficients every 8 samples when dynamic gain moves by > 0.01 dB
         self.update_counter = self.update_counter.wrapping_add(1);
         if (self.update_counter & 7) == 0 && (smoothed_db - self.current_dyn_gain_db).abs() > 0.01 {
             self.current_dyn_gain_db = smoothed_db;
@@ -254,6 +279,17 @@ impl DynamicEqBandProcessor {
                     sample_rate,
                     gain_q_interaction,
                 );
+                if let Some(np_band) = natural_phase_band_2x {
+                    np_band.configure_shape_natural_phase(
+                        band_params.shape,
+                        band_params.freq_hz as f64,
+                        total_gain_db,
+                        band_params.q_ui as f64,
+                        band_params.slope_db_oct as f64,
+                        sample_rate * 2.0,
+                        gain_q_interaction,
+                    );
+                }
             }
         }
         smoothed_db

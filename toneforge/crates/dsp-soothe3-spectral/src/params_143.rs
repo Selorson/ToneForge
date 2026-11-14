@@ -258,6 +258,21 @@ pub struct Soothe3GlobalParams {
     pub bypass: bool,                    // 25 (`Bypass`)
     pub inverse: bool,                   // Extended: `Inverse` (Spectral Unmasking / Ducking)
     pub auto_gain: bool,                 // Extended: `Auto gain`
+    #[serde(default)]
+    pub external_sidechain_enabled: bool,// Synced alias for `sidechain` (`External Sidechain Unmasking`)
+}
+
+impl Soothe3GlobalParams {
+    #[inline]
+    pub fn is_external_sidechain_active(&self) -> bool {
+        self.sidechain || self.external_sidechain_enabled
+    }
+
+    #[inline]
+    pub fn set_external_sidechain(&mut self, enabled: bool) {
+        self.sidechain = enabled;
+        self.external_sidechain_enabled = enabled;
+    }
 }
 
 impl Default for Soothe3GlobalParams {
@@ -288,6 +303,7 @@ impl Default for Soothe3GlobalParams {
             bypass: false,
             inverse: false,
             auto_gain: false,
+            external_sidechain_enabled: false,
         }
     }
 }
@@ -463,7 +479,7 @@ impl Soothe3ParameterSet {
                 13 => (g.mix_pct * 0.01).clamp(0.0, 1.0),
                 14 => ((g.out_trim_db + 24.0) / 48.0).clamp(0.0, 1.0),
                 15 => ((g.wet_trim_db + 24.0) / 48.0).clamp(0.0, 1.0),
-                16 => if g.sidechain { 1.0 } else { 0.0 },
+                16 => if g.is_external_sidechain_active() { 1.0 } else { 0.0 },
                 17 => if g.sidechain_listen { 1.0 } else { 0.0 },
                 18 => if g.linear_phase { 1.0 } else { 0.0 },
                 19 => if g.low_latency { 1.0 } else { 0.0 },
@@ -541,7 +557,7 @@ impl Soothe3ParameterSet {
                 13 => g.mix_pct = v * 100.0,
                 14 => g.out_trim_db = 48.0 * v - 24.0,
                 15 => g.wet_trim_db = 48.0 * v - 24.0,
-                16 => g.sidechain = v >= 0.5,
+                16 => g.set_external_sidechain(v >= 0.5),
                 17 => g.sidechain_listen = v >= 0.5,
                 18 => g.linear_phase = v >= 0.5,
                 19 => g.low_latency = v >= 0.5,

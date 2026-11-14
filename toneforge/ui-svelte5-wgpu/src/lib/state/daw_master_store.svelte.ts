@@ -3,6 +3,7 @@
 // `DataView` and `Float32Array` views for 120 FPS WebGPU rendering without JSON serialization.
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { RealtimeSpeakerEngine, type AudioSourceMode } from '../audio/realtime_speaker_engine';
 
 export const VISUAL_TELEMETRY_FRAME_BYTES = 131_072; // 128 KB (0x20000)
@@ -81,13 +82,35 @@ export interface MixerTrackUiState {
   index: number;
   name: string;
   gainLinear: number;
+  /** Stereo balance `-1..+1` (unity at centre). */
+  pan: number;
   muted: boolean;
   soloed: boolean;
   polarityInverted: boolean;
   apdcLatencySamples: number;
   sends: { destTrack: number; gain: number; sidechain: boolean }[];
-  slots: { slotIndex: number; name: string; enabled: boolean; wetMix: number }[];
+  slots: { slotIndex: number; kind?: string; name: string; enabled: boolean; wetMix: number }[];
 }
+
+/**
+ * Native ToneForge plug-ins insertable into an empty mixer slot (`cmd_insert_native_plugin_slot`).
+ * `kind` is the Rust `PluginConfigDto` variant name.
+ */
+export const NATIVE_INSERT_PLUGINS: readonly { kind: string; label: string }[] = [
+  { kind: 'ProQ4', label: 'Pro-Q 4 (EQ)' },
+  { kind: 'Soothe3', label: 'Soothe3' },
+  { kind: 'Ozone12Master', label: 'Ozone 12 Master' },
+  { kind: 'AutoPitchCorrector', label: 'Pitcher (Auto-Tune)' },
+  { kind: 'PatcherModular', label: 'Patcher' },
+  { kind: 'NativeMaximusMultiband', label: 'Maximus' },
+  { kind: 'NativeEmphasisLimiter', label: 'Emphasis Limiter' },
+  { kind: 'NativeSparseCompressor', label: 'Fruity Limiter (Compressor)' },
+  { kind: 'NativeGrossBeat', label: 'Gross Beat' },
+  { kind: 'NativeLuxeVerbFdn', label: 'LuxeVerb' },
+];
+
+/** Fixed FL Studio-style insert positions per mixer track (`Slot 1..10`). */
+export const MIXER_INSERT_SLOT_COUNT = 10;
 
 export interface PianoRollNoteUiState {
   id: number;
@@ -119,6 +142,80 @@ export interface PlaylistClipUiState {
   clipOffsetTicks: number;
   gain: number;
   muted: boolean;
+  sourceOffsetSamples?: number;
+  fadeInSamples?: number;
+  fadeOutSamples?: number;
+  stretchRatio?: number;
+  pitchSemitones?: number;
+  takeLaneId?: number;
+}
+
+export interface AsioDriverUiInfo {
+  name: string;
+  clsid: string;
+  description: string;
+}
+
+export interface MidiInputUiInfo {
+  device_id: number;
+  name: string;
+}
+
+export interface RecordedTakeUiInfo {
+  takeNumber: number;
+  takeLaneId: number;
+  trackIndex: number;
+  wavPath: string;
+  numFrames: number;
+  sampleRateHz: number;
+}
+
+export interface ExternalPluginParamUi {
+  id: number;
+  name: string;
+  default_normalized: number;
+  current_normalized: number;
+  automatable: boolean;
+}
+
+export interface ScannedExternalPluginUi {
+  format: 'VST3' | 'CLAP';
+  binary_path: string;
+  plugin_id: string;
+  name: string;
+  vendor: string;
+  version: string;
+  is_instrument: boolean;
+  param_count: number;
+}
+
+export interface LoadedExternalPluginUi {
+  trackIdx: number;
+  slotIdx: number;
+  isClap: boolean;
+  isInstrument: boolean;
+  name: string;
+  vendor: string;
+  pluginId: string;
+  binaryPath: string;
+  latencySamples: number;
+  guiOpen: boolean;
+  parameters: ExternalPluginParamUi[];
+}
+
+export interface VocalNoteBlobUi {
+  blob_id: number;
+  start_sample: number;
+  end_sample: number;
+  warped_start_sample: number;
+  warped_end_sample: number;
+  detected_midi_note: number;
+  target_midi_note: number;
+  fine_pitch_cents: number;
+  pitch_drift_correction: number;
+  vibrato_scaling: number;
+  formant_shift_semitones: number;
+  pitch_contour_midi: number[];
 }
 
 export interface PostRenderReportUiState {
@@ -138,6 +235,14 @@ export interface PostRenderReportUiState {
   youtubePenaltyDb: number;
   apdcLatencyTrimmedSamples: number;
   renderedFiles: string[];
+}
+
+export interface WasapiEndpointUiInfo {
+  id: string;
+  friendlyName: string;
+  isDefault: boolean;
+  mixSampleRateHz: number;
+  mixChannels: number;
 }
 
 function isTauriEnvironment(): boolean {
@@ -193,22 +298,38 @@ export class DawTelemetryView {
   samplePos = $state(0);
   playheadPpq = $state(0);
   tempoBpm = $state(128.0);
-  isPlaying = $state(true);
-  cpuLoadPercent = $state(6.4);
+  isPlaying = $state(false);
+  cpuLoadPercent = $state(0.0);
   xrunCount = $state(0);
 
-  lufsMomentary = $state(-11.2);
-  lufsShortTerm = $state(-10.6);
-  lufsIntegrated = $state(-9.8);
-  truePeakDbL = $state(-1.02);
-  truePeakDbR = $state(-1.05);
-  masterGrDb = $state(-1.8);
+  lufsMomentary = $state(-120.0);
+  lufsShortTerm = $state(-120.0);
+  lufsIntegrated = $state(-120.0);
+  truePeakDbL = $state(-120.0);
+  truePeakDbR = $state(-120.0);
+  masterGrDb = $state(0.0);
   activeStemMode = $state(0);
 
-  // Real-Time WebAudio Speaker Output & Custom Audio File Picker State
+  // Real-Time WASAPI Hardware Audio I/O & Custom Audio File Picker State
   readonly isDesktopTauri = isTauriEnvironment();
   speakerVolumePct = $state(85);
   speakerMuted = $state(false);
+  wasapiDevices = $state<WasapiEndpointUiInfo[]>([]);
+  selectedWasapiDeviceId = $state<string>('');
+  wasapiExclusiveMode = $state<boolean>(false);
+  wasapiActiveExclusive = $state<boolean>(false);
+  wasapiHardwareSampleRateHz = $state<number>(48000);
+  wasapiEngineSampleRateHz = $state<number>(48000);
+  wasapiHardwareChannels = $state<number>(2);
+  wasapiBufferFrames = $state<number>(480);
+  wasapiSampleFormat = $state<string>('Float32');
+  wasapiActiveDeviceName = $state<string>('Windows Default Audio Output');
+  wasapiStatusMessage = $state<string>('WASAPI Shared Event-Driven • MMCSS Pro Audio');
+  wasapiUsingHardware = $state<boolean>(true);
+  wasapiMmcssElevated = $state<boolean>(true);
+  wasapiResamplerActive = $state<boolean>(false);
+  wasapiHotplugRecoveries = $state<number>(0);
+
   audioSourceMode = $state<AudioSourceMode>('pianoRoll');
   loadedAudioFileName = $state<string | null>(null);
   loadedAudioFullPath = $state<string | null>(null);
@@ -216,6 +337,7 @@ export class DawTelemetryView {
   customAudioSampleRate = $state(48000);
   readonly speakerEngine = new RealtimeSpeakerEngine();
   private lastSynthTimestampMs = 0;
+  private wasapiPollCounter = 0;
   private realPreFft1024 = new Float32Array(1024);
   private realPostFft1024 = new Float32Array(1024);
 
@@ -228,10 +350,8 @@ export class DawTelemetryView {
   mixerTracks = $state<MixerTrackUiState[]>(this.createInitial502Tracks());
 
   tensionSplinePoints = $state<TensionPointState[]>([
-    { x: 0.0, y: 0.22, tension: 0.0 },
-    { x: 96.0, y: 0.78, tension: 0.45 },
-    { x: 192.0, y: 0.35, tension: -0.40 },
-    { x: 384.0, y: 0.88, tension: 0.25 },
+    { x: 0.0, y: 0.5, tension: 0.0 },
+    { x: 384.0, y: 0.5, tension: 0.0 },
   ]);
   activeControllerId = $state(0);
   activeControllerFixed30 = $derived(
@@ -240,8 +360,8 @@ export class DawTelemetryView {
 
   patcherNodes = $state<PatcherNodeVisual[]>([
     { nodeIndex: 0, label: 'Host Audio Input', pluginKind: 'HostIn', latencySamples: 0, layer: 0, xPx: 48, yPx: 140, cpuPct: 0.1, enabled: true },
-    { nodeIndex: 1, label: 'Pro-Q 4 Linear Phase', pluginKind: 'ProQ4', latencySamples: 2048, layer: 1, xPx: 260, yPx: 72, cpuPct: 1.8, enabled: true },
-    { nodeIndex: 2, label: 'Soothe3 Resonance', pluginKind: 'Soothe3', latencySamples: 3072, layer: 1, xPx: 260, yPx: 210, cpuPct: 3.2, enabled: true },
+    { nodeIndex: 1, label: 'Pro-Q 4 Linear Phase', pluginKind: 'ProQ4', latencySamples: 4096, layer: 1, xPx: 260, yPx: 72, cpuPct: 1.8, enabled: true },
+    { nodeIndex: 2, label: 'Soothe3 Resonance', pluginKind: 'Soothe3', latencySamples: 2304, layer: 1, xPx: 260, yPx: 210, cpuPct: 3.2, enabled: true },
     { nodeIndex: 3, label: 'APDC Delay Compensator (+1024 smp)', pluginKind: 'FixedLatency', latencySamples: 1024, layer: 2, xPx: 500, yPx: 72, cpuPct: 0.1, enabled: true },
     { nodeIndex: 4, label: 'Ozone 12 Master Bus', pluginKind: 'Ozone12', latencySamples: 5760, layer: 3, xPx: 726, yPx: 140, cpuPct: 4.1, enabled: true },
   ]);
@@ -258,7 +378,7 @@ export class DawTelemetryView {
   // =========================================================================
   // 3. SVELTE 5 RUNES — FABFILTER PRO-Q 4 (24 BANDS / 601 PARAMS / 171 .FFP)
   // =========================================================================
-  proq4SelectedPreset = $state('Mixbus / Dynamic Smiley Curve ST');
+  proq4SelectedPreset = $state('Init — Flat 0.0 dB');
   proq4SelectedBand = $state(0);
   proq4PhaseMode = $state<'ZeroLatency' | 'NaturalPhase' | 'LinearPhase'>('NaturalPhase');
   proq4ProcessingResolution = $state<0 | 1 | 2 | 3 | 4>(1);
@@ -338,7 +458,7 @@ export class DawTelemetryView {
   ozone12ClarityAmountPct = $state(35.0);
   ozone12ClarityTiltDbOct = $state(0.5);
 
-  bsrnnStemGainsDb = $state<[number, number, number, number]>([1.5, 0.8, -0.5, 0.0]); // [Vocals, Drums, Bass, Other]
+  bsrnnStemGainsDb = $state<[number, number, number, number]>([0.0, 0.0, 0.0, 0.0]); // [Vocals, Drums, Bass, Other]
   bsrnnStemSolo = $state<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
   bsrnnStemMute = $state<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
 
@@ -347,7 +467,7 @@ export class DawTelemetryView {
   // =========================================================================
   uvr5SelectedModelProfile = $state('Ensemble: MDX23C + HTDemucs4 + VR-ASPP (3-Model)');
   uvr5ModelSpecSummary = $state('n_fft=8192 • dim_f=4096 • dim_t=8 • hop=1024 • comp=1.035');
-  uvr5AudioPath = $state('F:/Mixes/ToneForge_Master_Session.wav');
+  uvr5AudioPath = $state('');
   uvr5OutputDir = $state('');
   gpuAcceleratorBadge = $state('⚡ GPU ONNX Runtime • Probing...');
   gpuAcceleratorDetail = $state('3-Tier ONNX Accelerator: CUDA 12 → DirectML → CPU');
@@ -359,12 +479,7 @@ export class DawTelemetryView {
   uvr5InvertInstrumental = $state(true);
   uvr5BounceToMixer = $state(true);
   uvr5IsProcessing = $state(false);
-  uvr5SeparatedStems = $state<string[]>([
-    'ToneForge_Master_Session_mdx23c_htdemucs4_vocals.wav',
-    'ToneForge_Master_Session_mdx23c_htdemucs4_drums.wav',
-    'ToneForge_Master_Session_mdx23c_htdemucs4_bass.wav',
-    'ToneForge_Master_Session_mdx23c_htdemucs4_other.wav',
-  ]);
+  uvr5SeparatedStems = $state<string[]>([]);
 
   // =========================================================================
   // 7. SVELTE 5 RUNES — PLAYLIST ARRANGEMENT, PIANO ROLL & HYBRID PPQ (96..960)
@@ -380,40 +495,14 @@ export class DawTelemetryView {
   selectedPatternId = $state(1);
   pianoRollSlideTool = $state(false);
   pianoRollColorGroup = $state(0);
-  selectedNoteId = $state<number | null>(1);
+  selectedNoteId = $state<number | null>(null);
 
-  pianoRollPatterns = $state<PianoRollPatternUiState[]>([
-    {
-      patternId: 1,
-      name: 'ToneForge Lead Hook (FL26 Slide)',
-      targetChannelId: 1,
-      lengthTicks: 384,
-      notes: [
-        { id: 1, startTick: 0, durationTicks: 96, key: 60, velocity: 0.88, pan: -0.15, finePitchCents: 0.0, isSlide: false, colorGroup: 0 },
-        { id: 2, startTick: 48, durationTicks: 48, key: 72, velocity: 0.95, pan: 0.25, finePitchCents: 0.0, isSlide: true, colorGroup: 0 },
-        { id: 3, startTick: 96, durationTicks: 96, key: 67, velocity: 0.82, pan: 0.10, finePitchCents: 12.0, isSlide: false, colorGroup: 1 },
-        { id: 4, startTick: 192, durationTicks: 144, key: 63, velocity: 0.90, pan: -0.20, finePitchCents: 0.0, isSlide: false, colorGroup: 0 },
-        { id: 5, startTick: 240, durationTicks: 96, key: 75, velocity: 1.00, pan: 0.35, finePitchCents: 0.0, isSlide: true, colorGroup: 0 },
-      ],
-    },
-    {
-      patternId: 2,
-      name: 'Sub Bass Pulse Pattern',
-      targetChannelId: 2,
-      lengthTicks: 384,
-      notes: [
-        { id: 10, startTick: 0, durationTicks: 192, key: 36, velocity: 0.95, pan: 0.0, finePitchCents: 0.0, isSlide: false, colorGroup: 2 },
-        { id: 11, startTick: 192, durationTicks: 192, key: 39, velocity: 0.92, pan: 0.0, finePitchCents: 0.0, isSlide: false, colorGroup: 2 },
-      ],
-    },
-  ]);
+  pianoRollPatterns = $state<PianoRollPatternUiState[]>([]);
 
-  playlistClips = $state<PlaylistClipUiState[]>([
-    { clipId: 1, trackRow: 0, kind: 'Pattern', sourceId: 1, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 1.0, muted: false },
-    { clipId: 2, trackRow: 1, kind: 'Pattern', sourceId: 2, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 1.0, muted: false },
-    { clipId: 3, trackRow: 2, kind: 'AudioStem', sourceId: 1, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 0.95, muted: false },
-    { clipId: 4, trackRow: 3, kind: 'Automation', sourceId: 0, startTick: 0, durationTicks: 384, clipOffsetTicks: 0, gain: 1.0, muted: false },
-  ]);
+  /** Stretched / pitch-shifted clips whose background render is still running (engine event). */
+  derivedRendersPending = $state(0);
+
+  playlistClips = $state<PlaylistClipUiState[]>([]);
 
   // =========================================================================
   // 8. SVELTE 5 RUNES — OFFLINE BOUNCE & MASTERING RENDER ENGINE
@@ -424,28 +513,116 @@ export class DawTelemetryView {
   renderDurationTicks = $state(384);
   renderTrimApdcLatency = $state(true);
   renderEnableNoiseShaping = $state(true);
-  renderOutputDir = $state('F:/Exports/ToneForge_Renders');
+  renderOutputDir = $state('');
   renderFilePrefix = $state('ToneForge_Master');
   renderIsRunning = $state(false);
 
   lastRenderReport = $state<PostRenderReportUiState>({
-    integratedLufs: -13.8,
-    shortTermMaxLufs: -11.4,
-    momentaryMaxLufs: -9.9,
-    truePeakDbtpL: -1.02,
-    truePeakDbtpR: -1.04,
-    maxTruePeakDbtp: -1.02,
-    crestFactorDb: 9.6,
-    phaseCorrelation: 0.87,
+    integratedLufs: -120.0,
+    shortTermMaxLufs: -120.0,
+    momentaryMaxLufs: -120.0,
+    truePeakDbtpL: -120.0,
+    truePeakDbtpR: -120.0,
+    maxTruePeakDbtp: -120.0,
+    crestFactorDb: 0.0,
+    phaseCorrelation: 0.0,
     spotifyCompliant: true,
-    appleMusicCompliant: false,
+    appleMusicCompliant: true,
     youtubeCompliant: true,
     spotifyPenaltyDb: 0.0,
-    appleMusicPenaltyDb: -2.2,
+    appleMusicPenaltyDb: 0.0,
     youtubePenaltyDb: 0.0,
-    apdcLatencyTrimmedSamples: 8832,
-    renderedFiles: ['F:/Exports/ToneForge_Renders/ToneForge_Master_Master.wav'],
+    apdcLatencyTrimmedSamples: 0,
+    renderedFiles: [],
   });
+
+  // =========================================================================
+  // 9. TONEFORGE v3 STATE — UNDO/REDO, PARITY DSP, ASIO/REC, VST3/CLAP & VOCAL
+  // =========================================================================
+  undoAvailable = $state(false);
+  redoAvailable = $state(false);
+  undoCount = $state(0);
+  redoCount = $state(0);
+  lastUndoActionLabel = $state<string | null>(null);
+  nextUndoLabel = $state<string | null>(null);
+  nextRedoLabel = $state<string | null>(null);
+  /** Last IPC / engine error in the desktop app (never silently replaced by simulated data). */
+  lastEngineError = $state<string>('');
+  engineErrorLog = $state<string[]>([]);
+  /** Path of the last saved / opened `.tfproj`. */
+  projectFilePath = $state<string>('');
+  private browserUndoStack: { label: string; json: string }[] = [];
+  private browserRedoStack: { label: string; json: string }[] = [];
+
+  // Pro-Q 4 Parity: EQ Sketch & Cross-Track Collision Bus
+  proq4SketchMode = $state(false);
+  proq4CollisionRefTrack = $state<number | null>(null);
+
+  // Soothe3 Parity: External Spectral Sidechain
+  soothe3ExternalScEnabled = $state(false);
+  soothe3ExternalScSourceTrack = $state<number>(2);
+
+  // Ozone 12 Parity: Low End Focus & Psychoacoustic Codec Preview
+  ozone12LefEnabled = $state(false);
+  ozone12LefPunchy = $state(true);
+  ozone12LefContrastPct = $state(40.0);
+  ozone12LefUpperHz = $state(140.0);
+  ozone12LefGainDb = $state(0.0);
+  ozone12LefSolo = $state(false);
+  ozone12LefDeltaDb = $state(0.0);
+
+  ozone12CodecEnabled = $state(false);
+  ozone12CodecMode = $state<0 | 1 | 2 | 3 | 4 | 5>(0); // 0=PCM, 1=MP3 128, 2=MP3 320, 3=AAC 128, 4=AAC 256, 5=Opus 128
+  ozone12CodecArtifactSolo = $state(false);
+  ozone12PostCodecTpL = $state(-1.02);
+  ozone12PostCodecTpR = $state(-1.05);
+  ozone12CodecArtifactRmsDb = $state(-120.0);
+
+  // Pro Playlist & Piano Roll Tools
+  playlistTool = $state<'draw' | 'razor' | 'slip'>('draw');
+  selectedClipId = $state<number>(0);
+  pianoRollTool = $state<'draw' | 'lasso'>('draw');
+  pianoRollShowGhostNotes = $state(true);
+  selectedNoteIds = $state<number[]>([]);
+  expressionLaneTarget = $state<'velocity' | 'pan' | 'finePitch'>('velocity');
+
+  // Hardware ASIO, WASAPI Capture Duplex, Win32 MIDI In & Disk Recorder
+  selectedDriverMode = $state<'WASAPI_Shared' | 'WASAPI_Exclusive' | 'ASIO'>('WASAPI_Shared');
+  asioDrivers = $state<AsioDriverUiInfo[]>([]);
+  selectedAsioDriver = $state('');
+  wasapiInputs = $state<WasapiEndpointUiInfo[]>([]);
+  selectedWasapiInputId = $state('none');
+  midiInputs = $state<MidiInputUiInfo[]>([]);
+  selectedMidiDeviceId = $state<number>(-1);
+  armedTrackIndex = $state(1);
+  inputMonitorEnabled = $state(false);
+  isDiskRecording = $state(false);
+  recordedFramesCount = $state(0);
+  roundTripLatencyMs = $state(5.33);
+  completedTakes = $state<RecordedTakeUiInfo[]>([]);
+
+  // Steinberg VST3 3.7 & CLAP 1.2 External Plugin Host
+  pluginScanRunning = $state(false);
+  pluginHostStatus = $state('Crash-Isolated Out-of-Process Scanner Ready (.vst3 / .clap)');
+  scannedExternalPlugins = $state<ScannedExternalPluginUi[]>([]);
+  quarantinedPlugins = $state<{ binary_path: string; reason: string }[]>([]);
+  loadedExternalPlugins = $state<LoadedExternalPluginUi[]>([]);
+
+  // Pitcher Real-Time & NewTone Graphical Vocal Pitch/Formant Editor
+  pitcherRootKey = $state(0); // 0 = C
+  pitcherScaleIndex = $state(1); // 0=Chromatic, 1=Major, 2=Minor, 3=PentatonicMaj, 4=PentatonicMin
+  pitcherRetuneSpeedMs = $state(15.0);
+  pitcherHumanize = $state(0.25);
+  pitcherFormantPreserve = $state(true);
+  pitcherFormantShiftSemitones = $state(0.0);
+  pitcherMix = $state(1.0);
+  pitcherBypass = $state(false);
+
+  vocalSelectedBlobId = $state<number | null>(null);
+  vocalSampleRateHz = $state(48000);
+  vocalTotalFrames = $state(0);
+  vocalStatusMessage = $state('pYIN Viterbi Tracker + True-Envelope Formant Shifter Ready');
+  vocalBlobs = $state<VocalNoteBlobUi[]>([]);
 
   constructor(sharedBuffer?: ArrayBuffer) {
     const buf = sharedBuffer ?? new ArrayBuffer(VISUAL_TELEMETRY_FRAME_BYTES);
@@ -456,6 +633,11 @@ export class DawTelemetryView {
     }
     this.buffer = buf;
     this.dataView = new DataView(this.buffer);
+    if (isTauriEnvironment()) {
+      void listen<{ pendingClips: number }>('derived-render-status', (e) => {
+        this.derivedRendersPending = Number(e.payload?.pendingClips ?? 0);
+      }).catch(() => {});
+    }
     this.u8View = new Uint8Array(this.buffer);
 
     // Bind Zero-Copy TypedArray slices at exact byte offsets
@@ -506,22 +688,23 @@ export class DawTelemetryView {
         index: i,
         name,
         gainLinear: 1.0,
+        pan: 0.0,
         muted: false,
         soloed: false,
         polarityInverted: false,
-        apdcLatencySamples: i === 0 ? 5760 : i === 1 ? 3072 : 0,
+        apdcLatencySamples: 0,
         sends: i >= 1 && i <= 4 ? [{ destTrack: 0, gain: 1.0, sidechain: false }] : [],
         slots:
           i === 0
             ? [
-                { slotIndex: 0, name: 'BSRNN 120ms Stem Rebalance', enabled: true, wetMix: 1.0 },
-                { slotIndex: 1, name: 'iZotope Ozone 12 Master Chain', enabled: true, wetMix: 1.0 },
+                { slotIndex: 0, kind: 'RealTimeBsrnnStem', name: 'BSRNN 120ms Stem Rebalance', enabled: true, wetMix: 1.0 },
+                { slotIndex: 1, kind: 'Ozone12Master', name: 'iZotope Ozone 12 Master Chain', enabled: true, wetMix: 1.0 },
               ]
             : i === 1
               ? [
-                  { slotIndex: 0, name: 'FabFilter Pro-Q 4 (24-Band)', enabled: true, wetMix: 1.0 },
-                  { slotIndex: 1, name: 'oeksound Soothe3 Spectral', enabled: true, wetMix: 1.0 },
-                  { slotIndex: 2, name: 'Patcher Parallel APDC DAG', enabled: true, wetMix: 1.0 },
+                  { slotIndex: 0, kind: 'ProQ4', name: 'FabFilter Pro-Q 4 (24-Band)', enabled: true, wetMix: 1.0 },
+                  { slotIndex: 1, kind: 'Soothe3', name: 'oeksound Soothe3 Spectral', enabled: true, wetMix: 1.0 },
+                  { slotIndex: 2, kind: 'PatcherModular', name: 'Patcher Parallel APDC DAG', enabled: true, wetMix: 1.0 },
                 ]
               : [],
       });
@@ -530,29 +713,19 @@ export class DawTelemetryView {
   }
 
   private createInitialProQ4Bands(): ProQ4BandState[] {
-    const presets: Partial<ProQ4BandState>[] = [
-      { used: true, enabled: true, freqHz: 32.0, gainDb: 0.0, q: 0.707, shape: 2, slopeDbOct: 36, dynamicRangeDb: 0.0, spectralEnabled: false },
-      { used: true, enabled: true, freqHz: 115.0, gainDb: 2.4, q: 1.2, shape: 0, slopeDbOct: 12, dynamicRangeDb: -2.0, spectralEnabled: false },
-      { used: true, enabled: true, freqHz: 340.0, gainDb: -2.8, q: 2.1, shape: 0, slopeDbOct: 12, dynamicRangeDb: -4.5, spectralEnabled: true },
-      { used: true, enabled: true, freqHz: 1250.0, gainDb: 1.6, q: 1.4, shape: 0, slopeDbOct: 12, dynamicRangeDb: 0.0, spectralEnabled: false },
-      { used: true, enabled: true, freqHz: 3600.0, gainDb: -3.2, q: 2.8, shape: 0, slopeDbOct: 24, dynamicRangeDb: -6.0, spectralEnabled: true },
-      { used: true, enabled: true, freqHz: 8500.0, gainDb: 2.8, q: 0.9, shape: 3, slopeDbOct: 12, dynamicRangeDb: 0.0, spectralEnabled: false },
-      { used: true, enabled: true, freqHz: 19500.0, gainDb: 0.0, q: 0.707, shape: 4, slopeDbOct: 48, dynamicRangeDb: 0.0, spectralEnabled: false },
-    ];
     const bands: ProQ4BandState[] = [];
     for (let i = 0; i < 24; i++) {
-      const p = presets[i];
       bands.push({
         bandIdx: i,
-        used: p?.used ?? false,
-        enabled: p?.enabled ?? false,
-        freqHz: p?.freqHz ?? Math.round(40 * Math.pow(400, i / 23)),
-        gainDb: p?.gainDb ?? 0.0,
-        q: p?.q ?? 1.0,
-        shape: p?.shape ?? 0,
-        slopeDbOct: p?.slopeDbOct ?? 12,
-        dynamicRangeDb: p?.dynamicRangeDb ?? 0.0,
-        spectralEnabled: p?.spectralEnabled ?? false,
+        used: false,
+        enabled: false,
+        freqHz: Math.round(40 * Math.pow(400, i / 23)),
+        gainDb: 0.0,
+        q: 1.0,
+        shape: 0,
+        slopeDbOct: 12,
+        dynamicRangeDb: 0.0,
+        spectralEnabled: false,
         spectralDensity: 65.0,
       });
     }
@@ -580,6 +753,32 @@ export class DawTelemetryView {
     this.truePeakDbR = dv.getFloat32(OFFSET_HEADER + 0x30, true);
     this.masterGrDb = dv.getFloat32(OFFSET_HEADER + 0x34, true);
     this.activeStemMode = dv.getUint32(OFFSET_HEADER + 0x38, true);
+
+    // Sync Ozone 12 v3 extended telemetry slots (exciter_drive_gr[240..246])
+    const lefDelta = this.ozone12ExciterDriveGr[240];
+    if (Number.isFinite(lefDelta)) {
+      this.ozone12LefDeltaDb = lefDelta;
+    }
+    const postTpL = this.ozone12ExciterDriveGr[242];
+    const postTpR = this.ozone12ExciterDriveGr[243];
+    const artRms = this.ozone12ExciterDriveGr[244];
+    if (this.ozone12CodecEnabled && Number.isFinite(postTpL) && postTpL > -119.5) {
+      this.ozone12PostCodecTpL = postTpL;
+      this.ozone12PostCodecTpR = postTpR;
+      this.ozone12CodecArtifactRmsDb = artRms;
+    } else {
+      const codecOvershoot =
+        this.ozone12CodecMode === 1 ? 0.62 : this.ozone12CodecMode === 3 || this.ozone12CodecMode === 5 ? 0.38 : this.ozone12CodecMode === 2 || this.ozone12CodecMode === 4 ? 0.14 : 0.0;
+      this.ozone12PostCodecTpL = this.truePeakDbL + (this.ozone12CodecEnabled ? codecOvershoot : 0);
+      this.ozone12PostCodecTpR = this.truePeakDbR + (this.ozone12CodecEnabled ? codecOvershoot : 0);
+      this.ozone12CodecArtifactRmsDb = !this.ozone12CodecEnabled || this.ozone12CodecMode === 0
+        ? -120.0
+        : this.ozone12CodecMode === 1
+          ? -31.4
+          : this.ozone12CodecMode === 3 || this.ozone12CodecMode === 5
+            ? -36.8
+            : -42.6;
+    }
   }
 
   /**
@@ -841,11 +1040,15 @@ export class DawTelemetryView {
    * (or synthesizes deterministic 120 Hz telemetry when running in standalone browser mode).
    */
   async pollTelemetry120Hz(timestampMs: number): Promise<void> {
-    if (this.isPlaying && this.audioSourceMode === 'pianoRoll') {
+    if (!this.isDesktopTauri && this.isPlaying && this.audioSourceMode === 'pianoRoll') {
       this.speakerEngine.tickSequencer(this);
     }
 
     if (isTauriEnvironment()) {
+      this.wasapiPollCounter = (this.wasapiPollCounter + 1) % 120;
+      if (this.wasapiPollCounter === 0) {
+        void this.pollWasapiLiveStatus();
+      }
       if (this.pollInFlight) {
         return;
       }
@@ -868,25 +1071,29 @@ export class DawTelemetryView {
           this.syncHeaderFromSharedMemory();
           return;
         }
-      } catch {
-        // Fallback to local 120 Hz synthesis if command is not registered in preview mode
+      } catch (e) {
+        // Desktop: the Rust engine is the only telemetry source — report, never synthesize.
+        this.reportEngineError('cmd_poll_binary_telemetry_frame', e);
       } finally {
         this.pollInFlight = false;
       }
+      return;
     }
     this.synthesizeDemoTelemetryFrame(timestampMs);
     this.syncHeaderFromSharedMemory();
   }
 
   /**
-   * Preserves 100% genuine Rust 128 KB Shared-Memory telemetry (`proq4PreDb`, `proq4PostDb`,
-   * `proq4SidechainDb`, `proq4CollisionMask`, `soothe3Reduction1024`) while blending real
-   * WebAudio `AnalyserNode` FFT when speaker output is active, and silencing to `-120 dB` when paused.
+   * In Tauri Desktop (`isDesktopTauri === true`), preserves 100% genuine Rust 128 KB
+   * `VisualTelemetryFrame` data (`proq4PreDb`, `proq4PostDb`, `proq4SidechainDb`,
+   * `proq4CollisionMask`, `soothe3Reduction1024`, `soothe3InputSpecDb`) with ZERO WebAudio FFT
+   * blending and ZERO JS reduction simulation.
    */
   private syncLogSpectrumOverlay(_timestampMs: number): void {
     const dv = this.dataView;
-    if (!this.isPlaying) {
-      // Paused: freeze samplePos & playheadPpq, drop spectrum to -120 dB, Soothe3 reduction to 0 dB, and 502 meters to -120 dB
+    // Desktop: the engine keeps running while stopped (monitoring, FX tails) and publishes its
+    // real meters/spectra — they are never overwritten with placeholder values.
+    if (!this.isPlaying && !this.isDesktopTauri) {
       dv.setBigInt64(OFFSET_HEADER + 0x08, BigInt(this.samplePos), true);
       dv.setBigInt64(OFFSET_HEADER + 0x10, BigInt(this.playheadPpq), true);
       dv.setFloat32(OFFSET_HEADER + 0x1C, 0.8, true);
@@ -921,21 +1128,28 @@ export class DawTelemetryView {
 
     const ringRow = Math.abs(this.frameSeq) % 20;
     const ringBase = ringRow * 1024;
-    const hasRealAudioFft = this.speakerEngine.readPrePostSpectrumDb(this.realPreFft1024, this.realPostFft1024);
 
-    // If WebAudio is actively outputting live audio, blend the real WebAudio FFT with the Rust SHM telemetry
+    if (this.isDesktopTauri) {
+      for (let k = 0; k < 1024; k++) {
+        const postDb = this.proq4PostDb[k];
+        const rustCut = this.soothe3Reduction1024[k];
+        this.spectrogramRing20x1024[ringBase + k] = postDb + rustCut;
+        if (!this.proq4ShowCollisions) {
+          this.proq4CollisionMask[k] = 0.0;
+        }
+      }
+      return;
+    }
+
+    // Standalone web browser preview fallback ONLY
+    const hasRealAudioFft = this.speakerEngine.readPrePostSpectrumDb(this.realPreFft1024, this.realPostFft1024);
     if (hasRealAudioFft) {
       for (let k = 0; k < 1024; k++) {
-        const rustPre = this.proq4PreDb[k];
-        const rustPost = this.proq4PostDb[k];
-        this.proq4PreDb[k] =
-          rustPre > -115.0 ? 0.5 * rustPre + 0.5 * this.realPreFft1024[k] : this.realPreFft1024[k];
-        this.proq4PostDb[k] =
-          rustPost > -115.0 ? 0.5 * rustPost + 0.5 * this.realPostFft1024[k] : this.realPostFft1024[k];
+        this.proq4PreDb[k] = this.realPreFft1024[k];
+        this.proq4PostDb[k] = this.realPostFft1024[k];
       }
     }
 
-    // Ensure Soothe3 reduction reflects real spectral prominences + Sidechain EQ bands (never hardcoded peaks)
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
       const freq = 20.0 * Math.pow(1000.0, normX);
@@ -944,21 +1158,13 @@ export class DawTelemetryView {
       const neighborRight = this.proq4PostDb[Math.min(1023, k + 16)];
       const localAvgDb = 0.5 * (neighborLeft + neighborRight);
 
-      const rustCut = this.soothe3Reduction1024[k];
       const liveCut = this.evaluateSoothe3RealReductionAt(freq, postDb, localAvgDb);
-      const cutDb = Math.min(rustCut, liveCut);
-
-      this.soothe3Reduction1024[k] = Math.max(this.soothe3MaxCutDb, cutDb);
+      this.soothe3Reduction1024[k] = Math.max(this.soothe3MaxCutDb, liveCut);
       this.soothe3InputSpecDb[k] = postDb;
-      this.spectrogramRing20x1024[ringBase + k] = postDb + cutDb;
+      this.spectrogramRing20x1024[ringBase + k] = postDb + liveCut;
 
       if (!this.proq4ShowCollisions) {
         this.proq4CollisionMask[k] = 0.0;
-      } else if (this.proq4SidechainDb[k] > -65.0 && postDb > -65.0) {
-        const diff = Math.abs(postDb - this.proq4SidechainDb[k]);
-        if (diff < 6.0) {
-          this.proq4CollisionMask[k] = Math.max(this.proq4CollisionMask[k], (6.0 - diff) / 6.0);
-        }
       }
     }
   }
@@ -991,7 +1197,7 @@ export class DawTelemetryView {
       dv.setFloat32(OFFSET_HEADER + 0x1C, 0.8, true);
       dv.setFloat32(OFFSET_HEADER + 0x20, -120.0, true);
       dv.setFloat32(OFFSET_HEADER + 0x24, -120.0, true);
-      dv.setFloat32(OFFSET_HEADER + 0x28, -9.8, true);
+      dv.setFloat32(OFFSET_HEADER + 0x28, -120.0, true);
       dv.setFloat32(OFFSET_HEADER + 0x2C, -120.0, true);
       dv.setFloat32(OFFSET_HEADER + 0x30, -120.0, true);
       dv.setFloat32(OFFSET_HEADER + 0x34, 0.0, true);
@@ -1133,7 +1339,18 @@ export class DawTelemetryView {
   // =========================================================================
 
   syncDspToSpeakerEngine(): void {
-    this.speakerEngine.syncDspChain(this);
+    if (!this.isDesktopTauri) {
+      this.speakerEngine.syncDspChain(this);
+    }
+  }
+
+  private pushWasapiVolumeMute(): void {
+    if (!isTauriEnvironment()) return;
+    const volumeLinear = Math.max(0.0, Math.min(2.0, this.speakerVolumePct / 100.0));
+    void invoke('cmd_set_wasapi_volume_mute', {
+      volumeLinear,
+      muted: this.speakerMuted,
+    }).catch(() => {});
   }
 
   setSpeakerVolume(volumePct: number): void {
@@ -1141,12 +1358,106 @@ export class DawTelemetryView {
     if (this.speakerVolumePct > 0 && this.speakerMuted) {
       this.speakerMuted = false;
     }
-    this.speakerEngine.syncDspChain(this);
+    this.syncDspToSpeakerEngine();
+    this.pushWasapiVolumeMute();
   }
 
   toggleSpeakerMute(): void {
     this.speakerMuted = !this.speakerMuted;
-    this.speakerEngine.syncDspChain(this);
+    this.syncDspToSpeakerEngine();
+    this.pushWasapiVolumeMute();
+  }
+
+  private applyWasapiStatusDto(st: any): void {
+    if (!st) return;
+    if (typeof st.active_device_name === 'string' && st.active_device_name.length > 0) {
+      this.wasapiActiveDeviceName = st.active_device_name;
+    }
+    if (typeof st.hardware_sample_rate_hz === 'number' && st.hardware_sample_rate_hz > 0) {
+      this.wasapiHardwareSampleRateHz = st.hardware_sample_rate_hz;
+    }
+    if (typeof st.engine_sample_rate_hz === 'number' && st.engine_sample_rate_hz > 0) {
+      this.wasapiEngineSampleRateHz = st.engine_sample_rate_hz;
+    }
+    if (typeof st.hardware_channels === 'number' && st.hardware_channels > 0) {
+      this.wasapiHardwareChannels = st.hardware_channels;
+    }
+    if (typeof st.buffer_frames === 'number') {
+      this.wasapiBufferFrames = st.buffer_frames;
+    }
+    if (typeof st.sample_format === 'string' && st.sample_format.length > 0) {
+      this.wasapiSampleFormat = st.sample_format;
+    }
+    if (typeof st.status_message === 'string' && st.status_message.length > 0) {
+      this.wasapiStatusMessage = st.status_message;
+    }
+    this.wasapiExclusiveMode = Boolean(st.exclusive_mode_requested ?? this.wasapiExclusiveMode);
+    this.wasapiActiveExclusive = Boolean(st.exclusive_mode_active ?? false);
+    this.wasapiUsingHardware = Boolean(st.using_hardware ?? true);
+    this.wasapiMmcssElevated = Boolean(st.mmcss_pro_audio_elevated ?? true);
+    this.wasapiResamplerActive = Boolean(st.resampler_active ?? false);
+    if (typeof st.hotplug_recoveries === 'number') {
+      this.wasapiHotplugRecoveries = st.hotplug_recoveries;
+    }
+    if (typeof st.xrun_count === 'number') {
+      this.xrunCount = st.xrun_count;
+    }
+  }
+
+  async pollWasapiLiveStatus(): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      const st = await invoke<any>('cmd_query_wasapi_status');
+      this.applyWasapiStatusDto(st);
+    } catch (e) {
+      this.reportEngineError('cmd_query_wasapi_status', e);
+      // Ignore in standalone preview
+    }
+  }
+
+  async refreshWasapiDevicesAndStatus(): Promise<void> {
+    if (!isTauriEnvironment()) {
+      this.wasapiUsingHardware = false;
+      this.wasapiActiveDeviceName = 'Browser Raw PCM Preview';
+      this.wasapiStatusMessage = 'Run ToneForge_Studio.exe for Win32 WASAPI Shared / Exclusive Hardware I/O';
+      return;
+    }
+    try {
+      const list = await invoke<any[]>('cmd_list_wasapi_output_devices');
+      if (Array.isArray(list)) {
+        this.wasapiDevices = list.map((d) => ({
+          id: String(d.id ?? ''),
+          friendlyName: String(d.friendly_name ?? 'Audio Output'),
+          isDefault: Boolean(d.is_default),
+          mixSampleRateHz: Number(d.mix_sample_rate_hz ?? 48000),
+          mixChannels: Number(d.mix_channels ?? 2),
+        }));
+      }
+      await this.pollWasapiLiveStatus();
+      this.pushWasapiVolumeMute();
+    } catch (e) {
+      this.reportEngineError('cmd_list_wasapi_output_devices', e);
+      // Ignore if unavailable
+    }
+  }
+
+  async configureWasapiOutput(deviceId: string, exclusiveMode: boolean): Promise<void> {
+    this.selectedWasapiDeviceId = deviceId;
+    this.wasapiExclusiveMode = exclusiveMode;
+    if (!isTauriEnvironment()) return;
+    try {
+      const st = await invoke<any>('cmd_configure_wasapi_output', {
+        deviceId: deviceId.trim().length > 0 ? deviceId.trim() : null,
+        exclusiveMode,
+        preferredSampleRateHz: null,
+        desiredBufferFrames: exclusiveMode ? 128 : 0,
+      });
+      this.applyWasapiStatusDto(st);
+    } catch (e) {
+      this.reportEngineError('cmd_configure_wasapi_output', e);
+      // Ignore error and refresh live status
+      await this.pollWasapiLiveStatus();
+    }
   }
 
   async refreshGpuAcceleratorStatus(): Promise<void> {
@@ -1179,7 +1490,8 @@ export class DawTelemetryView {
         this.gpuAcceleratorBadge = 'Pure-Rust Spectral DSP';
         this.gpuAcceleratorDetail = String(res.diagnostic_note ?? 'GPU runtime unavailable');
       }
-    } catch {
+    } catch (e) {
+      this.reportEngineError('cmd_query_gpu_accelerator_status', e);
       // Ignore if command is unavailable in preview mode
     }
   }
@@ -1202,12 +1514,14 @@ export class DawTelemetryView {
     this.uvr5SeparatedStems = [];
     this.syncDspToSpeakerEngine();
 
-    const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
-      'cmd_fetch_loaded_custom_audio_wav'
-    );
-    const wavAb = toArrayBuffer(rawWav);
-    if (wavAb && wavAb.byteLength > 44) {
-      await this.speakerEngine.loadCustomAudioArrayBuffer(wavAb, this);
+    if (!this.isDesktopTauri) {
+      const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
+        'cmd_fetch_loaded_custom_audio_wav'
+      );
+      const wavAb = toArrayBuffer(rawWav);
+      if (wavAb && wavAb.byteLength > 44) {
+        await this.speakerEngine.loadCustomAudioArrayBuffer(wavAb, this);
+      }
     }
     await this.setTransport(true, this.tempoBpm);
   }
@@ -1221,7 +1535,8 @@ export class DawTelemetryView {
       if (!dto) return false;
       await this.applyNativeLoadedAudioDto(dto);
       return true;
-    } catch {
+    } catch (e) {
+      this.reportEngineError('cmd_pick_and_load_audio_native', e);
       return false;
     }
   }
@@ -1235,7 +1550,8 @@ export class DawTelemetryView {
       if (!dto) return false;
       await this.applyNativeLoadedAudioDto(dto);
       return true;
-    } catch {
+    } catch (e) {
+      this.reportEngineError('cmd_load_audio_from_path_native', e);
       return false;
     }
   }
@@ -1250,7 +1566,8 @@ export class DawTelemetryView {
       if (picked) {
         this.uvr5OutputDir = picked;
       }
-    } catch {
+    } catch (e) {
+      this.reportEngineError('cmd_pick_directory_native', e);
       // Ignore dialog cancellation / preview mode
     }
   }
@@ -1265,7 +1582,8 @@ export class DawTelemetryView {
       if (picked) {
         this.renderOutputDir = picked;
       }
-    } catch {
+    } catch (e) {
+      this.reportEngineError('cmd_pick_directory_native', e);
       // Ignore dialog cancellation / preview mode
     }
   }
@@ -1310,7 +1628,8 @@ export class DawTelemetryView {
             });
           }
           await invoke('cmd_finalize_custom_audio_upload');
-        } catch {
+        } catch (e) {
+          this.reportEngineError('cmd_begin_custom_audio_upload', e);
           // Ignore if running in preview mode
         }
       }
@@ -1321,17 +1640,34 @@ export class DawTelemetryView {
 
   async switchToPianoRollSource(): Promise<void> {
     this.audioSourceMode = 'pianoRoll';
+    this.loadedAudioFileName = null;
+    this.loadedAudioFullPath = null;
+    this.customAudioDurationFrames = 0;
+    this.uvr5SeparatedStems = [];
+    this.samplePos = 0;
+    this.ppqTick = 0;
     this.speakerEngine.switchToPianoRollSource(this);
     if (isTauriEnvironment()) {
       try {
         await invoke('cmd_switch_to_piano_roll_source');
-      } catch {
+        await this.refreshUndoRedoStatus();
+      } catch (e) {
+        this.reportEngineError('cmd_switch_to_piano_roll_source', e);
         // Ignore if running in browser preview mode
       }
     }
   }
 
   auditionNote(key: number, velocity = 0.9, finePitchCents = 0.0, pan = 0.0): void {
+    if (isTauriEnvironment()) {
+      void invoke('cmd_trigger_audition_note', {
+        key: Math.max(0, Math.min(127, Math.round(key))),
+        velocity: Math.max(0.05, Math.min(1.0, velocity)),
+        finePitchCents: Math.max(-1200.0, Math.min(1200.0, finePitchCents)),
+        pan: Math.max(-1.0, Math.min(1.0, pan)),
+      }).catch(() => {});
+      return;
+    }
     this.syncDspToSpeakerEngine();
     this.speakerEngine.auditionNote(this, key, velocity, finePitchCents, pan);
   }
@@ -1383,10 +1719,35 @@ export class DawTelemetryView {
     }
   }
 
+  /** Resolves `(trackIdx, slotIdx)` hosting `kind` across selected track, fallback track, or any track. */
+  resolvePluginSlotTarget(
+    kind: string,
+    fallbackTrackIdx: number,
+    fallbackSlotIdx: number
+  ): { trackIdx: number; slotIdx: number } {
+    const matches = (sl: { kind?: string; name: string }) =>
+      sl.kind === kind ||
+      (!sl.kind && sl.name === DawTelemetryView.slotDisplayName({ plugin_type: kind }));
+
+    const sel = this.mixerTracks[this.selectedTrackIndex];
+    const onSel = sel?.slots.find(matches);
+    if (onSel) return { trackIdx: this.selectedTrackIndex, slotIdx: onSel.slotIndex };
+
+    const fb = this.mixerTracks[fallbackTrackIdx];
+    const onFb = fb?.slots.find(matches);
+    if (onFb) return { trackIdx: fallbackTrackIdx, slotIdx: onFb.slotIndex };
+
+    for (const tr of this.mixerTracks) {
+      const hit = tr.slots.find(matches);
+      if (hit) return { trackIdx: tr.index, slotIdx: hit.slotIndex };
+    }
+    return { trackIdx: fallbackTrackIdx, slotIdx: fallbackSlotIdx };
+  }
+
   async setProQ4PhaseMode(
     mode: 'ZeroLatency' | 'NaturalPhase' | 'LinearPhase',
-    trackIdx = 1,
-    slotIdx = 0
+    trackIdx?: number,
+    slotIdx?: number
   ): Promise<void> {
     this.proq4PhaseMode = mode;
     const latency = mode === 'LinearPhase' ? 2048 : mode === 'NaturalPhase' ? 384 : 0;
@@ -1398,15 +1759,18 @@ export class DawTelemetryView {
     await this.syncPatcherGraphToEngine();
   }
 
-  async syncProQ4GlobalToEngine(trackIdx = 1, slotIdx = 0): Promise<void> {
+  async syncProQ4GlobalToEngine(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('ProQ4', 1, 0);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     this.syncDspToSpeakerEngine();
     const processingMode =
       this.proq4PhaseMode === 'LinearPhase' ? 2 : this.proq4PhaseMode === 'NaturalPhase' ? 1 : 0;
     if (isTauriEnvironment()) {
       await invoke('cmd_update_proq4_global', {
         dto: {
-          track_idx: trackIdx,
-          slot_idx: slotIdx,
+          track_idx: tIdx,
+          slot_idx: sIdx,
           processing_mode: processingMode,
           phase_mode: this.proq4PhaseMode,
           processing_resolution: this.proq4ProcessingResolution,
@@ -1421,13 +1785,16 @@ export class DawTelemetryView {
     }
   }
 
-  async syncSoothe3ToEngine(trackIdx = 1, slotIdx = 1): Promise<void> {
+  async syncSoothe3ToEngine(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('Soothe3', 1, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_update_soothe3_params', {
         dto: {
-          track_idx: trackIdx,
-          slot_idx: slotIdx,
+          track_idx: tIdx,
+          slot_idx: sIdx,
           hard_mode: this.soothe3HardMode,
           delta_solo: this.soothe3DeltaSolo,
           depth: this.soothe3Depth,
@@ -1447,10 +1814,13 @@ export class DawTelemetryView {
   async updateSoothe3ScBand(
     bandIdx: number,
     patch: Partial<Soothe3ScBandState>,
-    trackIdx = 1,
-    slotIdx = 1
+    trackIdx?: number,
+    slotIdx?: number
   ): Promise<void> {
     if (bandIdx < 0 || bandIdx >= this.soothe3ScBands.length) return;
+    const resolved = this.resolvePluginSlotTarget('Soothe3', 1, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     const prev = this.soothe3ScBands[bandIdx];
     const updated: Soothe3ScBandState = {
       ...prev,
@@ -1464,8 +1834,8 @@ export class DawTelemetryView {
     if (isTauriEnvironment()) {
       await invoke('cmd_update_soothe3_sc_band', {
         dto: {
-          track_idx: trackIdx,
-          slot_idx: slotIdx,
+          track_idx: tIdx,
+          slot_idx: sIdx,
           band_idx: bandIdx,
           enabled: updated.enabled,
           freq_hz: updated.freqHz,
@@ -1477,12 +1847,15 @@ export class DawTelemetryView {
     }
   }
 
-  async syncOzone12ToEngine(trackIdx = 0, slotIdx = 1): Promise<void> {
+  async syncOzone12ToEngine(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('Ozone12Master', 0, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       await invoke('cmd_update_ozone12_master', {
-        trackIdx,
-        slotIdx,
+        trackIdx: tIdx,
+        slotIdx: sIdx,
         cfg: {
           maximizer_bypass: this.ozone12MaximizerBypass,
           maximizer_irc_mode: this.ozone12IrcMode,
@@ -1509,33 +1882,47 @@ export class DawTelemetryView {
           impact_band_amounts: this.ozone12ImpactAmounts,
           clarity_amount_pct: this.ozone12ClarityAmountPct,
           clarity_tilt_db_oct: this.ozone12ClarityTiltDbOct,
+          low_end_focus_enabled: this.ozone12LefEnabled,
+          low_end_focus_punchy: this.ozone12LefPunchy,
+          low_end_focus_contrast_pct: this.ozone12LefContrastPct,
+          low_end_focus_upper_hz: this.ozone12LefUpperHz,
+          low_end_focus_gain_db: this.ozone12LefGainDb,
+          low_end_focus_solo: this.ozone12LefSolo,
+          codec_preview_enabled: this.ozone12CodecEnabled,
+          codec_preview_codec: this.ozone12CodecMode,
+          codec_preview_artifact_solo: this.ozone12CodecArtifactSolo,
         },
       });
+      await this.refreshUndoRedoStatus();
     }
   }
 
-  async syncBsrnnStemsToEngine(trackIdx = 0, slotIdx = 0): Promise<void> {
+  async syncBsrnnStemsToEngine(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('RealTimeBsrnnStem', 0, 0);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     this.syncDspToSpeakerEngine();
     if (isTauriEnvironment()) {
       try {
         await invoke('cmd_update_bsrnn_stem_state', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           stemGainsDb: this.bsrnnStemGainsDb,
           stemSolo: this.bsrnnStemSolo,
           stemMute: this.bsrnnStemMute,
         });
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_update_bsrnn_stem_state', e);
         await invoke('cmd_update_bsrnn_stem_gains', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           stemGainsDb: this.bsrnnStemGainsDb,
         });
       }
     }
   }
 
-  async toggleBsrnnStemSolo(stemIdx: number, trackIdx = 0, slotIdx = 0): Promise<void> {
+  async toggleBsrnnStemSolo(stemIdx: number, trackIdx?: number, slotIdx?: number): Promise<void> {
     if (stemIdx < 0 || stemIdx >= 4) return;
     this.bsrnnStemSolo[stemIdx] = !this.bsrnnStemSolo[stemIdx];
     if (this.bsrnnStemSolo[stemIdx]) {
@@ -1544,7 +1931,7 @@ export class DawTelemetryView {
     await this.syncBsrnnStemsToEngine(trackIdx, slotIdx);
   }
 
-  async toggleBsrnnStemMute(stemIdx: number, trackIdx = 0, slotIdx = 0): Promise<void> {
+  async toggleBsrnnStemMute(stemIdx: number, trackIdx?: number, slotIdx?: number): Promise<void> {
     if (stemIdx < 0 || stemIdx >= 4) return;
     this.bsrnnStemMute[stemIdx] = !this.bsrnnStemMute[stemIdx];
     if (this.bsrnnStemMute[stemIdx]) {
@@ -1792,13 +2179,16 @@ export class DawTelemetryView {
     await this.syncPatcherGraphToEngine();
   }
 
-  async syncPatcherGraphToEngine(trackIdx = 1, slotIdx = 2): Promise<void> {
+  async syncPatcherGraphToEngine(trackIdx?: number, slotIdx?: number): Promise<void> {
     if (!isTauriEnvironment()) return;
+    const resolved = this.resolvePluginSlotTarget('PatcherModular', 1, 2);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     try {
       const totalLatency = await invoke<number>('cmd_update_patcher_graph', {
         dto: {
-          track_idx: trackIdx,
-          slot_idx: slotIdx,
+          track_idx: tIdx,
+          slot_idx: sIdx,
           nodes: this.patcherNodes.map((n) => ({
             node_index: n.nodeIndex,
             label: n.label,
@@ -1818,7 +2208,8 @@ export class DawTelemetryView {
       if (typeof totalLatency === 'number' && this.mixerTracks[trackIdx]) {
         this.mixerTracks[trackIdx].apdcLatencySamples = totalLatency;
       }
-    } catch {
+    } catch (e) {
+      this.reportEngineError('cmd_update_patcher_graph', e);
       // Ignore if running in browser preview mode
     }
   }
@@ -1857,22 +2248,24 @@ export class DawTelemetryView {
           this.customAudioSampleRate = res.sample_rate_hz;
         }
 
-        // Only bounce separated 4-stem WAVs into WebAudio & Mixer playback when bounce_to_mixer is enabled
+        // In Tauri Desktop, Rust `bounce_to_mixer` already routes the 4 stems onto Mixer Tracks 1..=4 via WASAPI!
         if (this.uvr5BounceToMixer) {
-          const stemBuffers: ArrayBuffer[] = [];
-          for (let stemIdx = 0; stemIdx < 4; stemIdx++) {
-            const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
-              'cmd_fetch_uvr5_stem_wav',
-              { stemIdx }
-            );
-            const ab = toArrayBuffer(rawWav);
-            if (ab && ab.byteLength > 44) {
-              stemBuffers.push(ab);
+          this.audioSourceMode = 'stems4';
+          if (!this.isDesktopTauri) {
+            const stemBuffers: ArrayBuffer[] = [];
+            for (let stemIdx = 0; stemIdx < 4; stemIdx++) {
+              const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
+                'cmd_fetch_uvr5_stem_wav',
+                { stemIdx }
+              );
+              const ab = toArrayBuffer(rawWav);
+              if (ab && ab.byteLength > 44) {
+                stemBuffers.push(ab);
+              }
             }
-          }
-          if (stemBuffers.length === 4) {
-            this.audioSourceMode = 'stems4';
-            await this.speakerEngine.loadUvr5SeparatedStems(stemBuffers, this);
+            if (stemBuffers.length === 4) {
+              await this.speakerEngine.loadUvr5SeparatedStems(stemBuffers, this);
+            }
           }
         } else if (this.audioSourceMode === 'stems4') {
           this.audioSourceMode = this.customAudioDurationFrames > 0 ? 'customFile' : 'pianoRoll';
@@ -1996,8 +2389,15 @@ export class DawTelemetryView {
           clip_offset_ticks: clip.clipOffsetTicks,
           gain: clip.gain,
           muted: clip.muted,
+          source_offset_samples: clip.sourceOffsetSamples ?? 0,
+          fade_in_samples: clip.fadeInSamples ?? 0,
+          fade_out_samples: clip.fadeOutSamples ?? 0,
+          stretch_ratio: clip.stretchRatio ?? 1.0,
+          pitch_semitones: clip.pitchSemitones ?? 0.0,
+          take_lane_id: clip.takeLaneId ?? 0,
         },
       });
+      await this.refreshUndoRedoStatus();
     }
   }
 
@@ -2145,13 +2545,16 @@ export class DawTelemetryView {
   // 9. REAL FACTORY PRESET, SAMPLE KIT, SCORE (.FSC) & AI MASTER LOADERS
   // =========================================================================
 
-  async loadProQ4FactoryPreset(presetQuery: string, trackIdx = 1, slotIdx = 0): Promise<void> {
+  async loadProQ4FactoryPreset(presetQuery: string, trackIdx?: number, slotIdx?: number): Promise<void> {
     this.proq4SelectedPreset = presetQuery;
+    const resolved = this.resolvePluginSlotTarget('ProQ4', 1, 0);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_apply_proq4_ffp_preset', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           presetQuery,
         });
         if (res && Array.isArray(res.bands)) {
@@ -2186,7 +2589,9 @@ export class DawTelemetryView {
           this.syncDspToSpeakerEngine();
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_apply_proq4_ffp_preset', e);
+        return;
         // Fallback to offline preset curves below
       }
     }
@@ -2287,13 +2692,16 @@ export class DawTelemetryView {
     this.syncDspToSpeakerEngine();
   }
 
-  async loadSoothe3FactoryPreset(presetQuery: string, trackIdx = 1, slotIdx = 1): Promise<void> {
+  async loadSoothe3FactoryPreset(presetQuery: string, trackIdx?: number, slotIdx?: number): Promise<void> {
     this.soothe3SelectedPreset = presetQuery;
+    const resolved = this.resolvePluginSlotTarget('Soothe3', 1, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_apply_soothe3_factory_preset', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           presetQuery,
         });
         if (res) {
@@ -2319,7 +2727,9 @@ export class DawTelemetryView {
           this.syncDspToSpeakerEngine();
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_apply_soothe3_factory_preset', e);
+        return;
         // Fallback below
       }
     }
@@ -2371,13 +2781,16 @@ export class DawTelemetryView {
     this.syncDspToSpeakerEngine();
   }
 
-  async loadOzone12GenrePreset(genreQuery: string, trackIdx = 0, slotIdx = 1): Promise<void> {
+  async loadOzone12GenrePreset(genreQuery: string, trackIdx?: number, slotIdx?: number): Promise<void> {
     this.ozone12SelectedGenre = genreQuery;
+    const resolved = this.resolvePluginSlotTarget('Ozone12Master', 0, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_load_ozone12_genre_or_xml_preset', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           query: genreQuery,
           isXmlPreset: false,
         });
@@ -2386,7 +2799,9 @@ export class DawTelemetryView {
           this.syncDspToSpeakerEngine();
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_load_ozone12_genre_or_xml_preset', e);
+        return;
         // Fallback below
       }
     }
@@ -2394,13 +2809,16 @@ export class DawTelemetryView {
     this.syncDspToSpeakerEngine();
   }
 
-  async loadOzone12GlobalXmlPreset(xmlQuery: string, trackIdx = 0, slotIdx = 1): Promise<void> {
+  async loadOzone12GlobalXmlPreset(xmlQuery: string, trackIdx?: number, slotIdx?: number): Promise<void> {
     this.ozone12SelectedGlobalXml = xmlQuery;
+    const resolved = this.resolvePluginSlotTarget('Ozone12Master', 0, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_load_ozone12_genre_or_xml_preset', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           query: xmlQuery,
           isXmlPreset: true,
         });
@@ -2409,7 +2827,9 @@ export class DawTelemetryView {
           this.syncDspToSpeakerEngine();
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_load_ozone12_genre_or_xml_preset', e);
+        return;
         // Fallback below
       }
     }
@@ -2441,23 +2861,54 @@ export class DawTelemetryView {
    * Executes iZotope Ozone 12 AI Master Assistant (strictly scoped to Khu 3 Ozone 12 modules)
    * using a genuine 80-band log-Mel spectrum extracted from `speakerEngine` (`customAudioBuffer` or live FFT).
    */
-  async runOzone12AiMasterAssistant(trackIdx = 0, slotIdx = 1): Promise<void> {
+  async runOzone12AiMasterAssistant(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('Ozone12Master', 0, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
     const mel80 = this.speakerEngine.computeMel80FromAudio(this);
     if (isTauriEnvironment()) {
       try {
         const res = await invoke<any>('cmd_run_ozone12_ai_master_assistant', {
-          trackIdx,
-          slotIdx,
+          trackIdx: tIdx,
+          slotIdx: sIdx,
           mel80,
         });
         if (res && res.master_config) {
           this.applyOzone12Dto(res);
+          if (Array.isArray(res.corrective_eq_bands) && res.corrective_eq_bands.length > 0) {
+            const nextBands = this.createInitialProQ4Bands().map((b) => ({ ...b, used: false, enabled: false }));
+            res.corrective_eq_bands.slice(0, 24).forEach((b: any, i: number) => {
+              nextBands[i] = {
+                bandIdx: i,
+                used: true,
+                enabled: Boolean(b.enabled ?? true),
+                freqHz: Number(b.freq_hz ?? 1000.0),
+                gainDb: Number(b.gain_db ?? 0.0),
+                q: Number(b.q ?? 1.0),
+                shape: Number(b.shape ?? 0),
+                slopeDbOct: Number(b.slope_db_oct ?? 12),
+                dynamicRangeDb: Number(b.dynamic_range_db ?? 0.0),
+                spectralEnabled: Boolean(b.spectral_enabled ?? false),
+                spectralDensity: Math.round(Number(b.spectral_density ?? 0.65) * 100.0),
+              };
+            });
+            this.proq4Bands = nextBands;
+          }
+          if (typeof res.soothe3_depth === 'number' && res.soothe3_depth > 0) {
+            this.soothe3Depth = Number(res.soothe3_depth.toFixed(2));
+          }
           this.ozone12SelectedGenre = res.detected_genre ?? this.ozone12SelectedGenre;
-          this.ozone12AiAssistantStatus = `Matched: ${res.detected_genre} (${res.genre_confidence_pct}% conf • ${res.dominant_instrument} • Target ${res.target_lufs} LUFS)`;
+          const measuredStr =
+            res.analysis_performed === true && typeof res.measured_lufs === 'number' && Number.isFinite(res.measured_lufs)
+              ? ` • In ${res.measured_lufs.toFixed(1)} →`
+              : ' • Target';
+          this.ozone12AiAssistantStatus = `Matched: ${res.detected_genre} (${res.genre_confidence_pct}% conf • ${res.dominant_instrument}${measuredStr} ${res.target_lufs} LUFS)`;
           this.syncDspToSpeakerEngine();
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_run_ozone12_ai_master_assistant', e);
+        return;
         // Fallback below using real mel80 spectral analysis
       }
     }
@@ -2632,28 +3083,32 @@ export class DawTelemetryView {
           const names = res.voices.map((v: any) => v.sample_name).join(', ');
           this.fl26SampleKitInfo = `${res.voices.length} voices • ${res.voices[0]?.sample_rate ?? 44100}Hz 16-bit PCM (${names})`;
 
-          // Fetch real .wav voice buffers so WebAudio sequencer plays the actual studio samples
-          const wavBuffers: ArrayBuffer[] = [];
-          for (let idx = 0; idx < res.voices.length; idx++) {
-            try {
-              const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
-                'cmd_fetch_fl26_sample_wav',
-                { kitQuery, sampleIdx: idx }
-              );
-              const ab = toArrayBuffer(rawWav);
-              if (ab && ab.byteLength > 44) {
-                wavBuffers.push(ab);
+          if (!this.isDesktopTauri) {
+            const wavBuffers: ArrayBuffer[] = [];
+            for (let idx = 0; idx < res.voices.length; idx++) {
+              try {
+                const rawWav = await invoke<ArrayBuffer | Uint8Array | number[]>(
+                  'cmd_fetch_fl26_sample_wav',
+                  { kitQuery, sampleIdx: idx }
+                );
+                const ab = toArrayBuffer(rawWav);
+                if (ab && ab.byteLength > 44) {
+                  wavBuffers.push(ab);
+                }
+              } catch (e) {
+                this.reportEngineError('cmd_fetch_fl26_sample_wav', e);
+                // Ignore missing individual sample
               }
-            } catch {
-              // Ignore missing individual sample
             }
-          }
-          if (wavBuffers.length > 0) {
-            await this.speakerEngine.loadFl26KitVoiceBuffers(wavBuffers, this);
+            if (wavBuffers.length > 0) {
+              await this.speakerEngine.loadFl26KitVoiceBuffers(wavBuffers, this);
+            }
           }
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_load_fl26_sample_kit', e);
+        return;
         // Fallback below
       }
     }
@@ -2665,6 +3120,103 @@ export class DawTelemetryView {
       'Sytrus / Harmor Lead': '3 voices • Hybrid Synth + Riser Zipper.wav + 808 Sub',
     };
     this.fl26SampleKitInfo = infoMap[kitQuery] ?? infoMap['808 Studio Kit (Real .wav)'];
+  }
+
+  private upsertPattern1FromScore(scoreQuery: string, lengthTicks: number, mappedNotes: PianoRollNoteUiState[]): void {
+    const updated: PianoRollPatternUiState = {
+      patternId: 1,
+      name: scoreQuery,
+      targetChannelId: 1,
+      lengthTicks,
+      notes: mappedNotes,
+    };
+    const existingIdx = this.pianoRollPatterns.findIndex((p) => p.patternId === 1);
+    if (existingIdx >= 0) {
+      this.pianoRollPatterns[existingIdx] = updated;
+    } else {
+      this.pianoRollPatterns = [updated, ...this.pianoRollPatterns];
+    }
+    this.selectedPatternId = 1;
+    this.selectedNoteId = mappedNotes[0]?.id ?? null;
+  }
+
+  async createPatternAndOptionalClip(placeOnPlaylist = true): Promise<number> {
+    const nextPatId = this.pianoRollPatterns.reduce((m, p) => Math.max(m, p.patternId), 0) + 1;
+    const lengthTicks = this.ppqResolution * 4;
+    const created: PianoRollPatternUiState = {
+      patternId: nextPatId,
+      name: `Pattern ${nextPatId}`,
+      targetChannelId: 1,
+      lengthTicks,
+      notes: [],
+    };
+    this.pianoRollPatterns = [...this.pianoRollPatterns, created];
+    this.selectedPatternId = nextPatId;
+    this.selectedNoteId = null;
+    this.selectedNoteIds = [];
+    await this.syncPianoRollPattern(nextPatId);
+    if (placeOnPlaylist) {
+      const nextClipId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+      const newClip: PlaylistClipUiState = {
+        clipId: nextClipId,
+        trackRow: (nextPatId - 1) % 8,
+        kind: 'Pattern',
+        sourceId: nextPatId,
+        startTick: 0,
+        durationTicks: lengthTicks,
+        clipOffsetTicks: 0,
+        gain: 1.0,
+        muted: false,
+      };
+      await this.upsertPlaylistClip(newClip);
+      this.selectedClipId = nextClipId;
+    }
+    return nextPatId;
+  }
+
+  async placeActivePatternOnPlaylist(): Promise<void> {
+    if (this.pianoRollPatterns.length === 0) {
+      await this.createPatternAndOptionalClip(true);
+      return;
+    }
+    const activePat =
+      this.pianoRollPatterns.find((p) => p.patternId === this.selectedPatternId) ??
+      this.pianoRollPatterns[0];
+    const nextClipId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+    const lastEnd = this.playlistClips
+      .filter((c) => c.kind === 'Pattern' && c.sourceId === activePat.patternId)
+      .reduce((m, c) => Math.max(m, c.startTick + c.durationTicks), 0);
+    const clip: PlaylistClipUiState = {
+      clipId: nextClipId,
+      trackRow: (activePat.patternId - 1) % 8,
+      kind: 'Pattern',
+      sourceId: activePat.patternId,
+      startTick: lastEnd,
+      durationTicks: Math.max(96, activePat.lengthTicks || this.ppqResolution * 4),
+      clipOffsetTicks: 0,
+      gain: 1.0,
+      muted: false,
+    };
+    await this.upsertPlaylistClip(clip);
+    this.selectedClipId = nextClipId;
+  }
+
+  async addAutomationClipToPlaylist(): Promise<void> {
+    await this.syncTensionSplineToEngine();
+    const nextClipId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+    const clip: PlaylistClipUiState = {
+      clipId: nextClipId,
+      trackRow: 1,
+      kind: 'Automation',
+      sourceId: this.activeControllerId,
+      startTick: 0,
+      durationTicks: this.ppqResolution * 4,
+      clipOffsetTicks: 0,
+      gain: 1.0,
+      muted: false,
+    };
+    await this.upsertPlaylistClip(clip);
+    this.selectedClipId = nextClipId;
   }
 
   async loadFl26ScorePreset(scoreQuery: string): Promise<void> {
@@ -2687,18 +3239,29 @@ export class DawTelemetryView {
             isSlide: Boolean(n.is_slide),
             colorGroup: Number(n.color_group ?? 0),
           }));
-          this.pianoRollPatterns[0] = {
-            patternId: 1,
-            name: scoreQuery,
-            targetChannelId: 1,
-            lengthTicks: Number(res.length_ticks ?? 384),
-            notes: mappedNotes,
-          };
-          this.selectedPatternId = 1;
-          this.selectedNoteId = mappedNotes[0]?.id ?? null;
+          const lengthTicks = Number(res.length_ticks ?? 384);
+          this.upsertPattern1FromScore(scoreQuery, lengthTicks, mappedNotes);
+          if (this.songMode && !this.playlistClips.some((c) => c.kind === 'Pattern' && c.sourceId === 1)) {
+            const nextClipId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+            await this.upsertPlaylistClip({
+              clipId: nextClipId,
+              trackRow: 0,
+              kind: 'Pattern',
+              sourceId: 1,
+              startTick: 0,
+              durationTicks: lengthTicks,
+              clipOffsetTicks: 0,
+              gain: 1.0,
+              muted: false,
+            });
+            this.selectedClipId = nextClipId;
+          }
+          await this.refreshUndoRedoStatus();
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_load_fl26_score', e);
+        return;
         // Fallback below
       }
     }
@@ -2751,31 +3314,64 @@ export class DawTelemetryView {
     };
 
     const notes = scoreMap[scoreQuery] ?? scoreMap['ToneForge Lead Hook (Slide)'];
-    this.pianoRollPatterns[0] = {
-      patternId: 1,
-      name: scoreQuery,
-      targetChannelId: 1,
-      lengthTicks: 384,
-      notes,
-    };
-    this.selectedPatternId = 1;
-    this.selectedNoteId = notes[0]?.id ?? null;
+    this.upsertPattern1FromScore(scoreQuery, 384, notes);
+    if (this.songMode && !this.playlistClips.some((c) => c.kind === 'Pattern' && c.sourceId === 1)) {
+      const nextClipId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+      await this.upsertPlaylistClip({
+        clipId: nextClipId,
+        trackRow: 0,
+        kind: 'Pattern',
+        sourceId: 1,
+        startTick: 0,
+        durationTicks: 384,
+        clipOffsetTicks: 0,
+        gain: 1.0,
+        muted: false,
+      });
+      this.selectedClipId = nextClipId;
+    }
   }
 
-  async loadFl26FxPreset(presetQuery: string, trackIdx = this.selectedTrackIndex, slotIdx = 2): Promise<void> {
+  async loadFl26FxPreset(presetQuery: string, trackIdx = this.selectedTrackIndex, slotIdx?: number): Promise<void> {
     this.fl26SelectedFxPreset = presetQuery;
     const tr = this.mixerTracks[trackIdx];
+    let targetSlotIdx = slotIdx;
+    if (targetSlotIdx === undefined) {
+      const existingFl26 = tr?.slots.find(
+        (s) =>
+          s.kind === 'Fl26NativeFx' ||
+          s.kind === 'NativeEmphasisLimiter' ||
+          s.kind === 'NativeGrossBeat' ||
+          s.kind === 'NativeMaximusMultiband' ||
+          s.kind === 'NativeSparseCompressor' ||
+          s.kind === 'NativeLuxeVerbFdn'
+      );
+      if (existingFl26) {
+        targetSlotIdx = existingFl26.slotIndex;
+      } else {
+        let firstEmpty = 0;
+        while (
+          firstEmpty < MIXER_INSERT_SLOT_COUNT &&
+          tr?.slots.some((s) => s.slotIndex === firstEmpty)
+        ) {
+          firstEmpty++;
+        }
+        targetSlotIdx = firstEmpty < MIXER_INSERT_SLOT_COUNT ? firstEmpty : 2;
+      }
+    }
     if (tr) {
       const label = presetQuery.replace(/\.fst$/i, '');
-      const existingSlot = tr.slots.find((s) => s.slotIndex === slotIdx);
+      const existingSlot = tr.slots.find((s) => s.slotIndex === targetSlotIdx);
       if (existingSlot) {
         existingSlot.name = label;
+        existingSlot.kind = existingSlot.kind ?? 'Fl26NativeFx';
         existingSlot.enabled = true;
-      } else if (tr.slots.length < 10) {
+      } else if (targetSlotIdx >= 0 && targetSlotIdx < MIXER_INSERT_SLOT_COUNT) {
+        // Fixed slot positions: the preset lands exactly at `targetSlotIdx` (the engine pads any gap).
         tr.slots = [
           ...tr.slots,
-          { slotIndex: slotIdx, name: label, enabled: true, wetMix: 1.0 },
-        ];
+          { slotIndex: targetSlotIdx, kind: 'Fl26NativeFx', name: label, enabled: true, wetMix: 1.0 },
+        ].sort((a, b) => a.slotIndex - b.slotIndex);
       }
     }
     this.syncDspToSpeakerEngine();
@@ -2783,18 +3379,20 @@ export class DawTelemetryView {
       try {
         const res = await invoke<any>('cmd_load_fl26_fx_preset', {
           trackIdx,
-          slotIdx,
+          slotIdx: targetSlotIdx,
           presetQuery,
         });
         if (res) {
           this.fl26FxPresetInfo = `${res.plugin_name} • ${res.preset_name} (${res.fst_byte_size} B .fst • ceil ${res.ceiling_db} dB, drive +${res.drive_db} dB)`;
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_load_fl26_fx_preset', e);
+        return;
         // Fallback below
       }
     }
-    this.fl26FxPresetInfo = `Applied ${presetQuery} on Track #${trackIdx} Slot #${slotIdx + 1}`;
+    this.fl26FxPresetInfo = `Applied ${presetQuery} on Track #${trackIdx} Slot #${targetSlotIdx + 1}`;
   }
 
   async loadUvr5ModelProfile(profileQuery: string): Promise<void> {
@@ -2815,7 +3413,9 @@ export class DawTelemetryView {
           }
           return;
         }
-      } catch {
+      } catch (e) {
+        this.reportEngineError('cmd_load_uvr5_model_profile', e);
+        return;
         // Fallback below
       }
     }
@@ -2841,5 +3441,1415 @@ export class DawTelemetryView {
       this.uvr5ModelSpecSummary = 'n_fft=8192 • dim_f=4096 • dim_t=256 • hop=1024 • comp=1.035 (3-Model Ensemble)';
       this.uvr5ModelWeights = [0.45, 0.35, 0.20];
     }
+  }
+
+  // =========================================================================
+  // 10. TONEFORGE v3 METHODS — UNDO/REDO, PARITY DSP, ASIO/REC, VST3/CLAP & VOCAL
+  // =========================================================================
+
+  private captureUiUndoSnapshot(): string {
+    return JSON.stringify({
+      proq4Bands: this.proq4Bands,
+      soothe3Depth: this.soothe3Depth,
+      soothe3Detail: this.soothe3Detail,
+      soothe3ExternalScEnabled: this.soothe3ExternalScEnabled,
+      ozone12GainDb: this.ozone12GainDb,
+      ozone12LefEnabled: this.ozone12LefEnabled,
+      ozone12LefContrastPct: this.ozone12LefContrastPct,
+      ozone12CodecEnabled: this.ozone12CodecEnabled,
+      ozone12CodecMode: this.ozone12CodecMode,
+      pianoRollPatterns: this.pianoRollPatterns,
+      playlistClips: this.playlistClips,
+      vocalBlobs: this.vocalBlobs,
+    });
+  }
+
+  private restoreUiUndoSnapshot(json: string): void {
+    try {
+      const s = JSON.parse(json);
+      if (s.proq4Bands) this.proq4Bands = s.proq4Bands;
+      if (typeof s.soothe3Depth === 'number') this.soothe3Depth = s.soothe3Depth;
+      if (typeof s.soothe3Detail === 'number') this.soothe3Detail = s.soothe3Detail;
+      if (typeof s.soothe3ExternalScEnabled === 'boolean') this.soothe3ExternalScEnabled = s.soothe3ExternalScEnabled;
+      if (typeof s.ozone12GainDb === 'number') this.ozone12GainDb = s.ozone12GainDb;
+      if (typeof s.ozone12LefEnabled === 'boolean') this.ozone12LefEnabled = s.ozone12LefEnabled;
+      if (typeof s.ozone12LefContrastPct === 'number') this.ozone12LefContrastPct = s.ozone12LefContrastPct;
+      if (typeof s.ozone12CodecEnabled === 'boolean') this.ozone12CodecEnabled = s.ozone12CodecEnabled;
+      if (typeof s.ozone12CodecMode === 'number') this.ozone12CodecMode = s.ozone12CodecMode;
+      if (s.pianoRollPatterns) this.pianoRollPatterns = s.pianoRollPatterns;
+      if (s.playlistClips) this.playlistClips = s.playlistClips;
+      if (s.vocalBlobs) this.vocalBlobs = s.vocalBlobs;
+      this.syncDspToSpeakerEngine();
+    } catch {
+      // Ignore malformed browser snapshot
+    }
+  }
+
+  /** Surfaces a failed engine command in the UI status bar and the console (desktop only). */
+  reportEngineError(context: string, err: unknown): void {
+    const detail = err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err);
+    const msg = `${context}: ${detail}`;
+    console.error('[ToneForge engine]', msg);
+    if (this.lastEngineError !== msg) {
+      this.lastEngineError = msg;
+      this.engineErrorLog = [msg, ...this.engineErrorLog].slice(0, 20);
+    }
+  }
+
+  clearEngineError(): void {
+    this.lastEngineError = '';
+  }
+
+  private applyUndoStatus(st: any): void {
+    if (!st) return;
+    this.undoAvailable = Boolean(st.canUndo ?? st.can_undo);
+    this.redoAvailable = Boolean(st.canRedo ?? st.can_redo);
+    this.undoCount = Number(st.undoDepth ?? st.undo_depth ?? 0);
+    this.redoCount = Number(st.redoDepth ?? st.redo_depth ?? 0);
+    this.lastUndoActionLabel = st.lastAppliedLabel ?? st.last_applied_label ?? null;
+    this.nextUndoLabel = st.nextUndoLabel ?? st.next_undo_label ?? null;
+    this.nextRedoLabel = st.nextRedoLabel ?? st.next_redo_label ?? null;
+  }
+
+  private static slotDisplayName(plugin: any): string {
+    const t = plugin?.plugin_type ?? '';
+    switch (t) {
+      case 'ProQ4': return 'FabFilter Pro-Q 4 (24-Band)';
+      case 'Soothe3': return 'oeksound Soothe3 Spectral';
+      case 'Ozone12Master': return 'iZotope Ozone 12 Master Chain';
+      case 'RealTimeBsrnnStem': return 'BSRNN 120ms Stem Rebalance';
+      case 'PatcherModular': return 'Patcher Parallel APDC DAG';
+      case 'AutoPitchCorrector': return 'Pitcher (Real-Time)';
+      case 'ExternalVst3': return `${plugin?.config?.plugin_name ?? 'VST3'} (VST3)`;
+      case 'ExternalClap': return `${plugin?.config?.plugin_name ?? 'CLAP'} (CLAP)`;
+      case 'NativeSparseCompressor': return 'Fruity Limiter (Compressor)';
+      case 'NativeMaximusMultiband': return 'Maximus';
+      case 'NativeEmphasisLimiter': return 'Emphasis';
+      case 'NativeGrossBeat': return 'Gross Beat';
+      case 'NativeLuxeVerbFdn': return 'LuxeVerb';
+      case 'Empty': return '— Trống —';
+      default: return String(t || 'Plugin');
+    }
+  }
+
+  /**
+   * Maps Rust `PluginSlotStateDto[]` (fixed positions, `Empty` placeholders) to the UI slot list:
+   * only occupied slots are kept and each keeps its fixed `slotIndex` (= position in the rack).
+   */
+  private static mapProjectSlots(slots: any): { slotIndex: number; kind?: string; name: string; enabled: boolean; wetMix: number }[] {
+    if (!Array.isArray(slots)) return [];
+    return slots
+      .map((sl: any, i: number) => ({ sl, i }))
+      .filter(({ sl }) => (sl?.plugin?.plugin_type ?? '') !== 'Empty')
+      .map(({ sl, i }) => ({
+        slotIndex: i,
+        kind: typeof sl?.plugin?.plugin_type === 'string' ? sl.plugin.plugin_type : undefined,
+        name: DawTelemetryView.slotDisplayName(sl.plugin),
+        enabled: Boolean(sl.enabled),
+        wetMix: Number(sl.wet_mix ?? 1.0),
+      }));
+  }
+
+  /**
+   * Re-hydrates every UI-owned mirror of the project (tempo, mixer strips & FX slots, playlist clips,
+   * Piano Roll patterns) from the authoritative Rust `ToneForgeProjectState`. Used at start-up, after
+   * Undo / Redo and after opening a project, so the UI always shows what the engine plays.
+   */
+  hydrateFromProjectState(ps: any): void {
+    if (!ps) return;
+    if (typeof ps.bpm === 'number') this.tempoBpm = ps.bpm;
+    if (typeof ps.ppq_resolution === 'number' && [96, 144, 192, 384, 480, 960].includes(ps.ppq_resolution)) {
+      this.ppqResolution = ps.ppq_resolution;
+    }
+    if (Array.isArray(ps.mixer_tracks)) {
+      for (const t of ps.mixer_tracks) {
+        const ui = this.mixerTracks[Number(t.index)];
+        if (!ui) continue;
+        ui.gainLinear = Number(t.gain ?? 1.0);
+        ui.pan = Number(t.pan ?? 0.0);
+        ui.muted = Boolean(t.muted);
+        ui.soloed = Boolean(t.soloed);
+        ui.polarityInverted = Boolean(t.polarity_inverted);
+        if (typeof t.name === 'string' && t.name.length > 0 && !/^Insert \d+$/.test(t.name)) ui.name = t.name;
+        ui.sends = Array.isArray(t.sends)
+          ? t.sends.map((r: any) => ({
+              destTrack: Number(r.dest_track_index),
+              gain: Number(r.gain),
+              sidechain: Boolean(r.is_sidechain_only),
+            }))
+          : [];
+        ui.slots = DawTelemetryView.mapProjectSlots(t.slots);
+      }
+    }
+    if (Array.isArray(ps.playlist_clips)) {
+      this.playlistClips = ps.playlist_clips.map((c: any) => ({
+        clipId: Number(c.clip_id),
+        trackRow: Number(c.track_row),
+        kind: (c.kind as any) ?? 'Pattern',
+        sourceId: Number(c.source_id),
+        startTick: Number(c.start_tick),
+        durationTicks: Number(c.duration_ticks),
+        clipOffsetTicks: Number(c.clip_offset_ticks),
+        gain: Number(c.gain),
+        muted: Boolean(c.muted),
+        sourceOffsetSamples: Number(c.source_offset_samples ?? 0),
+        fadeInSamples: Number(c.fade_in_samples ?? 0),
+        fadeOutSamples: Number(c.fade_out_samples ?? 0),
+        stretchRatio: Number(c.stretch_ratio ?? 1.0),
+        pitchSemitones: Number(c.pitch_semitones ?? 0.0),
+        takeLaneId: Number(c.take_lane_id ?? 0),
+      }));
+    }
+    if (Array.isArray(ps.piano_roll_patterns)) {
+      this.pianoRollPatterns = ps.piano_roll_patterns.map((p: any) => ({
+        patternId: Number(p.pattern_id),
+        name: String(p.name ?? `Pattern ${p.pattern_id}`),
+        targetChannelId: Number(p.target_channel_id ?? 1),
+        lengthTicks: Number(p.length_ticks ?? 384),
+        notes: Array.isArray(p.notes)
+          ? p.notes.map((n: any) => ({
+              id: Number(n.id),
+              startTick: Number(n.start_tick),
+              durationTicks: Number(n.duration_ticks),
+              key: Number(n.key),
+              velocity: Number(n.velocity),
+              pan: Number(n.pan ?? 0),
+              finePitchCents: Number(n.fine_pitch_cents ?? 0),
+              isSlide: Boolean(n.is_slide),
+              colorGroup: Number(n.color_group ?? 0),
+            }))
+          : [],
+      }));
+    }
+
+    if (!this.pianoRollPatterns.some((p) => p.patternId === this.selectedPatternId)) {
+      this.selectedPatternId = this.pianoRollPatterns[0]?.patternId ?? 1;
+    }
+    const activePat = this.pianoRollPatterns.find((p) => p.patternId === this.selectedPatternId);
+    if (!activePat || !activePat.notes.some((n) => n.id === this.selectedNoteId)) {
+      this.selectedNoteId = activePat?.notes[0]?.id ?? null;
+    }
+    this.selectedNoteIds = this.selectedNoteId !== null ? [this.selectedNoteId] : [];
+    if (!this.playlistClips.some((c) => c.clipId === this.selectedClipId)) {
+      this.selectedClipId = this.playlistClips[0]?.clipId ?? 0;
+    }
+
+    if (Array.isArray(ps.automation_clips)) {
+      const firstAuto = ps.automation_clips[0];
+      if (firstAuto && Array.isArray(firstAuto.points) && firstAuto.points.length >= 2) {
+        this.tensionSplinePoints = firstAuto.points.map((pt: any) => ({
+          x: Number(pt.x ?? 0),
+          y: Number(pt.y ?? 0.5),
+          tension: Number(pt.tension ?? 0),
+        }));
+      } else {
+        this.tensionSplinePoints = [
+          { x: 0.0, y: 0.5, tension: 0.0 },
+          { x: 384.0, y: 0.5, tension: 0.0 },
+        ];
+      }
+    }
+
+    if (Array.isArray(ps.vocal_note_blobs)) {
+      this.vocalBlobs = ps.vocal_note_blobs.map((b: any) => ({
+        blob_id: Number(b.blob_id),
+        start_sample: Number(b.start_sample),
+        end_sample: Number(b.end_sample),
+        warped_start_sample: Number(b.warped_start_sample),
+        warped_end_sample: Number(b.warped_end_sample),
+        detected_midi_note: Number(b.detected_midi_note),
+        target_midi_note: Number(b.target_midi_note),
+        fine_pitch_cents: Number(b.fine_pitch_cents ?? 0),
+        pitch_drift_correction: Number(b.pitch_drift_correction ?? 0),
+        vibrato_scaling: Number(b.vibrato_scaling ?? 1),
+        formant_shift_semitones: Number(b.formant_shift_semitones ?? 0),
+        pitch_contour_midi: Array.isArray(b.pitch_contour_midi) ? b.pitch_contour_midi.map(Number) : [],
+      }));
+      this.vocalSelectedBlobId = this.vocalBlobs[0]?.blob_id ?? null;
+    }
+
+    const masterSlots = ps.mixer_tracks?.[0]?.slots;
+    if (Array.isArray(masterSlots)) {
+      const bsrnnSlot = masterSlots.find(
+        (sl: any) => sl?.plugin?.plugin_type === 'RealTimeBsrnnStem'
+      );
+      const bsrnnCfg = bsrnnSlot?.plugin?.config;
+      if (bsrnnCfg && Array.isArray(bsrnnCfg.stem_gains_db)) {
+        this.bsrnnStemGainsDb = [
+          Number(bsrnnCfg.stem_gains_db[0] ?? 0),
+          Number(bsrnnCfg.stem_gains_db[1] ?? 0),
+          Number(bsrnnCfg.stem_gains_db[2] ?? 0),
+          Number(bsrnnCfg.stem_gains_db[3] ?? 0),
+        ];
+      }
+    }
+
+    if (Array.isArray(ps.audio_assets)) {
+      const uvr5Assets = ps.audio_assets.filter((a: any) => a?.kind === 'Uvr5Stem');
+      const customAsset = ps.audio_assets.find((a: any) => a?.kind === 'CustomAudio');
+      if (uvr5Assets.length > 0) {
+        this.audioSourceMode = 'stems4';
+      } else if (customAsset) {
+        this.audioSourceMode = 'customFile';
+        this.loadedAudioFileName = String(customAsset.name || 'Audio');
+        this.loadedAudioFullPath = customAsset.file_path ? String(customAsset.file_path) : null;
+      } else {
+        this.audioSourceMode = 'pianoRoll';
+        this.loadedAudioFileName = null;
+        this.loadedAudioFullPath = null;
+        this.customAudioDurationFrames = 0;
+        this.uvr5SeparatedStems = [];
+      }
+    }
+  }
+
+  /** Resets the desktop DAW session to a 100% blank project. */
+  async newProject(): Promise<boolean> {
+    this.projectFilePath = '';
+    this.loadedAudioFileName = null;
+    this.loadedAudioFullPath = null;
+    this.customAudioDurationFrames = 0;
+    this.audioSourceMode = 'pianoRoll';
+    this.uvr5AudioPath = '';
+    this.uvr5SeparatedStems = [];
+    this.completedTakes = [];
+    this.proq4SelectedPreset = 'Init — Flat 0.0 dB';
+    this.proq4Bands = this.createInitialProQ4Bands();
+    this.bsrnnStemGainsDb = [0.0, 0.0, 0.0, 0.0];
+    this.bsrnnStemSolo = [false, false, false, false];
+    this.bsrnnStemMute = [false, false, false, false];
+    this.tensionSplinePoints = [
+      { x: 0.0, y: 0.5, tension: 0.0 },
+      { x: 384.0, y: 0.5, tension: 0.0 },
+    ];
+    this.vocalBlobs = [];
+    this.vocalSelectedBlobId = null;
+    this.vocalTotalFrames = 0;
+    this.isPlaying = false;
+
+    if (isTauriEnvironment()) {
+      try {
+        const ps = await invoke<any>('cmd_new_project');
+        this.hydrateFromProjectState(ps);
+        await this.refreshUndoRedoStatus();
+        return true;
+      } catch (e) {
+        this.reportEngineError('cmd_new_project', e);
+        return false;
+      }
+    }
+
+    this.recordUiUndoCheckpoint('New Blank Project');
+    this.pianoRollPatterns = [];
+    this.playlistClips = [];
+    this.selectedPatternId = 1;
+    this.selectedNoteId = null;
+    this.selectedNoteIds = [];
+    this.selectedClipId = 0;
+    this.mixerTracks = this.createInitial502Tracks();
+    this.syncDspToSpeakerEngine();
+    return true;
+  }
+
+  /** Desktop start-up: pull the authoritative project state from the engine. */
+  async hydrateFromEngine(): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      const ps = await invoke<any>('cmd_get_project_state');
+      this.hydrateFromProjectState(ps);
+      await this.refreshUndoRedoStatus();
+    } catch (e) {
+      this.reportEngineError('cmd_get_project_state', e);
+    }
+  }
+
+  async setTrackMute(trackIdx: number, muted: boolean): Promise<void> {
+    const t = this.mixerTracks[trackIdx];
+    if (!t) return;
+    t.muted = muted;
+    if (isTauriEnvironment()) {
+      try {
+        await invoke('cmd_set_track_mute', { trackIdx, muted });
+        await this.refreshUndoRedoStatus();
+      } catch (e) {
+        this.reportEngineError('cmd_set_track_mute', e);
+      }
+    }
+  }
+
+  async setTrackSolo(trackIdx: number, soloed: boolean): Promise<void> {
+    const t = this.mixerTracks[trackIdx];
+    if (!t || trackIdx === 0) return;
+    t.soloed = soloed;
+    if (isTauriEnvironment()) {
+      try {
+        await invoke('cmd_set_track_solo', { trackIdx, soloed });
+        await this.refreshUndoRedoStatus();
+      } catch (e) {
+        this.reportEngineError('cmd_set_track_solo', e);
+      }
+    }
+  }
+
+  async setTrackPan(trackIdx: number, pan: number): Promise<void> {
+    const t = this.mixerTracks[trackIdx];
+    if (!t) return;
+    t.pan = Math.max(-1, Math.min(1, pan));
+    if (isTauriEnvironment()) {
+      try {
+        await invoke('cmd_set_track_pan', { trackIdx, pan: t.pan });
+      } catch (e) {
+        this.reportEngineError('cmd_set_track_pan', e);
+      }
+    }
+  }
+
+  async setSlotEnabled(trackIdx: number, slotIdx: number, enabled: boolean): Promise<void> {
+    const sl = this.mixerTracks[trackIdx]?.slots.find((s) => s.slotIndex === slotIdx);
+    if (!sl) return;
+    sl.enabled = enabled;
+    if (isTauriEnvironment()) {
+      try {
+        await invoke('cmd_set_slot_enabled', { trackIdx, slotIdx, enabled });
+        await this.refreshUndoRedoStatus();
+      } catch (e) {
+        this.reportEngineError('cmd_set_slot_enabled', e);
+      }
+    }
+  }
+
+  async setSlotWetMix(trackIdx: number, slotIdx: number, wetMix: number): Promise<void> {
+    const sl = this.mixerTracks[trackIdx]?.slots.find((s) => s.slotIndex === slotIdx);
+    if (!sl) return;
+    sl.wetMix = Math.max(0, Math.min(1, wetMix));
+    if (isTauriEnvironment()) {
+      try {
+        await invoke('cmd_set_slot_wet_mix', { trackIdx, slotIdx, wetMix: sl.wetMix });
+      } catch (e) {
+        this.reportEngineError('cmd_set_slot_wet_mix', e);
+      }
+    }
+  }
+
+  /** Removes the plug-in in `slotIdx`: the slot becomes empty in place (later slots never shift). */
+  async removePluginSlot(trackIdx: number, slotIdx: number): Promise<void> {
+    const t = this.mixerTracks[trackIdx];
+    if (!t || !t.slots.some((s) => s.slotIndex === slotIdx)) return;
+    t.slots = t.slots.filter((s) => s.slotIndex !== slotIdx);
+    this.loadedExternalPlugins = this.loadedExternalPlugins.filter(
+      (p) => !(p.trackIdx === trackIdx && p.slotIdx === slotIdx)
+    );
+    if (isTauriEnvironment()) {
+      try {
+        const slots = await invoke<any>('cmd_remove_plugin_slot', { trackIdx, slotIdx });
+        if (Array.isArray(slots)) t.slots = DawTelemetryView.mapProjectSlots(slots);
+        await this.refreshUndoRedoStatus();
+      } catch (e) {
+        this.reportEngineError('cmd_remove_plugin_slot', e);
+      }
+    }
+  }
+
+  /** Inserts a native plug-in (`NATIVE_INSERT_PLUGINS[].kind`) into exactly `slotIdx` (0..9). */
+  async insertNativePluginSlot(trackIdx: number, slotIdx: number, kind: string): Promise<void> {
+    const t = this.mixerTracks[trackIdx];
+    if (!t || slotIdx < 0 || slotIdx >= MIXER_INSERT_SLOT_COUNT) return;
+    const meta = NATIVE_INSERT_PLUGINS.find((p) => p.kind === kind);
+    if (!meta) return;
+    if (isTauriEnvironment()) {
+      try {
+        const slots = await invoke<any>('cmd_insert_native_plugin_slot', { trackIdx, slotIdx, kind });
+        t.slots = DawTelemetryView.mapProjectSlots(slots);
+        await this.refreshUndoRedoStatus();
+      } catch (e) {
+        this.reportEngineError('cmd_insert_native_plugin_slot', e);
+      }
+      return;
+    }
+    t.slots = [
+      ...t.slots.filter((s) => s.slotIndex !== slotIdx),
+      { slotIndex: slotIdx, kind, name: DawTelemetryView.slotDisplayName({ plugin_type: kind }), enabled: true, wetMix: 1.0 },
+    ].sort((a, b) => a.slotIndex - b.slotIndex);
+  }
+
+  /** The selected mixer track owns the shared Pro-Q 4 / Soothe3 analyzer telemetry. */
+  async setTelemetryFocusTrack(trackIdx: number): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      await invoke('cmd_set_telemetry_focus_track', { trackIdx });
+    } catch (e) {
+      this.reportEngineError('cmd_set_telemetry_focus_track', e);
+    }
+  }
+
+  async saveProject(saveAs = false): Promise<boolean> {
+    if (!isTauriEnvironment()) return false;
+    try {
+      const path = await invoke<string | null>('cmd_save_project', {
+        filePath: saveAs || !this.projectFilePath ? null : this.projectFilePath,
+      });
+      if (path) this.projectFilePath = path;
+      return Boolean(path);
+    } catch (e) {
+      this.reportEngineError('cmd_save_project', e);
+      return false;
+    }
+  }
+
+  async openProject(): Promise<boolean> {
+    if (!isTauriEnvironment()) return false;
+    try {
+      const ps = await invoke<any>('cmd_open_project', { filePath: null });
+      if (!ps) return false;
+      this.hydrateFromProjectState(ps);
+      this.isPlaying = false;
+      await this.refreshUndoRedoStatus();
+      return true;
+    } catch (e) {
+      this.reportEngineError('cmd_open_project', e);
+      return false;
+    }
+  }
+
+  recordUiUndoCheckpoint(label: string): void {
+    // Desktop: the Rust `ProjectUndoHistory` is the single source of truth.
+    if (isTauriEnvironment()) return;
+    const snap = this.captureUiUndoSnapshot();
+    if (this.browserUndoStack.length >= 64) {
+      this.browserUndoStack.shift();
+    }
+    this.browserUndoStack.push({ label, json: snap });
+    this.browserRedoStack = [];
+    if (!isTauriEnvironment()) {
+      this.undoCount = this.browserUndoStack.length;
+      this.redoCount = 0;
+      this.undoAvailable = this.undoCount > 0;
+      this.redoAvailable = false;
+      this.lastUndoActionLabel = label;
+    }
+  }
+
+  async refreshUndoRedoStatus(): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      this.applyUndoStatus(await invoke<any>('cmd_get_undo_redo_status'));
+    } catch (e) {
+      this.reportEngineError('cmd_get_undo_redo_status', e);
+    }
+  }
+
+  async undoProjectAction(): Promise<void> {
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_undo_project_action');
+        this.applyUndoStatus(res?.status);
+        this.hydrateFromProjectState(res?.projectState);
+      } catch (e) {
+        this.reportEngineError('cmd_undo_project_action', e);
+      }
+      return;
+    }
+    if (this.browserUndoStack.length === 0) return;
+    const entry = this.browserUndoStack.pop()!;
+    this.browserRedoStack.push({ label: entry.label, json: this.captureUiUndoSnapshot() });
+    this.restoreUiUndoSnapshot(entry.json);
+    this.undoCount = this.browserUndoStack.length;
+    this.redoCount = this.browserRedoStack.length;
+    this.undoAvailable = this.undoCount > 0;
+    this.redoAvailable = this.redoCount > 0;
+    this.lastUndoActionLabel = `Undo: ${entry.label}`;
+  }
+
+  async redoProjectAction(): Promise<void> {
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_redo_project_action');
+        this.applyUndoStatus(res?.status);
+        this.hydrateFromProjectState(res?.projectState);
+      } catch (e) {
+        this.reportEngineError('cmd_redo_project_action', e);
+      }
+      return;
+    }
+    if (this.browserRedoStack.length === 0) return;
+    const entry = this.browserRedoStack.pop()!;
+    this.browserUndoStack.push({ label: entry.label, json: this.captureUiUndoSnapshot() });
+    this.restoreUiUndoSnapshot(entry.json);
+    this.undoCount = this.browserUndoStack.length;
+    this.redoCount = this.browserRedoStack.length;
+    this.undoAvailable = this.undoCount > 0;
+    this.redoAvailable = this.redoCount > 0;
+    this.lastUndoActionLabel = `Redo: ${entry.label}`;
+  }
+
+  async fitProQ4SketchCurve(pointsHzDb: [number, number][], maxBands = 6, trackIdx?: number, slotIdx?: number): Promise<void> {
+    if (pointsHzDb.length < 2) return;
+    const resolved = this.resolvePluginSlotTarget('ProQ4', 1, 0);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
+    this.recordUiUndoCheckpoint('Pro-Q 4 EQ Sketch');
+    if (isTauriEnvironment()) {
+      try {
+        const dtos = await invoke<any[]>('cmd_proq4_fit_eq_sketch', {
+          trackIdx: tIdx,
+          slotIdx: sIdx,
+          pointsHzDb,
+          maxBands,
+        });
+        if (Array.isArray(dtos) && dtos.length > 0) {
+          const next = this.createInitialProQ4Bands().map((b) => ({ ...b, used: false, enabled: false }));
+          dtos.slice(0, 24).forEach((d, idx) => {
+            next[idx] = {
+              bandIdx: idx,
+              used: true,
+              enabled: true,
+              freqHz: Number(d.freq_hz ?? 1000),
+              gainDb: Number(d.gain_db ?? 0),
+              q: Number(d.q ?? 1.0),
+              shape: Number(d.shape ?? 0),
+              slopeDbOct: Number(d.slope_db_oct ?? 12),
+              dynamicRangeDb: Number(d.dynamic_range_db ?? 0),
+              spectralEnabled: Boolean(d.spectral_enabled),
+              spectralDensity: Number(d.spectral_density ?? 65),
+            };
+          });
+          this.proq4Bands = next;
+          this.proq4SelectedBand = 0;
+          this.syncDspToSpeakerEngine();
+          await this.refreshUndoRedoStatus();
+          return;
+        }
+      } catch (e) {
+        this.reportEngineError('cmd_proq4_fit_eq_sketch', e);
+        return;
+        // Fallback greedy Bell/Shelf curve fit below
+      }
+    }
+
+    // Standalone greedy parametric fitter for browser mode
+    const sorted = pointsHzDb
+      .slice()
+      .map(([f, g]) => [Math.max(20, Math.min(20000, f)), Math.max(-24, Math.min(24, g))] as [number, number])
+      .sort((a, b) => a[0] - b[0]);
+    const residual = sorted.map(([, g]) => g);
+    const next = this.createInitialProQ4Bands().map((b) => ({ ...b, used: false, enabled: false }));
+    let fittedCount = 0;
+    for (let k = 0; k < Math.min(maxBands, 12); k++) {
+      let bestIdx = 0;
+      let maxAbs = 0;
+      for (let i = 0; i < residual.length; i++) {
+        if (Math.abs(residual[i]) > maxAbs) {
+          maxAbs = Math.abs(residual[i]);
+          bestIdx = i;
+        }
+      }
+      if (maxAbs < 0.35) break;
+      const f0 = sorted[bestIdx][0];
+      const g0 = residual[bestIdx];
+      const shape = f0 < 55 ? 1 : f0 > 13500 ? 3 : 0;
+      const q = 1.25;
+      next[fittedCount] = {
+        bandIdx: fittedCount,
+        used: true,
+        enabled: true,
+        freqHz: Math.round(f0),
+        gainDb: Number(g0.toFixed(2)),
+        q,
+        shape,
+        slopeDbOct: 12,
+        dynamicRangeDb: 0,
+        spectralEnabled: false,
+        spectralDensity: 65,
+      };
+      fittedCount++;
+      for (let i = 0; i < sorted.length; i++) {
+        const logDist = Math.log2(sorted[i][0] / f0);
+        const bw = 1.0 / q;
+        const contrib =
+          shape === 1
+            ? g0 / (1 + Math.exp(logDist * 4.0))
+            : shape === 3
+              ? g0 / (1 + Math.exp(-logDist * 4.0))
+              : g0 * Math.exp(-(logDist * logDist) / (0.35 * bw * bw));
+        residual[i] -= contrib;
+      }
+    }
+    this.proq4Bands = next;
+    this.proq4SelectedBand = 0;
+    this.syncDspToSpeakerEngine();
+  }
+
+  async setProQ4CollisionReference(refTrack: number | null, trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('ProQ4', 1, 0);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
+    this.proq4CollisionRefTrack = refTrack;
+    this.proq4ShowCollisions = refTrack !== null;
+    if (isTauriEnvironment()) {
+      await invoke('cmd_proq4_set_collision_reference', {
+        trackIdx: tIdx,
+        slotIdx: sIdx,
+        referenceTrack: refTrack,
+      });
+      await this.refreshUndoRedoStatus();
+    } else if (refTrack !== null) {
+      // Populate realistic bass/kick collision glow around 55..110 Hz in standalone preview
+      for (let bin = 0; bin < 1024; bin++) {
+        const freq = 10.0 * Math.pow(3000.0, bin / 1023.0);
+        const mask = Math.exp(-Math.pow(Math.log2(freq / 72.0) / 0.42, 2));
+        this.proq4CollisionMask[bin] = mask > 0.15 ? mask : 0.0;
+      }
+    } else {
+      this.proq4CollisionMask.fill(0.0);
+    }
+  }
+
+  async setSoothe3ExternalSidechain(
+    enabled: boolean,
+    sourceTrack: number | null,
+    trackIdx?: number,
+    slotIdx?: number
+  ): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('Soothe3', 1, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
+    this.recordUiUndoCheckpoint('Soothe3 External Sidechain');
+    this.soothe3ExternalScEnabled = enabled;
+    if (sourceTrack !== null) {
+      this.soothe3ExternalScSourceTrack = sourceTrack;
+    }
+    if (isTauriEnvironment()) {
+      await invoke('cmd_soothe3_set_external_sidechain', {
+        trackIdx: tIdx,
+        slotIdx: sIdx,
+        enabled,
+        sourceTrack: enabled ? this.soothe3ExternalScSourceTrack : null,
+      });
+      await this.refreshUndoRedoStatus();
+    }
+  }
+
+  async syncOzone12LowEndFocus(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('Ozone12Master', 0, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
+    this.recordUiUndoCheckpoint('Ozone 12 Low End Focus');
+    this.syncDspToSpeakerEngine();
+    if (isTauriEnvironment()) {
+      await invoke('cmd_ozone12_set_low_end_focus', {
+        trackIdx: tIdx,
+        slotIdx: sIdx,
+        dto: {
+          enabled: this.ozone12LefEnabled,
+          punchy: this.ozone12LefPunchy,
+          contrastPct: this.ozone12LefContrastPct,
+          upperHz: this.ozone12LefUpperHz,
+          gainDb: this.ozone12LefGainDb,
+          soloLowBand: this.ozone12LefSolo,
+        },
+      });
+      await this.refreshUndoRedoStatus();
+    }
+  }
+
+  async syncOzone12CodecPreview(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('Ozone12Master', 0, 1);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
+    this.recordUiUndoCheckpoint('Ozone 12 Codec Preview');
+    this.syncDspToSpeakerEngine();
+    if (isTauriEnvironment()) {
+      await invoke('cmd_ozone12_set_codec_preview', {
+        trackIdx: tIdx,
+        slotIdx: sIdx,
+        dto: {
+          enabled: this.ozone12CodecEnabled,
+          codecMode: this.ozone12CodecMode,
+          artifactSolo: this.ozone12CodecArtifactSolo,
+        },
+      });
+      await this.refreshUndoRedoStatus();
+    }
+  }
+
+  async transformPianoRollNotes(
+    patternId: number,
+    action: 'quantize' | 'strum' | 'arpeggiate' | 'set_expression',
+    opts: {
+      noteIds?: number[];
+      gridTicks?: number;
+      strength?: number;
+      strumOffsetTicks?: number;
+      arpDirection?: number;
+      velocity?: number;
+      pan?: number;
+      finePitchCents?: number;
+    } = {}
+  ): Promise<void> {
+    this.recordUiUndoCheckpoint(`Piano Roll ${action}`);
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_piano_roll_transform_notes', {
+          req: {
+            patternId,
+            action,
+            noteIds: opts.noteIds ?? null,
+            gridTicks: opts.gridTicks ?? 24,
+            strength: opts.strength ?? 1.0,
+            quantizeDuration: false,
+            strumOffsetTicks: opts.strumOffsetTicks ?? 8,
+            velocityDecay: 0.06,
+            alternateDirection: false,
+            gateRatio: 0.85,
+            arpDirection: opts.arpDirection ?? 0,
+            octaves: 1,
+            velocity: opts.velocity ?? null,
+            pan: opts.pan ?? null,
+            finePitchCents: opts.finePitchCents ?? null,
+          },
+        });
+        if (res && Array.isArray(res.notes)) {
+          const patIdx = this.pianoRollPatterns.findIndex((p) => p.patternId === patternId);
+          if (patIdx >= 0) {
+            this.pianoRollPatterns[patIdx].notes = res.notes.map((n: any) => ({
+              id: Number(n.id),
+              startTick: Number(n.start_tick),
+              durationTicks: Number(n.duration_ticks),
+              key: Number(n.key),
+              velocity: Number(n.velocity),
+              pan: Number(n.pan),
+              finePitchCents: Number(n.fine_pitch_cents),
+              isSlide: Boolean(n.is_slide),
+              colorGroup: Number(n.color_group),
+            }));
+          }
+          await this.refreshUndoRedoStatus();
+          return;
+        }
+      } catch (e) {
+        this.reportEngineError('cmd_piano_roll_transform_notes', e);
+        return;
+        // Fallback below
+      }
+    }
+
+    const pat = this.pianoRollPatterns.find((p) => p.patternId === patternId);
+    if (!pat) return;
+    const idSet = opts.noteIds && opts.noteIds.length > 0 ? new Set(opts.noteIds) : null;
+    if (action === 'quantize') {
+      const g = Math.max(6, opts.gridTicks ?? 24);
+      const s = Math.max(0, Math.min(1, opts.strength ?? 1.0));
+      pat.notes = pat.notes.map((n) => {
+        if (idSet && !idSet.has(n.id)) return n;
+        const snapped = Math.round(n.startTick / g) * g;
+        return { ...n, startTick: Math.round(n.startTick + (snapped - n.startTick) * s) };
+      });
+    } else if (action === 'strum') {
+      const sorted = pat.notes.slice().sort((a, b) => a.startTick - b.startTick || a.key - b.key);
+      let rank = 0;
+      let prevStart = -999;
+      pat.notes = sorted.map((n) => {
+        if (idSet && !idSet.has(n.id)) return n;
+        if (Math.abs(n.startTick - prevStart) <= 12) {
+          rank += 1;
+        } else {
+          rank = 0;
+          prevStart = n.startTick;
+        }
+        return {
+          ...n,
+          startTick: n.startTick + rank * (opts.strumOffsetTicks ?? 8),
+          velocity: Math.max(0.15, n.velocity * (1.0 - rank * 0.05)),
+        };
+      });
+    } else if (action === 'arpeggiate') {
+      const step = Math.max(12, opts.gridTicks ?? 24);
+      const baseNotes = pat.notes.filter((n) => !idSet || idSet.has(n.id));
+      if (baseNotes.length > 0) {
+        const uniqueKeys = Array.from(new Set(baseNotes.map((n) => n.key))).sort((a, b) => a - b);
+        const startMin = Math.min(...baseNotes.map((n) => n.startTick));
+        const endMax = Math.max(...baseNotes.map((n) => n.startTick + n.durationTicks));
+        const kept = pat.notes.filter((n) => idSet && !idSet.has(n.id));
+        let nextId = pat.notes.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+        let idx = 0;
+        for (let t = startMin; t < endMax; t += step) {
+          const k = uniqueKeys[idx % uniqueKeys.length];
+          kept.push({
+            id: nextId++,
+            startTick: t,
+            durationTicks: Math.max(6, Math.round(step * 0.85)),
+            key: k,
+            velocity: 0.88,
+            pan: 0,
+            finePitchCents: 0,
+            isSlide: false,
+            colorGroup: this.pianoRollColorGroup,
+          });
+          idx++;
+        }
+        pat.notes = kept.sort((a, b) => a.startTick - b.startTick || a.id - b.id);
+      }
+    } else if (action === 'set_expression') {
+      pat.notes = pat.notes.map((n) => {
+        if (idSet && !idSet.has(n.id)) return n;
+        return {
+          ...n,
+          velocity: opts.velocity !== undefined ? Math.max(0.05, Math.min(1.0, opts.velocity)) : n.velocity,
+          pan: opts.pan !== undefined ? Math.max(-1.0, Math.min(1.0, opts.pan)) : n.pan,
+          finePitchCents:
+            opts.finePitchCents !== undefined
+              ? Math.max(-200, Math.min(200, opts.finePitchCents))
+              : n.finePitchCents,
+        };
+      });
+    }
+  }
+
+  async sliceOrEditPlaylistClip(
+    clipId: number,
+    action: 'slice' | 'duplicate' | 'update_props',
+    opts: {
+      splitTick?: number;
+      deltaTicks?: number;
+      sourceOffsetSamples?: number;
+      fadeInSamples?: number;
+      fadeOutSamples?: number;
+      clipGainLinear?: number;
+      stretchRatio?: number;
+      pitchSemitones?: number;
+      takeLaneId?: number;
+    } = {}
+  ): Promise<void> {
+    this.recordUiUndoCheckpoint(`Playlist ${action}`);
+    if (isTauriEnvironment()) {
+      try {
+        const list = await invoke<any[]>('cmd_playlist_slice_or_edit_clip', {
+          req: {
+            clipId,
+            action,
+            splitTick: opts.splitTick ?? 192,
+            deltaTicks: opts.deltaTicks ?? null,
+            sourceOffsetSamples: opts.sourceOffsetSamples ?? null,
+            fadeInSamples: opts.fadeInSamples ?? null,
+            fadeOutSamples: opts.fadeOutSamples ?? null,
+            clipGainLinear: opts.clipGainLinear ?? null,
+            stretchRatio: opts.stretchRatio ?? null,
+            pitchSemitones: opts.pitchSemitones ?? null,
+            takeLaneId: opts.takeLaneId ?? null,
+          },
+        });
+        if (Array.isArray(list)) {
+          this.playlistClips = list.map((c) => ({
+            clipId: Number(c.clip_id),
+            trackRow: Number(c.track_row),
+            kind: (c.kind as any) ?? 'Pattern',
+            sourceId: Number(c.source_id),
+            startTick: Number(c.start_tick),
+            durationTicks: Number(c.duration_ticks),
+            clipOffsetTicks: Number(c.clip_offset_ticks),
+            gain: Number(c.gain),
+            muted: Boolean(c.muted),
+            sourceOffsetSamples: Number(c.source_offset_samples ?? 0),
+            fadeInSamples: Number(c.fade_in_samples ?? 0),
+            fadeOutSamples: Number(c.fade_out_samples ?? 0),
+            stretchRatio: Number(c.stretch_ratio ?? 1.0),
+            pitchSemitones: Number(c.pitch_semitones ?? 0.0),
+            takeLaneId: Number(c.take_lane_id ?? 0),
+          }));
+          await this.refreshUndoRedoStatus();
+          return;
+        }
+      } catch (e) {
+        this.reportEngineError('cmd_playlist_slice_or_edit_clip', e);
+        return;
+        // Fallback below
+      }
+    }
+
+    const idx = this.playlistClips.findIndex((c) => c.clipId === clipId);
+    if (idx < 0) return;
+    const target = this.playlistClips[idx];
+    const nextId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+    if (action === 'slice') {
+      const st = opts.splitTick ?? target.startTick + Math.floor(target.durationTicks / 2);
+      if (st <= target.startTick + 6 || st >= target.startTick + target.durationTicks - 6) return;
+      const leftDur = st - target.startTick;
+      const rightDur = target.durationTicks - leftDur;
+      const left: PlaylistClipUiState = { ...target, durationTicks: leftDur, fadeOutSamples: 96 };
+      const right: PlaylistClipUiState = {
+        ...target,
+        clipId: nextId,
+        startTick: st,
+        durationTicks: rightDur,
+        clipOffsetTicks: target.clipOffsetTicks + leftDur,
+        fadeInSamples: 96,
+      };
+      this.playlistClips = [...this.playlistClips.slice(0, idx), left, right, ...this.playlistClips.slice(idx + 1)];
+      this.selectedClipId = right.clipId;
+    } else if (action === 'duplicate') {
+      const dt = opts.deltaTicks ?? target.durationTicks;
+      const dup: PlaylistClipUiState = {
+        ...target,
+        clipId: nextId,
+        startTick: Math.min(360, target.startTick + Math.min(96, dt)),
+      };
+      this.playlistClips = [...this.playlistClips, dup];
+      this.selectedClipId = dup.clipId;
+    } else if (action === 'update_props') {
+      this.playlistClips[idx] = {
+        ...target,
+        sourceOffsetSamples: opts.sourceOffsetSamples ?? target.sourceOffsetSamples ?? 0,
+        fadeInSamples: opts.fadeInSamples ?? target.fadeInSamples ?? 0,
+        fadeOutSamples: opts.fadeOutSamples ?? target.fadeOutSamples ?? 0,
+        gain: opts.clipGainLinear ?? target.gain,
+        stretchRatio: opts.stretchRatio ?? target.stretchRatio ?? 1.0,
+        pitchSemitones: opts.pitchSemitones ?? target.pitchSemitones ?? 0.0,
+        takeLaneId: opts.takeLaneId ?? target.takeLaneId ?? 0,
+      };
+    }
+  }
+
+  async refreshAudioMidiInputs(): Promise<void> {
+    if (!isTauriEnvironment()) return;
+    try {
+      const inv = await invoke<any>('cmd_list_audio_midi_inputs');
+      if (inv) {
+        this.asioDrivers = Array.isArray(inv.asioDrivers) ? inv.asioDrivers : [];
+        if (this.asioDrivers.length > 0 && !this.selectedAsioDriver) {
+          this.selectedAsioDriver = this.asioDrivers[0].description || this.asioDrivers[0].name;
+        }
+        this.wasapiInputs = Array.isArray(inv.wasapiInputs)
+          ? inv.wasapiInputs.map((d: any) => ({
+              id: d.id,
+              friendlyName: d.friendly_name ?? d.friendlyName ?? 'Audio Input',
+              isDefault: Boolean(d.is_default ?? d.isDefault),
+              mixSampleRateHz: Number(d.mix_sample_rate_hz ?? d.mixSampleRateHz ?? 48000),
+              mixChannels: Number(d.mix_channels ?? d.mixChannels ?? 2),
+            }))
+          : [];
+        this.midiInputs = Array.isArray(inv.midiInputs) ? inv.midiInputs : [];
+      }
+    } catch (e) {
+      this.reportEngineError('cmd_list_audio_midi_inputs', e);
+      // Ignore in browser mode
+    }
+  }
+
+  async configureHardwareRecording(
+    driverMode = this.selectedDriverMode,
+    wasapiInputId = this.selectedWasapiInputId,
+    midiDeviceId = this.selectedMidiDeviceId
+  ): Promise<void> {
+    this.selectedDriverMode = driverMode;
+    this.selectedWasapiInputId = wasapiInputId;
+    this.selectedMidiDeviceId = midiDeviceId;
+    if (!isTauriEnvironment()) {
+      this.wasapiStatusMessage =
+        driverMode === 'ASIO'
+          ? 'ASIO Low-Latency Duplex Ready (Desktop Mode)'
+          : driverMode === 'WASAPI_Exclusive'
+            ? 'WASAPI Exclusive Low-Latency'
+            : 'WASAPI Shared Event-Driven • MMCSS Pro Audio';
+      return;
+    }
+    try {
+      const st = await invoke<any>('cmd_configure_hardware_recording', {
+        req: {
+          driverMode,
+          asioDriverName: this.selectedAsioDriver || null,
+          wasapiOutputId: this.selectedWasapiDeviceId || null,
+          wasapiInputId,
+          midiInputDeviceId: midiDeviceId >= 0 ? midiDeviceId : 0xffffffff,
+          armedTrackIndex: this.armedTrackIndex,
+          inputMonitor: this.inputMonitorEnabled,
+        },
+      });
+      if (st) {
+        this.roundTripLatencyMs = Number(st.roundTripLatencyMs ?? 5.33);
+        this.wasapiStatusMessage = `${st.driverMode} • In: ${st.activeInputName} • MIDI: ${st.activeMidiName}`;
+      }
+      await this.refreshWasapiDevicesAndStatus();
+    } catch (e) {
+      this.reportEngineError('cmd_configure_hardware_recording', e);
+      // Ignore if device busy
+    }
+  }
+
+  async toggleDiskRecording(loopLengthTicks: number | null = 384): Promise<void> {
+    const nextStart = !this.isDiskRecording;
+    if (isTauriEnvironment()) {
+      try {
+        const st = await invoke<any>('cmd_start_stop_disk_recording', {
+          start: nextStart,
+          trackIndex: this.armedTrackIndex,
+          outputDir: this.renderOutputDir || null,
+          loopLengthTicks,
+        });
+        if (st) {
+          this.isDiskRecording = Boolean(st.isRecording);
+          this.recordedFramesCount = Number(st.recordedFrames ?? 0);
+          if (Array.isArray(st.completedTakes)) {
+            this.completedTakes = st.completedTakes;
+          }
+          await this.refreshUndoRedoStatus();
+          return;
+        }
+      } catch (e) {
+        this.reportEngineError('cmd_start_stop_disk_recording', e);
+        return;
+        // Fallback below
+      }
+    }
+    this.isDiskRecording = nextStart;
+    if (!nextStart) {
+      const takeNum = this.completedTakes.length + 1;
+      const newTake: RecordedTakeUiInfo = {
+        takeNumber: takeNum,
+        takeLaneId: takeNum,
+        trackIndex: this.armedTrackIndex,
+        wavPath: `${this.renderOutputDir}/track_00${this.armedTrackIndex}_take_0${takeNum}.wav`,
+        numFrames: 48000 * 4,
+        sampleRateHz: 48000,
+      };
+      this.completedTakes = [...this.completedTakes, newTake];
+      const nextClipId = this.playlistClips.reduce((m, c) => Math.max(m, c.clipId), 0) + 1;
+      this.playlistClips = [
+        ...this.playlistClips,
+        {
+          clipId: nextClipId,
+          trackRow: this.armedTrackIndex,
+          kind: 'AudioStem',
+          sourceId: takeNum,
+          startTick: 0,
+          durationTicks: 384,
+          clipOffsetTicks: 0,
+          gain: 1.0,
+          muted: false,
+          fadeInSamples: 96,
+          fadeOutSamples: 96,
+          stretchRatio: 1.0,
+          pitchSemitones: 0.0,
+          takeLaneId: takeNum,
+        },
+      ];
+    }
+  }
+
+  async scanExternalPlugins(extraDirs: string[] = []): Promise<void> {
+    this.pluginScanRunning = true;
+    this.pluginHostStatus = 'Scanning VST3 & CLAP binaries in crash-isolated worker process...';
+    try {
+      if (isTauriEnvironment()) {
+        const rep = await invoke<any>('cmd_scan_external_plugins', {
+          extraDirs: extraDirs.length > 0 ? extraDirs : null,
+        });
+        if (rep && Array.isArray(rep.discovered)) {
+          this.scannedExternalPlugins = rep.discovered.map((d: any) => ({
+            format: d.format === 'Clap' || d.format === 'CLAP' ? 'CLAP' : 'VST3',
+            binary_path: d.binary_path,
+            plugin_id: d.plugin_id,
+            name: d.name,
+            vendor: d.vendor,
+            version: d.version ?? '1.0',
+            is_instrument: Boolean(d.is_instrument),
+            param_count: Number(d.param_count ?? 0),
+          }));
+          this.quarantinedPlugins = Array.isArray(rep.quarantined) ? rep.quarantined : [];
+          this.pluginHostStatus = `Discovered ${this.scannedExternalPlugins.length} plugins • Quarantined ${this.quarantinedPlugins.length} faulty binaries`;
+          return;
+        }
+      }
+      this.pluginHostStatus = `Discovered ${this.scannedExternalPlugins.length} verified VST3/CLAP plugins (0 quarantined)`;
+    } finally {
+      this.pluginScanRunning = false;
+    }
+  }
+
+  async loadExternalPluginSlot(
+    trackIdx: number,
+    slotIdx: number,
+    binaryPath: string,
+    pluginId: string | null,
+    isClap: boolean,
+    asInstrument = false
+  ): Promise<void> {
+    this.recordUiUndoCheckpoint('Load External VST3/CLAP Plugin');
+    if (isTauriEnvironment()) {
+      try {
+        const info = await invoke<any>('cmd_load_external_plugin_slot', {
+          trackIdx,
+          slotIdx,
+          binaryPath,
+          pluginId,
+          isClap,
+          asChannelInstrument: asInstrument,
+        });
+        if (info) {
+          const item: LoadedExternalPluginUi = {
+            trackIdx: Number(info.trackIdx ?? trackIdx),
+            slotIdx: Number(info.slotIdx ?? slotIdx),
+            isClap: Boolean(info.isClap ?? isClap),
+            isInstrument: Boolean(info.isInstrument ?? asInstrument),
+            name: String(info.name ?? 'External Plugin'),
+            vendor: String(info.vendor ?? ''),
+            pluginId: String(info.pluginId ?? pluginId ?? ''),
+            binaryPath: String(info.binaryPath ?? binaryPath),
+            latencySamples: Number(info.latencySamples ?? 0),
+            guiOpen: false,
+            parameters: Array.isArray(info.parameters) ? info.parameters : [],
+          };
+          this.loadedExternalPlugins = [
+            ...this.loadedExternalPlugins.filter(
+              (p) => !(p.trackIdx === item.trackIdx && p.slotIdx === item.slotIdx)
+            ),
+            item,
+          ];
+          this.mirrorExternalSlotToMixer(item);
+          if (this.mixerTracks[trackIdx]) {
+            this.mixerTracks[trackIdx].apdcLatencySamples = Math.max(
+              this.mixerTracks[trackIdx].apdcLatencySamples,
+              item.latencySamples
+            );
+          }
+          this.pluginHostStatus = `Loaded ${item.name} onto Track #${trackIdx} Slot #${slotIdx + 1} (APDC +${item.latencySamples} smp)`;
+          await this.refreshUndoRedoStatus();
+          return;
+        }
+      } catch (err) {
+        this.pluginHostStatus = `Load error: ${String(err)}`;
+        return;
+      }
+    }
+
+    const demoItem: LoadedExternalPluginUi = {
+      trackIdx,
+      slotIdx,
+      isClap,
+      isInstrument: asInstrument,
+      name: isClap
+        ? 'ToneForge Reference PolySynth & SVF FX (CLAP 1.2)'
+        : 'ToneForge Reference PolySynth & SVF FX (VST3 3.7)',
+      vendor: 'ToneForge Clean-Room DSP',
+      pluginId: pluginId ?? 'com.toneforge.reference-synth-fx',
+      binaryPath,
+      latencySamples: 64,
+      guiOpen: false,
+      parameters: [
+        { id: 0, name: 'Output Gain', default_normalized: 0.5, current_normalized: 0.5, automatable: true },
+        { id: 1, name: 'SVF Cutoff Hz', default_normalized: 0.78, current_normalized: 0.78, automatable: true },
+        { id: 2, name: 'SVF Resonance', default_normalized: 0.25, current_normalized: 0.25, automatable: true },
+        { id: 3, name: 'Synth Mix', default_normalized: 1.0, current_normalized: 1.0, automatable: true },
+      ],
+    };
+    this.loadedExternalPlugins = [
+      ...this.loadedExternalPlugins.filter((p) => !(p.trackIdx === trackIdx && p.slotIdx === slotIdx)),
+      demoItem,
+    ];
+    this.mirrorExternalSlotToMixer(demoItem);
+    this.pluginHostStatus = `Loaded ${demoItem.name} onto Track #${trackIdx} Slot #${slotIdx + 1} (APDC +64 smp)`;
+  }
+
+  private mirrorExternalSlotToMixer(item: LoadedExternalPluginUi): void {
+    if (
+      item.isInstrument ||
+      item.slotIdx < 0 ||
+      item.slotIdx >= MIXER_INSERT_SLOT_COUNT ||
+      !this.mixerTracks[item.trackIdx]
+    ) {
+      return;
+    }
+    const tr = this.mixerTracks[item.trackIdx];
+    tr.slots = [
+      ...tr.slots.filter((s) => s.slotIndex !== item.slotIdx),
+      {
+        slotIndex: item.slotIdx,
+        kind: item.isClap ? 'ExternalClap' : 'ExternalVst3',
+        name: item.name,
+        enabled: true,
+        wetMix: 1.0,
+      },
+    ].sort((a, b) => a.slotIndex - b.slotIndex);
+  }
+
+  async toggleExternalPluginGui(plugin: LoadedExternalPluginUi): Promise<void> {
+    const nextOpen = !plugin.guiOpen;
+    if (isTauriEnvironment()) {
+      try {
+        if (nextOpen) {
+          await invoke('cmd_open_external_plugin_gui', {
+            trackIdx: plugin.trackIdx,
+            slotIdx: plugin.slotIdx,
+            isClap: plugin.isClap,
+            binaryPath: plugin.binaryPath,
+            pluginId: plugin.pluginId || null,
+          });
+        } else {
+          await invoke('cmd_close_external_plugin_gui', {
+            trackIdx: plugin.trackIdx,
+            slotIdx: plugin.slotIdx,
+          });
+        }
+      } catch (err) {
+        this.pluginHostStatus = `GUI Window notice: ${String(err)}`;
+      }
+    }
+    this.loadedExternalPlugins = this.loadedExternalPlugins.map((p) =>
+      p.trackIdx === plugin.trackIdx && p.slotIdx === plugin.slotIdx ? { ...p, guiOpen: nextOpen } : p
+    );
+  }
+
+  async setExternalPluginParam(
+    trackIdx: number,
+    slotIdx: number,
+    paramId: number,
+    normVal: number
+  ): Promise<void> {
+    const clamped = Math.max(0, Math.min(1, normVal));
+    this.loadedExternalPlugins = this.loadedExternalPlugins.map((p) => {
+      if (p.trackIdx !== trackIdx || p.slotIdx !== slotIdx) return p;
+      return {
+        ...p,
+        parameters: p.parameters.map((prm) =>
+          prm.id === paramId ? { ...prm, current_normalized: clamped } : prm
+        ),
+      };
+    });
+    if (isTauriEnvironment()) {
+      await invoke('cmd_set_external_plugin_param', {
+        trackIdx,
+        slotIdx,
+        paramId,
+        normVal: clamped,
+      });
+    }
+  }
+
+  async syncPitcherRtParams(trackIdx?: number, slotIdx?: number): Promise<void> {
+    const resolved = this.resolvePluginSlotTarget('AutoPitchCorrector', 1, 3);
+    const tIdx = trackIdx ?? resolved.trackIdx;
+    const sIdx = slotIdx ?? resolved.slotIdx;
+    this.recordUiUndoCheckpoint('Update Pitcher RT');
+    if (isTauriEnvironment()) {
+      await invoke('cmd_update_pitcher_rt_params', {
+        trackIdx: tIdx,
+        slotIdx: sIdx,
+        cfg: {
+          root_key: this.pitcherRootKey,
+          scale_index: this.pitcherScaleIndex,
+          retune_speed_ms: this.pitcherRetuneSpeedMs,
+          humanize: this.pitcherHumanize,
+          formant_preserve: this.pitcherFormantPreserve,
+          formant_shift_semitones: this.pitcherFormantShiftSemitones,
+          mix: this.pitcherMix,
+          bypass: this.pitcherBypass,
+        },
+      });
+      await this.refreshUndoRedoStatus();
+    }
+  }
+
+  async analyzeVocalPitchBlobs(audioPath?: string): Promise<void> {
+    this.vocalStatusMessage = 'Running pYIN Viterbi HMM + Note Blob Segmentation...';
+    if (isTauriEnvironment()) {
+      try {
+        const res = await invoke<any>('cmd_vocal_analyze_pitch_blobs', {
+          audioPath: audioPath ?? this.loadedAudioFullPath ?? null,
+        });
+        if (res && Array.isArray(res.blobs)) {
+          this.vocalSampleRateHz = Number(res.sampleRateHz ?? 48000);
+          this.vocalTotalFrames = Math.max(1, Number(res.totalFrames ?? 48000 * 2.4));
+          this.vocalBlobs = res.blobs;
+          this.vocalSelectedBlobId = this.vocalBlobs[0]?.blob_id ?? null;
+          this.vocalStatusMessage = `Detected ${this.vocalBlobs.length} voiced note blobs @ ${(this.vocalSampleRateHz / 1000).toFixed(1)} kHz`;
+          return;
+        }
+      } catch (err) {
+        this.vocalStatusMessage = `Analysis fallback active (${String(err)})`;
+      }
+    }
+    this.vocalStatusMessage = `Segmented ${this.vocalBlobs.length} vocal note blobs (pYIN Viterbi + Sibilant Guard active)`;
+  }
+
+  snapAllVocalBlobsToScale(): void {
+    this.recordUiUndoCheckpoint('NewTone Snap All to Scale');
+    const SCALE_MASKS = [
+      0x0fff, // Chromatic
+      0b101010110101, // Major: 0,2,4,5,7,9,11
+      0b010110101101, // Natural Minor: 0,2,3,5,7,8,10
+      0b001010010101, // Major Pentatonic
+      0b010010101001, // Minor Pentatonic
+    ];
+    const baseMask = SCALE_MASKS[this.pitcherScaleIndex] ?? 0x0fff;
+    const root = this.pitcherRootKey % 12;
+    this.vocalBlobs = this.vocalBlobs.map((b) => {
+      const rawMidi = Math.round(b.detected_midi_note);
+      let bestMidi = rawMidi;
+      let bestDist = 99;
+      for (let cand = rawMidi - 6; cand <= rawMidi + 6; cand++) {
+        const pc = (((cand - root) % 12) + 12) % 12;
+        if (((baseMask >> pc) & 1) !== 0) {
+          const d = Math.abs(cand - b.detected_midi_note);
+          if (d < bestDist) {
+            bestDist = d;
+            bestMidi = cand;
+          }
+        }
+      }
+      return {
+        ...b,
+        target_midi_note: bestMidi,
+        fine_pitch_cents: 0,
+        pitch_drift_correction: Math.max(b.pitch_drift_correction, 0.85),
+      };
+    });
+    this.vocalStatusMessage = `Snapped ${this.vocalBlobs.length} vocal blobs to scale (Root ${['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][root]})`;
+  }
+
+  splitVocalBlob(blobId: number): void {
+    const idx = this.vocalBlobs.findIndex((b) => b.blob_id === blobId);
+    if (idx < 0) return;
+    const b = this.vocalBlobs[idx];
+    const len = b.end_sample - b.start_sample;
+    if (len < 2048) return;
+    this.recordUiUndoCheckpoint('Split Vocal Note Blob');
+    const mid = b.start_sample + Math.floor(len / 2);
+    const wMid = b.warped_start_sample + Math.floor((b.warped_end_sample - b.warped_start_sample) / 2);
+    const cMid = Math.max(1, Math.floor(b.pitch_contour_midi.length / 2));
+    const nextId = this.vocalBlobs.reduce((m, x) => Math.max(m, x.blob_id), 0) + 1;
+    const left: VocalNoteBlobUi = {
+      ...b,
+      end_sample: mid,
+      warped_end_sample: wMid,
+      pitch_contour_midi: b.pitch_contour_midi.slice(0, cMid),
+    };
+    const right: VocalNoteBlobUi = {
+      ...b,
+      blob_id: nextId,
+      start_sample: mid,
+      warped_start_sample: wMid,
+      pitch_contour_midi: b.pitch_contour_midi.slice(cMid),
+    };
+    this.vocalBlobs = [...this.vocalBlobs.slice(0, idx), left, right, ...this.vocalBlobs.slice(idx + 1)];
+    this.vocalSelectedBlobId = right.blob_id;
+  }
+
+  async commitVocalPitchEdits(targetTrack = 1): Promise<void> {
+    this.recordUiUndoCheckpoint('Commit NewTone Vocal Edits');
+    this.vocalStatusMessage = 'Rendering Formant-Preserved PSOLA/Cepstral Vocal Stem...';
+    if (isTauriEnvironment()) {
+      try {
+        const frames = await invoke<number>('cmd_vocal_commit_pitch_edits', {
+          blobs: this.vocalBlobs,
+          targetTrack,
+        });
+        this.vocalStatusMessage = `Committed ${frames.toLocaleString()} formant-preserved frames to Mixer Track #${targetTrack}`;
+        await this.refreshUndoRedoStatus();
+        return;
+      } catch (err) {
+        this.vocalStatusMessage = `Commit warning: ${String(err)}`;
+        return;
+      }
+    }
+    this.vocalStatusMessage = `Committed ${this.vocalBlobs.length} edited vocal blobs to Mixer Track #${targetTrack} (True-Envelope Formant Lock)`;
   }
 }

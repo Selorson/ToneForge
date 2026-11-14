@@ -19,9 +19,12 @@
 use crate::bsrnn_streaming::{
     BSRNN_FREQ_BINS, BSRNN_HOP_SIZE, BSRNN_N_FFT, BSRNN_STEM_COUNT, BsrnnInputHop, BsrnnOutputHop,
 };
+pub use crate::delimit_onnx::{
+    OZONE_DELIMIT_SPEC_IN_LEN, OZONE_DELIMIT_SPEC_OUT_LEN, OZONE_DELIMIT_STATES_LEN,
+    OzoneDelimitOnnxProcessor, RealtimeDelimitOnnxWorker,
+};
 use crate::onnx_gpu_runtime::{
     GpuExecutionTier, GpuRuntimeManager, resolve_ozone_bsrnn_onnx_path,
-    resolve_ozone_delimit_onnx_path,
 };
 use daw_core_graph::StereoFrame;
 use ort::{session::Session, value::TensorRef};
@@ -40,11 +43,6 @@ pub const OZONE_BSRNN_STATES_LEN: usize = 2 * 2 * 2 * 1 * 13 * 128;
 /// Exact 2-hop future lookahead in samples (`2 * 512 = 1,024` samples) inside the 3-frame STFT window.
 pub const OZONE_BSRNN_LOOKAHEAD_HOPS: usize = 2;
 pub const OZONE_BSRNN_LOOKAHEAD_SAMPLES: usize = OZONE_BSRNN_LOOKAHEAD_HOPS * BSRNN_HOP_SIZE;
-
-/// Exact element counts for `delimit_exp009_ep080_fixed2.onnx`.
-pub const OZONE_DELIMIT_SPEC_IN_LEN: usize = 1 * 1 * BSRNN_FREQ_BINS * 2 * 2; // 4,100
-pub const OZONE_DELIMIT_SPEC_OUT_LEN: usize = 1 * 1 * 1 * BSRNN_FREQ_BINS * 1 * 2; // 2,050
-pub const OZONE_DELIMIT_STATES_LEN: usize = 1 * 2 * 2 * 1 * 13 * 128; // 6,656
 
 /// Real ONNX Runtime GPU/CPU 4-Stem Separator executing `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx`.
 struct BsrnnHeapBuffers {
@@ -540,207 +538,5 @@ impl OzoneBsrnnOnnxSeparator {
         }
 
         Ok(stems)
-    }
-}
-
-/// Real ONNX Runtime GPU/CPU De-Limiter / Unlimiter executing `delimit_exp009_ep080_fixed2.onnx`.
-pub struct OzoneDelimitOnnxProcessor {
-    session: Session,
-    active_tier: GpuExecutionTier,
-    input_spec_buf: Vec<f32>,
-    states_l: Vec<f32>,
-    states_r: Vec<f32>,
-    mask_out_buf: Vec<f32>,
-}
-
-impl OzoneDelimitOnnxProcessor {
-    pub fn from_default_assets() -> Result<Self, String> {
-        let model_path = resolve_ozone_delimit_onnx_path().ok_or_else(|| {
-            "Could not locate delimit_exp009_ep080_fixed2.onnx in assets/".to_string()
-        })?;
-        Self::from_model_path(&model_path)
-    }
-
-    pub fn from_model_path(model_path: &Path) -> Result<Self, String> {
-        let rt = GpuRuntimeManager::global();
-        let (session, active_tier) = rt.create_session(model_path)?;
-        Ok(Self {
-            session,
-            active_tier,
-            input_spec_buf: vec![0.0f32; OZONE_DELIMIT_SPEC_IN_LEN],
-            states_l: vec![0.0f32; OZONE_DELIMIT_STATES_LEN],
-            states_r: vec![0.0f32; OZONE_DELIMIT_STATES_LEN],
-            mask_out_buf: vec![0.0f32; OZONE_DELIMIT_SPEC_OUT_LEN],
-        })
-    }
-
-    #[inline]
-    pub fn active_tier(&self) -> GpuExecutionTier {
-        self.active_tier
-    }
-
-    pub fn reset(&mut self) {
-        self.states_l.fill(0.0);
-        self.states_r.fill(0.0);
-    }
-
-    /// Evaluates the complex GLU transient restoration mask `[1025]` (`[M_re, M_im]`) on a 2-frame
-    /// complex STFT slice `[Frame(t), Frame(t+1)]` for a single channel (`is_right_channel = false` -> L, `true` -> R).
-    pub fn infer_channel_complex_mask(
-        &mut self,
-        frames_2: &[[Complex32; BSRNN_FREQ_BINS]; 2],
-        is_right_channel: bool,
-        out_mask: &mut [Complex32; BSRNN_FREQ_BINS],
-    ) -> Result<(), String> {
-        for k in 0..BSRNN_FREQ_BINS {
-            let base = (k * 2) * 2;
-            self.input_spec_buf[base] = frames_2[0][k].re;
-            self.input_spec_buf[base + 1] = frames_2[0][k].im;
-            self.input_spec_buf[base + 2] = frames_2[1][k].re;
-            self.input_spec_buf[base + 3] = frames_2[1][k].im;
-        }
-
-        let states_ref = if is_right_channel {
-            &mut self.states_r
-        } else {
-            &mut self.states_l
-        };
-
-        {
-            let t_spec = TensorRef::from_array_view((
-                [1usize, 1, BSRNN_FREQ_BINS, 2, 2],
-                self.input_spec_buf.as_slice(),
-            ))
-            .map_err(|e| e.to_string())?;
-            let t_states = TensorRef::from_array_view((
-                [1usize, 2, 2, 1, 13, 128],
-                states_ref.as_slice(),
-            ))
-            .map_err(|e| e.to_string())?;
-
-            let outputs = self
-                .session
-                .run(ort::inputs![
-                    "input_spectrogram" => t_spec,
-                    "input_states" => t_states,
-                ])
-                .map_err(|e| format!("Delimit ONNX run failed: {}", e))?;
-
-            let (_, mask_slice) = outputs["output_spectrogram"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| e.to_string())?;
-            let (_, next_states) = outputs["output_states"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| e.to_string())?;
-
-            self.mask_out_buf.copy_from_slice(mask_slice);
-            states_ref.copy_from_slice(next_states);
-        }
-
-        for k in 0..BSRNN_FREQ_BINS {
-            out_mask[k] = Complex32::new(self.mask_out_buf[k * 2], self.mask_out_buf[k * 2 + 1]);
-        }
-
-        Ok(())
-    }
-
-    /// Restores clipped/limited transients on an offline stereo signal (`amount` in `[0.0, 1.0]`).
-    pub fn process_offline(
-        &mut self,
-        clipped: &[StereoFrame],
-        amount: f32,
-    ) -> Result<Vec<StereoFrame>, String> {
-        let len = clipped.len();
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        let blend = amount.clamp(0.0, 1.0);
-        if blend <= 1e-6 {
-            return Ok(clipped.to_vec());
-        }
-
-        self.reset();
-
-        let mut planner = RealFftPlanner::<f32>::new();
-        let fft_fwd = planner.plan_fft_forward(BSRNN_N_FFT);
-        let fft_inv = planner.plan_fft_inverse(BSRNN_N_FFT);
-        // `delimit_exp009_ep080_fixed2.onnx` has no internal `/normalizer` node and was trained
-        // on ortho-normalized (`1 / sqrt(N_FFT)`) periodic Hann STFT frames (`running_var ~ 0.89`).
-        let ortho_scale = 1.0 / (BSRNN_N_FFT as f32).sqrt();
-        // For periodic Hann `w(n)` at 4x overlap (`N=2048, H=512`), `sum_{m=0..3} w(n + mH)^2 === 1.5`.
-        let wola_inv_scale = ortho_scale * (2.0 / 3.0);
-
-        let mut win = [0.0f32; BSRNN_N_FFT];
-        for n in 0..BSRNN_N_FFT {
-            win[n] = 0.5 * (1.0 - (2.0 * PI * (n as f32) / (BSRNN_N_FFT as f32)).cos());
-        }
-
-        let pad = BSRNN_N_FFT;
-        let padded_len = len + 2 * pad + BSRNN_HOP_SIZE;
-        let num_frames = (padded_len - BSRNN_N_FFT) / BSRNN_HOP_SIZE + 1;
-
-        let mut specs_l = vec![[Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS]; num_frames];
-        let mut specs_r = vec![[Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS]; num_frames];
-        let mut time_buf = [0.0f32; BSRNN_N_FFT];
-
-        for t in 0..num_frames {
-            let start = t * BSRNN_HOP_SIZE;
-            for ch in 0..2 {
-                for n in 0..BSRNN_N_FFT {
-                    let idx = start + n;
-                    let s = if idx >= pad && (idx - pad) < len {
-                        clipped[idx - pad][ch]
-                    } else {
-                        0.0
-                    };
-                    time_buf[n] = s * win[n] * ortho_scale;
-                }
-                if ch == 0 {
-                    let _ = fft_fwd.process(&mut time_buf, &mut specs_l[t]);
-                } else {
-                    let _ = fft_fwd.process(&mut time_buf, &mut specs_r[t]);
-                }
-            }
-        }
-
-        let mut ola_l = vec![0.0f32; padded_len + BSRNN_N_FFT];
-        let mut ola_r = vec![0.0f32; padded_len + BSRNN_N_FFT];
-        let mut mask = [Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS];
-        let mut out_spec = [Complex32::new(0.0, 0.0); BSRNN_FREQ_BINS];
-
-        for t in 0..(num_frames - 1) {
-            let start = t * BSRNN_HOP_SIZE;
-            let pair_l = [specs_l[t], specs_l[t + 1]];
-            self.infer_channel_complex_mask(&pair_l, false, &mut mask)?;
-            for k in 0..BSRNN_FREQ_BINS {
-                let restored = specs_l[t][k] * (Complex32::new(1.0, 0.0) + mask[k] * blend);
-                out_spec[k] = restored;
-            }
-            out_spec[0].im = 0.0;
-            out_spec[BSRNN_FREQ_BINS - 1].im = 0.0;
-            let _ = fft_inv.process(&mut out_spec, &mut time_buf);
-            for n in 0..BSRNN_N_FFT {
-                ola_l[start + n] += time_buf[n] * win[n] * wola_inv_scale;
-            }
-
-            let pair_r = [specs_r[t], specs_r[t + 1]];
-            self.infer_channel_complex_mask(&pair_r, true, &mut mask)?;
-            for k in 0..BSRNN_FREQ_BINS {
-                let restored = specs_r[t][k] * (Complex32::new(1.0, 0.0) + mask[k] * blend);
-                out_spec[k] = restored;
-            }
-            out_spec[0].im = 0.0;
-            out_spec[BSRNN_FREQ_BINS - 1].im = 0.0;
-            let _ = fft_inv.process(&mut out_spec, &mut time_buf);
-            for n in 0..BSRNN_N_FFT {
-                ola_r[start + n] += time_buf[n] * win[n] * wola_inv_scale;
-            }
-        }
-
-        let mut out = vec![[0.0f32; 2]; len];
-        for i in 0..len {
-            out[i] = [ola_l[pad + i], ola_r[pad + i]];
-        }
-        Ok(out)
     }
 }

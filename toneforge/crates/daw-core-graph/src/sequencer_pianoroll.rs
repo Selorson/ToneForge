@@ -294,6 +294,272 @@ impl PianoRollPattern {
             false
         }
     }
+
+    /// Returns the IDs of all active notes intersecting the Box Lasso rectangle `[min_tick..=max_tick] × [min_key..=max_key]`.
+    pub fn select_notes_in_lasso(
+        &self,
+        min_tick: i64,
+        max_tick: i64,
+        min_key: u8,
+        max_key: u8,
+    ) -> Vec<u32> {
+        let t0 = min_tick.min(max_tick);
+        let t1 = min_tick.max(max_tick);
+        let k0 = min_key.min(max_key);
+        let k1 = min_key.max(max_key);
+        let mut selected = Vec::new();
+        for n in self.active_notes() {
+            if n.key >= k0 && n.key <= k1 && n.end_tick() >= t0 && n.start_tick <= t1 {
+                selected.push(n.id);
+            }
+        }
+        selected
+    }
+
+    /// Updates per-note bottom expression lane properties (`velocity`, `pan`, `fine_pitch_cents`) in place (`0` allocs).
+    pub fn set_note_expression(
+        &mut self,
+        note_id: u32,
+        velocity: Option<f32>,
+        pan: Option<f32>,
+        fine_pitch_cents: Option<f32>,
+    ) -> bool {
+        for i in 0..self.note_count {
+            if self.notes[i].id == note_id {
+                if let Some(v) = velocity {
+                    self.notes[i].velocity = v.clamp(0.01, 1.0);
+                }
+                if let Some(p) = pan {
+                    self.notes[i].pan = p.clamp(-1.0, 1.0);
+                }
+                if let Some(c) = fine_pitch_cents {
+                    self.notes[i].fine_pitch_cents = c.clamp(-1200.0, 1200.0);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Quantizes `note_ids` (or all notes when `None`) toward `grid_ticks` with `strength` (`0.0..=1.0`).
+    pub fn quantize_notes(
+        &mut self,
+        note_ids: Option<&[u32]>,
+        grid_ticks: i64,
+        strength: f32,
+        quantize_duration: bool,
+    ) {
+        let grid = grid_ticks.max(1);
+        let s = strength.clamp(0.0, 1.0) as f64;
+        for i in 0..self.note_count {
+            let matches = match note_ids {
+                Some(ids) => ids.contains(&self.notes[i].id),
+                None => true,
+            };
+            if !matches {
+                continue;
+            }
+            let orig_start = self.notes[i].start_tick;
+            let nearest = ((orig_start as f64 / grid as f64).round() as i64) * grid;
+            let new_start =
+                (orig_start as f64 + s * ((nearest - orig_start) as f64)).round() as i64;
+            self.notes[i].start_tick = new_start.max(0);
+
+            if quantize_duration {
+                let orig_dur = self.notes[i].duration_ticks;
+                let nearest_dur =
+                    (((orig_dur as f64 / grid as f64).round() as i64) * grid).max(grid);
+                let new_dur =
+                    (orig_dur as f64 + s * ((nearest_dur - orig_dur) as f64)).round() as i64;
+                self.notes[i].duration_ticks = new_dur.max(1);
+            }
+        }
+        self.resort_active_notes_in_place();
+    }
+
+    /// FL Studio `Alt+S` Chord Strumizer: offsets simultaneous chord notes progressively in time and velocity.
+    pub fn strum_notes(
+        &mut self,
+        note_ids: Option<&[u32]>,
+        step_offset_ticks: i64,
+        velocity_decay_per_note: f32,
+        alternate_direction: bool,
+    ) {
+        if self.note_count < 2 || step_offset_ticks == 0 {
+            return;
+        }
+        let mut target_indices: Vec<usize> = (0..self.note_count)
+            .filter(|&i| note_ids.map_or(true, |ids| ids.contains(&self.notes[i].id)))
+            .collect();
+        if target_indices.len() < 2 {
+            return;
+        }
+        target_indices.sort_by_key(|&i| (self.notes[i].start_tick, self.notes[i].key));
+
+        let chord_tol = 6i64;
+        let mut group_start = 0usize;
+        let mut chord_counter = 0usize;
+
+        while group_start < target_indices.len() {
+            let anchor_tick = self.notes[target_indices[group_start]].start_tick;
+            let mut group_end = group_start + 1;
+            while group_end < target_indices.len()
+                && (self.notes[target_indices[group_end]].start_tick - anchor_tick).abs()
+                    <= chord_tol
+            {
+                group_end += 1;
+            }
+            let chord_slice = &mut target_indices[group_start..group_end];
+            if chord_slice.len() >= 2 {
+                let downstroke =
+                    !alternate_direction || (chord_counter % 2 == 0);
+                if downstroke && step_offset_ticks >= 0 || (!downstroke && step_offset_ticks < 0) {
+                    chord_slice.sort_by_key(|&i| self.notes[i].key);
+                } else {
+                    chord_slice.sort_by_key(|&i| std::cmp::Reverse(self.notes[i].key));
+                }
+                let step_abs = step_offset_ticks.abs();
+                for (pos_in_chord, &n_idx) in chord_slice.iter().enumerate() {
+                    let delta = (pos_in_chord as i64) * step_abs;
+                    self.notes[n_idx].start_tick = (self.notes[n_idx].start_tick + delta).max(0);
+                    self.notes[n_idx].duration_ticks =
+                        (self.notes[n_idx].duration_ticks - delta).max(6);
+                    let v_scale =
+                        (1.0 - (pos_in_chord as f32) * velocity_decay_per_note).clamp(0.25, 1.25);
+                    self.notes[n_idx].velocity = (self.notes[n_idx].velocity * v_scale).clamp(0.05, 1.0);
+                }
+                chord_counter += 1;
+            }
+            group_start = group_end;
+        }
+        self.resort_active_notes_in_place();
+    }
+
+    /// FL Studio `Alt+A` Chord Arpeggiator: slices sustained chords into rhythmic arpeggiated steps.
+    pub fn arpeggiate_notes(
+        &mut self,
+        note_ids: Option<&[u32]>,
+        step_ticks: i64,
+        gate_ratio: f32,
+        direction: ArpDirection,
+        octaves: u8,
+    ) {
+        let step = step_ticks.max(4);
+        let gate = ((step as f32 * gate_ratio.clamp(0.1, 1.0)).round() as i64).max(2);
+        let oct_count = octaves.clamp(1, 4);
+
+        let mut kept = Vec::with_capacity(self.note_count);
+        let mut target = Vec::new();
+        for i in 0..self.note_count {
+            let is_sel = note_ids.map_or(true, |ids| ids.contains(&self.notes[i].id));
+            if is_sel {
+                target.push(self.notes[i]);
+            } else {
+                kept.push(self.notes[i]);
+            }
+        }
+        if target.is_empty() {
+            return;
+        }
+        target.sort_by_key(|n| (n.start_tick, n.key));
+
+        let mut next_id = self
+            .active_notes()
+            .iter()
+            .map(|n| n.id)
+            .max()
+            .unwrap_or(1)
+            .saturating_add(1);
+
+        let chord_tol = 6i64;
+        let mut g0 = 0usize;
+        while g0 < target.len() {
+            let start_t = target[g0].start_tick;
+            let mut g1 = g0 + 1;
+            let mut max_end = target[g0].end_tick();
+            while g1 < target.len() && (target[g1].start_tick - start_t).abs() <= chord_tol {
+                max_end = max_end.max(target[g1].end_tick());
+                g1 += 1;
+            }
+            let chord = &target[g0..g1];
+            let mut expanded_pitches = Vec::with_capacity(chord.len() * (oct_count as usize));
+            for oct in 0..oct_count {
+                for n in chord {
+                    let k = (n.key as u16 + (oct as u16) * 12).min(127) as u8;
+                    expanded_pitches.push((k, n.velocity, n.pan, n.color_group));
+                }
+            }
+            match direction {
+                ArpDirection::Up => expanded_pitches.sort_by_key(|p| p.0),
+                ArpDirection::Down => expanded_pitches.sort_by_key(|p| std::cmp::Reverse(p.0)),
+                ArpDirection::UpDown => {
+                    expanded_pitches.sort_by_key(|p| p.0);
+                    if expanded_pitches.len() > 2 {
+                        let rev: Vec<_> = expanded_pitches[1..expanded_pitches.len() - 1]
+                            .iter()
+                            .rev()
+                            .copied()
+                            .collect();
+                        expanded_pitches.extend(rev);
+                    }
+                }
+            }
+
+            let mut cur_t = start_t;
+            let mut step_idx = 0usize;
+            while cur_t < max_end && kept.len() < MAX_NOTES_PER_PATTERN {
+                let (k, vel, pan, cg) = expanded_pitches[step_idx % expanded_pitches.len()];
+                let dur = gate.min(max_end - cur_t).max(1);
+                kept.push(PianoRollNote {
+                    id: next_id,
+                    start_tick: cur_t,
+                    duration_ticks: dur,
+                    key: k,
+                    velocity: vel,
+                    pan,
+                    fine_pitch_cents: 0.0,
+                    is_slide: false,
+                    color_group: cg,
+                });
+                next_id = next_id.saturating_add(1);
+                cur_t += step;
+                step_idx += 1;
+            }
+            g0 = g1;
+        }
+
+        self.note_count = 0;
+        for n in kept.into_iter().take(MAX_NOTES_PER_PATTERN) {
+            let _ = self.add_note(n);
+        }
+    }
+
+    fn resort_active_notes_in_place(&mut self) {
+        for i in 1..self.note_count {
+            let cur = self.notes[i];
+            let mut j = i;
+            while j > 0 {
+                let prev = self.notes[j - 1];
+                if prev.start_tick > cur.start_tick
+                    || (prev.start_tick == cur.start_tick && prev.is_slide && !cur.is_slide)
+                {
+                    self.notes[j] = prev;
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            self.notes[j] = cur;
+        }
+    }
+}
+
+/// Arpeggiator traversal direction for [`PianoRollPattern::arpeggiate_notes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpDirection {
+    Up,
+    Down,
+    UpDown,
 }
 
 // ============================================================================
@@ -323,6 +589,18 @@ pub struct PlaylistClip {
     pub clip_offset_ticks: i64,
     pub gain: f32,
     pub muted: bool,
+    /// Slip-trim sample offset inside an `AudioStem` source buffer.
+    pub source_offset_samples: usize,
+    /// Equal-power $\sin(\frac{\pi}{2} t)$ fade-in length in samples (`AudioStem`).
+    pub fade_in_samples: usize,
+    /// Equal-power $\cos(\frac{\pi}{2} t)$ fade-out length in samples (`AudioStem`).
+    pub fade_out_samples: usize,
+    /// Polyphonic time-stretch ratio (`0.50 ..= 2.00`, `1.0` = unstretched).
+    pub stretch_ratio: f32,
+    /// Per-clip transpose in semitones (`-12.0 ..= +12.0`).
+    pub pitch_semitones: f32,
+    /// Loop recording take lane (`0` = main playlist lane, `1..=N` = Take 1..N).
+    pub take_lane_id: u16,
 }
 
 impl Default for PlaylistClip {
@@ -337,6 +615,12 @@ impl Default for PlaylistClip {
             clip_offset_ticks: 0,
             gain: 1.0,
             muted: false,
+            source_offset_samples: 0,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            stretch_ratio: 1.0,
+            pitch_semitones: 0.0,
+            take_lane_id: 0,
         }
     }
 }
@@ -441,6 +725,25 @@ impl PlaylistSequencer {
         true
     }
 
+    /// Zero-allocation, zero-drop RT variant of `upsert_pattern`: swaps `incoming` into pre-allocated
+    /// storage so any displaced `PianoRollPattern` (and its `String`/`Vec` heap buffers) stays inside
+    /// `incoming` to be retired on `toneforge-rt-gc`.
+    #[inline]
+    pub fn upsert_pattern_in_place_box(&mut self, incoming: &mut PianoRollPattern) -> bool {
+        for i in 0..self.pattern_count {
+            if self.patterns[i].pattern_id == incoming.pattern_id {
+                std::mem::swap(&mut self.patterns[i], incoming);
+                return true;
+            }
+        }
+        if self.pattern_count >= self.patterns.len() {
+            return false;
+        }
+        std::mem::swap(&mut self.patterns[self.pattern_count], incoming);
+        self.pattern_count += 1;
+        true
+    }
+
     pub fn find_pattern_mut(&mut self, pattern_id: u32) -> Option<&mut PianoRollPattern> {
         self.patterns[..self.pattern_count]
             .iter_mut()
@@ -484,6 +787,97 @@ impl PlaylistSequencer {
         false
     }
 
+    /// Razor Slice Tool (`C`): splits `clip_id` at `split_tick` into left (`clip_id`) and right (`new_clip_id`),
+    /// advancing `clip_offset_ticks` & `source_offset_samples` and applying automatic `2 ms` micro-fades
+    /// on `AudioStem` clips so splice points are 100% click-free.
+    pub fn slice_clip_at_tick(
+        &mut self,
+        clip_id: u32,
+        split_tick: i64,
+        new_clip_id: u32,
+        sample_rate: f64,
+        bpm: f64,
+        ppq_resolution: u32,
+    ) -> Option<(PlaylistClip, PlaylistClip)> {
+        if self.clip_count >= self.clips.len() {
+            return None;
+        }
+        let idx = (0..self.clip_count).find(|&i| self.clips[i].clip_id == clip_id)?;
+        let orig = self.clips[idx];
+        if split_tick <= orig.start_tick || split_tick >= orig.end_tick() {
+            return None;
+        }
+
+        let left_dur = split_tick - orig.start_tick;
+        let right_dur = orig.duration_ticks - left_dur;
+        let samples_per_tick =
+            (sample_rate.max(8_000.0) * 60.0) / (bpm.max(10.0) * (ppq_resolution.max(24) as f64));
+        let micro_fade = ((0.002 * sample_rate.max(8_000.0)).round() as usize).max(16);
+        let stretch = orig.stretch_ratio.clamp(0.25, 4.0) as f64;
+        let delta_source_samples =
+            (((left_dur as f64) * samples_per_tick) / stretch).round() as usize;
+
+        let mut left = orig;
+        left.duration_ticks = left_dur;
+        if orig.kind == PlaylistClipKind::AudioStem {
+            left.fade_out_samples = left.fade_out_samples.max(micro_fade);
+        }
+
+        let mut right = orig;
+        right.clip_id = new_clip_id;
+        right.start_tick = split_tick;
+        right.duration_ticks = right_dur;
+        right.clip_offset_ticks = orig.clip_offset_ticks + left_dur;
+        if orig.kind == PlaylistClipKind::AudioStem {
+            right.source_offset_samples = orig.source_offset_samples + delta_source_samples;
+            right.fade_in_samples = right.fade_in_samples.max(micro_fade);
+        }
+
+        self.clips[idx] = left;
+        let _ = self.upsert_clip(right);
+        Some((left, right))
+    }
+
+    /// Duplicates `clip_id` into `new_clip_id` shifted by `tick_offset` (defaulting to immediately after `clip_id` when `0`).
+    pub fn duplicate_clip(
+        &mut self,
+        clip_id: u32,
+        new_clip_id: u32,
+        tick_offset: i64,
+    ) -> Option<PlaylistClip> {
+        let orig = *self
+            .active_clips()
+            .iter()
+            .find(|c| c.clip_id == clip_id)?;
+        let shift = if tick_offset == 0 {
+            orig.duration_ticks
+        } else {
+            tick_offset
+        };
+        let mut dup = orig;
+        dup.clip_id = new_clip_id;
+        dup.start_tick = (orig.start_tick + shift).max(0);
+        if self.upsert_clip(dup) {
+            Some(dup)
+        } else {
+            None
+        }
+    }
+
+    /// Collects Multi-Channel Ghost Notes `(target_channel_id, PianoRollNote)` from all patterns
+    /// other than `active_pattern_id` so the Piano Roll displays harmonic context across channels.
+    pub fn collect_ghost_notes(&self, active_pattern_id: u32) -> Vec<(u32, PianoRollNote)> {
+        let mut out = Vec::new();
+        for pat in self.active_patterns() {
+            if pat.pattern_id != active_pattern_id {
+                for &n in pat.active_notes() {
+                    out.push((pat.target_channel_id, n));
+                }
+            }
+        }
+        out
+    }
+
     /// Registers or updates an `AutomationClipArticulator` (`TensionSpline` + `LfoModulator`).
     pub fn upsert_automation_articulator(&mut self, articulator: AutomationClipArticulator) -> bool {
         for i in 0..self.articulator_count {
@@ -496,6 +890,27 @@ impl PlaylistSequencer {
             return false;
         }
         self.articulators[self.articulator_count] = articulator;
+        self.articulator_count += 1;
+        true
+    }
+
+    /// Zero-allocation, zero-drop RT variant of `upsert_automation_articulator`: swaps `incoming` into
+    /// pre-allocated storage so displaced `Vec<TensionControlPoint>` buffers are retired on `toneforge-rt-gc`.
+    #[inline]
+    pub fn upsert_articulator_in_place_box(
+        &mut self,
+        incoming: &mut AutomationClipArticulator,
+    ) -> bool {
+        for i in 0..self.articulator_count {
+            if self.articulators[i].controller_id == incoming.controller_id {
+                std::mem::swap(&mut self.articulators[i], incoming);
+                return true;
+            }
+        }
+        if self.articulator_count >= self.articulators.len() {
+            return false;
+        }
+        std::mem::swap(&mut self.articulators[self.articulator_count], incoming);
         self.articulator_count += 1;
         true
     }
@@ -584,6 +999,7 @@ impl PlaylistSequencer {
                         pat_tick,
                         effective_tick == clip.end_tick() - 1,
                         clip.gain,
+                        clip.pitch_semitones,
                         ppq_tick,
                         tick_sample_pos,
                         samples_per_tick,
@@ -602,6 +1018,7 @@ impl PlaylistSequencer {
                 pat_tick,
                 false,
                 1.0,
+                0.0,
                 ppq_tick,
                 tick_sample_pos,
                 samples_per_tick,
@@ -618,6 +1035,7 @@ impl PlaylistSequencer {
         pat_tick: i64,
         clip_ending_next_tick: bool,
         clip_gain: f32,
+        clip_pitch_semitones: f32,
         global_ppq_tick: i64,
         tick_sample_pos: i64,
         samples_per_tick: f64,
@@ -627,20 +1045,23 @@ impl PlaylistSequencer {
         if notes.is_empty() {
             return;
         }
+        let semi_round = clip_pitch_semitones.round() as i32;
+        let semi_frac_cents = (clip_pitch_semitones - semi_round as f32) * 100.0;
 
         // First pass: NoteOff events at `pat_tick`
         for note in notes {
             if !note.is_slide && (note.end_tick() == pat_tick || clip_ending_next_tick) {
+                let transposed_key = (note.key as i32 + semi_round).clamp(0, 127) as u8;
                 let ev = SequencerVoiceEvent {
                     sample_pos: tick_sample_pos,
                     ppq_tick: global_ppq_tick,
                     channel_id: pattern.target_channel_id,
                     note_id: note.id,
                     kind: VoiceEventKind::NoteOff,
-                    key: note.key,
+                    key: transposed_key,
                     velocity: 0.0,
                     pan: note.pan,
-                    fine_pitch_cents: note.fine_pitch_cents,
+                    fine_pitch_cents: (note.fine_pitch_cents + semi_frac_cents).clamp(-1200.0, 1200.0),
                     slide_duration_ticks: 0,
                     slide_duration_samples: 0,
                     color_group: note.color_group,
@@ -652,16 +1073,17 @@ impl PlaylistSequencer {
         // Second pass: Normal NoteOn events at `pat_tick` (before Slide notes on the same tick)
         for note in notes {
             if !note.is_slide && note.start_tick == pat_tick {
+                let transposed_key = (note.key as i32 + semi_round).clamp(0, 127) as u8;
                 let ev = SequencerVoiceEvent {
                     sample_pos: tick_sample_pos,
                     ppq_tick: global_ppq_tick,
                     channel_id: pattern.target_channel_id,
                     note_id: note.id,
                     kind: VoiceEventKind::NoteOn,
-                    key: note.key,
+                    key: transposed_key,
                     velocity: (note.velocity * clip_gain).clamp(0.0, 1.0),
                     pan: note.pan,
-                    fine_pitch_cents: note.fine_pitch_cents,
+                    fine_pitch_cents: (note.fine_pitch_cents + semi_frac_cents).clamp(-1200.0, 1200.0),
                     slide_duration_ticks: note.duration_ticks,
                     slide_duration_samples: ((note.duration_ticks as f64) * samples_per_tick)
                         .round()
@@ -675,6 +1097,7 @@ impl PlaylistSequencer {
         // Third pass: FL Studio 26 Slide/Portamento notes starting at `pat_tick`
         for note in notes {
             if note.is_slide && note.start_tick == pat_tick {
+                let transposed_key = (note.key as i32 + semi_round).clamp(0, 127) as u8;
                 let slide_samples = ((note.duration_ticks.max(1) as f64) * samples_per_tick)
                     .round()
                     .max(1.0) as usize;
@@ -684,10 +1107,10 @@ impl PlaylistSequencer {
                     channel_id: pattern.target_channel_id,
                     note_id: note.id,
                     kind: VoiceEventKind::SlideNote,
-                    key: note.key,
+                    key: transposed_key,
                     velocity: (note.velocity * clip_gain).clamp(0.0, 1.0),
                     pan: note.pan,
-                    fine_pitch_cents: note.fine_pitch_cents,
+                    fine_pitch_cents: (note.fine_pitch_cents + semi_frac_cents).clamp(-1200.0, 1200.0),
                     slide_duration_ticks: note.duration_ticks,
                     slide_duration_samples: slide_samples,
                     color_group: note.color_group,
@@ -830,6 +1253,8 @@ struct SynthVoice {
     // Per-voice Cytomic SVF state [Left, Right]
     svf_ic1eq: [f32; 2],
     svf_ic2eq: [f32; 2],
+    /// Optional automatic gate release countdown (`> 0` for one-shot Piano Roll audition notes).
+    auto_gate_remaining_samples: u32,
 }
 
 impl Default for SynthVoice {
@@ -860,13 +1285,23 @@ impl Default for SynthVoice {
             slide_target_pan: 0.0,
             svf_ic1eq: [0.0; 2],
             svf_ic2eq: [0.0; 2],
+            auto_gate_remaining_samples: 0,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct StolenVoiceTail {
+    active: bool,
+    voice: SynthVoice,
+    fade_pos: usize,
+    fade_total: usize,
+}
+
 /// 16-Voice Polyphonic Synthesizer & Sampler Generator (`UnifiedDspNode`) with FL Studio 26
-/// `SlideNote` Portamento, Cytomic TPT SVF Filter, ADSR Envelope, Sample-Accurate Event Queue,
-/// and configurable Lookahead Latency for **Point 1 APDC** (`ChannelGenerator`).
+/// `SlideNote` Portamento, Cytomic TPT SVF Filter, Analog Exponential RC ADSR Envelope,
+/// 4-Point Catmull-Rom Sample Interpolation, `2.5 ms` Anti-Click Voice Stealing Crossfade,
+/// Sample-Accurate Event Queue, and configurable Lookahead Latency for **Point 1 APDC**.
 pub struct PolyphonicSynthGeneratorNode {
     pub channel_id: u32,
     pub waveform: SynthOscWaveform,
@@ -880,6 +1315,7 @@ pub struct PolyphonicSynthGeneratorNode {
     pub default_slide_samples: usize,
     sample_rate: f64,
     voices: [SynthVoice; MAX_SYNTH_VOICES],
+    stolen_tails: [StolenVoiceTail; MAX_SYNTH_VOICES],
     event_queue: Vec<SequencerVoiceEvent>,
     event_count: usize,
     sampler_pcm: Vec<StereoFrame>,
@@ -906,6 +1342,7 @@ impl PolyphonicSynthGeneratorNode {
             default_slide_samples: (sample_rate * 0.08) as usize,
             sample_rate: sample_rate.max(8000.0),
             voices: [SynthVoice::default(); MAX_SYNTH_VOICES],
+            stolen_tails: [StolenVoiceTail::default(); MAX_SYNTH_VOICES],
             event_queue: vec![SequencerVoiceEvent::default(); MAX_GENERATOR_VOICE_EVENTS],
             event_count: 0,
             sampler_pcm: Vec::new(),
@@ -990,6 +1427,32 @@ impl PolyphonicSynthGeneratorNode {
     }
 
     #[inline]
+    fn push_stolen_voice_tail(&mut self, stolen: SynthVoice) {
+        if !stolen.active || stolen.env_level <= 1e-4 {
+            return;
+        }
+        let fade_total = ((self.sample_rate * 0.0025).round() as usize).max(16);
+        let mut slot_idx = 0usize;
+        let mut best_progress = 0usize;
+        for (i, tail) in self.stolen_tails.iter().enumerate() {
+            if !tail.active {
+                slot_idx = i;
+                break;
+            }
+            if tail.fade_pos >= best_progress {
+                best_progress = tail.fade_pos;
+                slot_idx = i;
+            }
+        }
+        self.stolen_tails[slot_idx] = StolenVoiceTail {
+            active: true,
+            voice: stolen,
+            fade_pos: 0,
+            fade_total,
+        };
+    }
+
+    #[inline]
     fn apply_voice_event_immediate(&mut self, ev: &SequencerVoiceEvent) {
         match ev.kind {
             VoiceEventKind::NoteOn => {
@@ -1013,6 +1476,9 @@ impl PolyphonicSynthGeneratorNode {
                             chosen_idx = i;
                         }
                     }
+                    // Preserve the stolen voice's phase/filter continuity across a 2.5 ms raised-cosine tail
+                    let stolen = self.voices[chosen_idx];
+                    self.push_stolen_voice_tail(stolen);
                 }
 
                 let pitch = (ev.key as f32) + ev.fine_pitch_cents * 0.01;
@@ -1043,6 +1509,11 @@ impl PolyphonicSynthGeneratorNode {
                     slide_target_pan: ev.pan.clamp(-1.0, 1.0),
                     svf_ic1eq: [0.0; 2],
                     svf_ic2eq: [0.0; 2],
+                    auto_gate_remaining_samples: if ev.note_id >= 0x8000_0000 {
+                        ev.slide_duration_samples as u32
+                    } else {
+                        0
+                    },
                 };
             }
             VoiceEventKind::NoteOff => {
@@ -1085,9 +1556,13 @@ impl PolyphonicSynthGeneratorNode {
             }
             VoiceEventKind::ChannelMute => {
                 if ev.velocity <= 0.0 {
-                    for v in &mut self.voices {
-                        v.active = false;
-                        v.stage = AdsrStage::Idle;
+                    for idx in 0..MAX_SYNTH_VOICES {
+                        let stolen = self.voices[idx];
+                        if stolen.active {
+                            self.push_stolen_voice_tail(stolen);
+                            self.voices[idx].active = false;
+                            self.voices[idx].stage = AdsrStage::Idle;
+                        }
                     }
                 }
             }
@@ -1106,6 +1581,197 @@ impl PolyphonicSynthGeneratorNode {
         } else {
             0.0
         }
+    }
+
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn render_voice_core(
+        waveform: SynthOscWaveform,
+        sampler_kit_voices: &[(u8, Vec<StereoFrame>)],
+        sampler_pcm: &[StereoFrame],
+        sampler_root_key: u8,
+        sustain_level: f32,
+        master_gain: f32,
+        sr: f64,
+        inv_sr: f64,
+        att_coeff: f32,
+        dec_coeff: f32,
+        rel_coeff: f32,
+        a1: f32,
+        a2: f32,
+        a3: f32,
+        advance_adsr: bool,
+        v: &mut SynthVoice,
+    ) -> Option<StereoFrame> {
+        if !v.active {
+            return None;
+        }
+        v.age_samples += 1;
+
+        // 1. Advance FL Studio 26 Slide / Portamento glide if active
+        if v.slide_active {
+            if v.slide_remaining_samples > 1 {
+                v.current_pitch_semitones += v.slide_pitch_step;
+                v.current_velocity = (v.current_velocity + v.slide_vel_step).clamp(0.0, 1.0);
+                v.current_pan = (v.current_pan + v.slide_pan_step).clamp(-1.0, 1.0);
+                v.slide_remaining_samples -= 1;
+            } else {
+                v.current_pitch_semitones = v.slide_target_pitch;
+                v.current_velocity = v.slide_target_vel;
+                v.current_pan = v.slide_target_pan;
+                v.slide_remaining_samples = 0;
+                v.slide_active = false;
+            }
+        }
+
+        // 2. Advance Analog Exponential RC ADSR envelope
+        if advance_adsr {
+            if v.auto_gate_remaining_samples > 0 {
+                v.auto_gate_remaining_samples -= 1;
+                if v.auto_gate_remaining_samples == 0 && v.stage != AdsrStage::Release {
+                    v.stage = AdsrStage::Release;
+                }
+            }
+            match v.stage {
+                AdsrStage::Idle => {
+                    v.active = false;
+                    return None;
+                }
+                AdsrStage::Attack => {
+                    // Exponential RC charge toward asymptote 1.2 (crosses 1.0 at exact `attack_sec`)
+                    v.env_level += att_coeff * (1.2 - v.env_level);
+                    if v.env_level >= 1.0 {
+                        v.env_level = 1.0;
+                        v.stage = AdsrStage::Decay;
+                    }
+                }
+                AdsrStage::Decay => {
+                    v.env_level += dec_coeff * ((sustain_level - 0.0005) - v.env_level);
+                    if v.env_level <= sustain_level + 1e-4 {
+                        v.env_level = sustain_level;
+                        v.stage = AdsrStage::Sustain;
+                    }
+                }
+                AdsrStage::Sustain => {
+                    v.env_level = sustain_level;
+                }
+                AdsrStage::Release => {
+                    v.env_level += rel_coeff * (-0.0002 - v.env_level);
+                    if v.env_level <= 0.0001 {
+                        v.env_level = 0.0;
+                        v.active = false;
+                        v.stage = AdsrStage::Idle;
+                        return None;
+                    }
+                }
+            }
+        }
+
+        // 3. Compute instantaneous oscillator frequency & 4-Point Catmull-Rom sampler read
+        let freq_hz = (440.0 * ((v.current_pitch_semitones as f64 - 69.0) / 12.0).exp2())
+            .clamp(20.0, sr * 0.47);
+        let dt = freq_hz * inv_sr;
+
+        let (mut sig_l, mut sig_r) = if !sampler_kit_voices.is_empty() {
+            let mut best_voice_idx = 0usize;
+            let mut min_dist = u8::MAX;
+            for (idx, (root_key, _)) in sampler_kit_voices.iter().enumerate() {
+                let dist = (*root_key).abs_diff(v.key);
+                if dist < min_dist {
+                    min_dist = dist;
+                    best_voice_idx = idx;
+                }
+            }
+            let (root_key, sample_buf) = &sampler_kit_voices[best_voice_idx];
+            let ratio = ((v.current_pitch_semitones - (*root_key as f32)) / 12.0)
+                .clamp(-2.0, 2.0)
+                .exp2() as f64;
+            if (v.sample_cursor as usize) < sample_buf.len() {
+                let interp =
+                    AudioStemClipPlayerNode::hermite4_stereo(sample_buf, v.sample_cursor, false);
+                v.sample_cursor += ratio;
+                (interp[0], interp[1])
+            } else {
+                v.active = false;
+                v.stage = AdsrStage::Idle;
+                return None;
+            }
+        } else if !sampler_pcm.is_empty() {
+            let ratio =
+                ((v.current_pitch_semitones - sampler_root_key as f32) / 12.0).exp2() as f64;
+            if (v.sample_cursor as usize) < sampler_pcm.len() {
+                let interp =
+                    AudioStemClipPlayerNode::hermite4_stereo(sampler_pcm, v.sample_cursor, true);
+                v.sample_cursor += ratio;
+                if v.sample_cursor >= sampler_pcm.len() as f64 {
+                    v.sample_cursor %= sampler_pcm.len().max(1) as f64;
+                }
+                (interp[0], interp[1])
+            } else {
+                v.sample_cursor = 0.0;
+                (0.0, 0.0)
+            }
+        } else {
+            match waveform {
+                SynthOscWaveform::Sine => {
+                    let s = (v.phase * TAU).sin() as f32;
+                    (s, s)
+                }
+                SynthOscWaveform::Triangle => {
+                    let s = (1.0 - 4.0 * (v.phase - 0.5).abs()) as f32;
+                    (s, s)
+                }
+                SynthOscWaveform::PolyBlepSaw => {
+                    let saw = 2.0 * v.phase - 1.0 - Self::poly_blep(v.phase, dt);
+                    (saw as f32, saw as f32)
+                }
+                SynthOscWaveform::PolyBlepPulse => {
+                    let p = if v.phase < 0.5 { 1.0 } else { -1.0 }
+                        + Self::poly_blep(v.phase, dt)
+                        - Self::poly_blep((v.phase + 0.5).fract(), dt);
+                    (p as f32, p as f32)
+                }
+                SynthOscWaveform::SuperSawRich => {
+                    let center = 2.0 * v.phase - 1.0 - Self::poly_blep(v.phase, dt);
+                    let sub = (v.sub_phase * TAU).sin() * 0.35;
+                    let dt_l = (freq_hz * 1.0045 * inv_sr).min(0.48);
+                    let dt_r = (freq_hz * 0.9955 * inv_sr).min(0.48);
+                    let saw_l =
+                        2.0 * v.detune_phase_l - 1.0 - Self::poly_blep(v.detune_phase_l, dt_l);
+                    let saw_r =
+                        2.0 * v.detune_phase_r - 1.0 - Self::poly_blep(v.detune_phase_r, dt_r);
+                    v.detune_phase_l = (v.detune_phase_l + dt_l).fract();
+                    v.detune_phase_r = (v.detune_phase_r + dt_r).fract();
+                    (
+                        (center * 0.5 + saw_l * 0.35 + sub) as f32,
+                        (center * 0.5 + saw_r * 0.35 + sub) as f32,
+                    )
+                }
+            }
+        };
+
+        v.phase = (v.phase + dt).fract();
+        v.sub_phase = (v.sub_phase + dt * 0.5).fract();
+
+        // 4. Per-voice Cytomic TPT SVF 2-pole lowpass filter
+        let raw = [sig_l, sig_r];
+        let mut filt = [0.0f32; 2];
+        for ch in 0..2 {
+            let v3 = raw[ch] - v.svf_ic2eq[ch];
+            let v1 = a1 * v.svf_ic1eq[ch] + a2 * v3;
+            let v2 = v.svf_ic2eq[ch] + a2 * v.svf_ic1eq[ch] + a3 * v3;
+            v.svf_ic1eq[ch] = 2.0 * v1 - v.svf_ic1eq[ch];
+            v.svf_ic2eq[ch] = 2.0 * v2 - v.svf_ic2eq[ch];
+            filt[ch] = v2;
+        }
+        sig_l = filt[0];
+        sig_r = filt[1];
+
+        // 5. Equal-power stereo pan + velocity + ADSR envelope
+        let pan_norm = (v.current_pan + 1.0) * 0.5;
+        let angle = pan_norm * std::f32::consts::FRAC_PI_2;
+        let gain_v = v.env_level * v.current_velocity * master_gain;
+        Some([sig_l * angle.cos() * gain_v, sig_r * angle.sin() * gain_v])
     }
 }
 
@@ -1128,6 +1794,7 @@ impl UnifiedDspNode for PolyphonicSynthGeneratorNode {
 
     fn reset_state(&mut self) {
         self.voices = [SynthVoice::default(); MAX_SYNTH_VOICES];
+        self.stolen_tails = [StolenVoiceTail::default(); MAX_SYNTH_VOICES];
         self.event_count = 0;
         self.lookahead_delay.reset();
     }
@@ -1163,10 +1830,13 @@ impl UnifiedDspNode for PolyphonicSynthGeneratorNode {
         let inv_sr = 1.0 / sr;
         let inv_sr_f32 = inv_sr as f32;
 
-        let attack_step = 1.0 / ((self.attack_sec.max(0.0005) as f64 * sr) as f32);
-        let decay_step =
-            (1.0 - self.sustain_level) / ((self.decay_sec.max(0.001) as f64 * sr) as f32);
-        let release_step = 1.0 / ((self.release_sec.max(0.001) as f64 * sr) as f32);
+        // Analog RC exponential one-pole envelope coefficients
+        let attack_samples = (self.attack_sec.max(0.0005) as f64 * sr).max(1.0);
+        let decay_samples = (self.decay_sec.max(0.001) as f64 * sr).max(1.0);
+        let release_samples = (self.release_sec.max(0.001) as f64 * sr).max(1.0);
+        let att_coeff = (1.0 - (-1.791_759_5 / attack_samples).exp()) as f32;
+        let dec_coeff = (1.0 - (-5.0 / decay_samples).exp()) as f32;
+        let rel_coeff = (1.0 - (-6.907_755_3 / release_samples).exp()) as f32;
 
         // Precompute Cytomic TPT SVF coefficients for current cutoff & resonance
         let nyquist = (sr as f32) * 0.48;
@@ -1196,178 +1866,66 @@ impl UnifiedDspNode for PolyphonicSynthGeneratorNode {
             let mut sum_l = 0.0f32;
             let mut sum_r = 0.0f32;
 
+            // Render active polyphonic voices
             for v in &mut self.voices {
-                if !v.active {
+                if let Some(out) = Self::render_voice_core(
+                    self.waveform,
+                    &self.sampler_kit_voices,
+                    &self.sampler_pcm,
+                    self.sampler_root_key,
+                    self.sustain_level,
+                    self.master_gain,
+                    sr,
+                    inv_sr,
+                    att_coeff,
+                    dec_coeff,
+                    rel_coeff,
+                    a1,
+                    a2,
+                    a3,
+                    true,
+                    v,
+                ) {
+                    sum_l += out[0];
+                    sum_r += out[1];
+                }
+            }
+
+            // Render 2.5 ms raised-cosine anti-click tails for any recently stolen voices
+            for tail in &mut self.stolen_tails {
+                if !tail.active {
                     continue;
                 }
-                v.age_samples += 1;
-
-                // 1. Advance FL Studio 26 Slide / Portamento glide if active
-                if v.slide_active {
-                    if v.slide_remaining_samples > 1 {
-                        v.current_pitch_semitones += v.slide_pitch_step;
-                        v.current_velocity =
-                            (v.current_velocity + v.slide_vel_step).clamp(0.0, 1.0);
-                        v.current_pan = (v.current_pan + v.slide_pan_step).clamp(-1.0, 1.0);
-                        v.slide_remaining_samples -= 1;
-                    } else {
-                        v.current_pitch_semitones = v.slide_target_pitch;
-                        v.current_velocity = v.slide_target_vel;
-                        v.current_pan = v.slide_target_pan;
-                        v.slide_remaining_samples = 0;
-                        v.slide_active = false;
-                    }
+                if tail.fade_pos >= tail.fade_total {
+                    tail.active = false;
+                    continue;
                 }
-
-                // 2. Advance ADSR envelope
-                match v.stage {
-                    AdsrStage::Idle => {
-                        v.active = false;
-                        continue;
-                    }
-                    AdsrStage::Attack => {
-                        v.env_level += attack_step;
-                        if v.env_level >= 1.0 {
-                            v.env_level = 1.0;
-                            v.stage = AdsrStage::Decay;
-                        }
-                    }
-                    AdsrStage::Decay => {
-                        v.env_level -= decay_step;
-                        if v.env_level <= self.sustain_level {
-                            v.env_level = self.sustain_level;
-                            v.stage = AdsrStage::Sustain;
-                        }
-                    }
-                    AdsrStage::Sustain => {
-                        v.env_level = self.sustain_level;
-                    }
-                    AdsrStage::Release => {
-                        v.env_level -= release_step;
-                        if v.env_level <= 0.0001 {
-                            v.env_level = 0.0;
-                            v.active = false;
-                            v.stage = AdsrStage::Idle;
-                            continue;
-                        }
-                    }
-                }
-
-                // 3. Compute instantaneous oscillator frequency from `current_pitch_semitones`
-                let freq_hz =
-                    (440.0 * ((v.current_pitch_semitones as f64 - 69.0) / 12.0).exp2()).clamp(20.0, sr * 0.47);
-                let dt = freq_hz * inv_sr;
-
-                let (mut sig_l, mut sig_r) = if !self.sampler_kit_voices.is_empty() {
-                    // Find closest kit voice by MIDI key (e.g. 36=Kick, 42=CH, 46=OH, 49=Crash)
-                    let mut best_voice_idx = 0usize;
-                    let mut min_dist = u8::MAX;
-                    for (idx, (root_key, _)) in self.sampler_kit_voices.iter().enumerate() {
-                        let dist = (*root_key).abs_diff(v.key);
-                        if dist < min_dist {
-                            min_dist = dist;
-                            best_voice_idx = idx;
-                        }
-                    }
-                    let (root_key, sample_buf) = &self.sampler_kit_voices[best_voice_idx];
-                    let ratio = ((v.current_pitch_semitones - (*root_key as f32)) / 12.0)
-                        .clamp(-2.0, 2.0)
-                        .exp2() as f64;
-                    let idx0 = v.sample_cursor as usize;
-                    if idx0 + 1 < sample_buf.len() {
-                        let frac = (v.sample_cursor - idx0 as f64) as f32;
-                        let s0 = sample_buf[idx0];
-                        let s1 = sample_buf[idx0 + 1];
-                        v.sample_cursor += ratio;
-                        (
-                            s0[0] + frac * (s1[0] - s0[0]),
-                            s0[1] + frac * (s1[1] - s0[1]),
-                        )
-                    } else {
-                        // One-shot sample finished: deactivate voice cleanly without looping
-                        v.active = false;
-                        v.stage = AdsrStage::Idle;
-                        continue;
-                    }
-                } else if !self.sampler_pcm.is_empty() {
-                    let ratio = ((v.current_pitch_semitones - self.sampler_root_key as f32) / 12.0)
-                        .exp2() as f64;
-                    let idx0 = v.sample_cursor as usize;
-                    if idx0 + 1 < self.sampler_pcm.len() {
-                        let frac = (v.sample_cursor - idx0 as f64) as f32;
-                        let s0 = self.sampler_pcm[idx0];
-                        let s1 = self.sampler_pcm[idx0 + 1];
-                        v.sample_cursor += ratio;
-                        (
-                            s0[0] + frac * (s1[0] - s0[0]),
-                            s0[1] + frac * (s1[1] - s0[1]),
-                        )
-                    } else {
-                        v.sample_cursor = 0.0;
-                        (0.0, 0.0)
-                    }
+                let progress = (tail.fade_pos as f32) / (tail.fade_total.max(1) as f32);
+                let fade_gain = 0.5 * (1.0 + (std::f32::consts::PI * progress).cos());
+                tail.fade_pos += 1;
+                if let Some(out) = Self::render_voice_core(
+                    self.waveform,
+                    &self.sampler_kit_voices,
+                    &self.sampler_pcm,
+                    self.sampler_root_key,
+                    self.sustain_level,
+                    self.master_gain,
+                    sr,
+                    inv_sr,
+                    att_coeff,
+                    dec_coeff,
+                    rel_coeff,
+                    a1,
+                    a2,
+                    a3,
+                    false,
+                    &mut tail.voice,
+                ) {
+                    sum_l += out[0] * fade_gain;
+                    sum_r += out[1] * fade_gain;
                 } else {
-                    match self.waveform {
-                        SynthOscWaveform::Sine => {
-                            let s = (v.phase * TAU).sin() as f32;
-                            (s, s)
-                        }
-                        SynthOscWaveform::Triangle => {
-                            let s = (1.0 - 4.0 * (v.phase - 0.5).abs()) as f32;
-                            (s, s)
-                        }
-                        SynthOscWaveform::PolyBlepSaw => {
-                            let saw = 2.0 * v.phase - 1.0 - Self::poly_blep(v.phase, dt);
-                            (saw as f32, saw as f32)
-                        }
-                        SynthOscWaveform::PolyBlepPulse => {
-                            let p = if v.phase < 0.5 { 1.0 } else { -1.0 }
-                                + Self::poly_blep(v.phase, dt)
-                                - Self::poly_blep((v.phase + 0.5).fract(), dt);
-                            (p as f32, p as f32)
-                        }
-                        SynthOscWaveform::SuperSawRich => {
-                            let center = 2.0 * v.phase - 1.0 - Self::poly_blep(v.phase, dt);
-                            let sub = (v.sub_phase * TAU).sin() * 0.35;
-                            let dt_l = (freq_hz * 1.0045 * inv_sr).min(0.48);
-                            let dt_r = (freq_hz * 0.9955 * inv_sr).min(0.48);
-                            let saw_l =
-                                2.0 * v.detune_phase_l - 1.0 - Self::poly_blep(v.detune_phase_l, dt_l);
-                            let saw_r =
-                                2.0 * v.detune_phase_r - 1.0 - Self::poly_blep(v.detune_phase_r, dt_r);
-                            v.detune_phase_l = (v.detune_phase_l + dt_l).fract();
-                            v.detune_phase_r = (v.detune_phase_r + dt_r).fract();
-                            (
-                                ((center * 0.5 + saw_l * 0.35 + sub) as f32),
-                                ((center * 0.5 + saw_r * 0.35 + sub) as f32),
-                            )
-                        }
-                    }
-                };
-
-                v.phase = (v.phase + dt).fract();
-                v.sub_phase = (v.sub_phase + dt * 0.5).fract();
-
-                // 4. Per-voice Cytomic TPT SVF 2-pole lowpass filter
-                let raw = [sig_l, sig_r];
-                let mut filt = [0.0f32; 2];
-                for ch in 0..2 {
-                    let v3 = raw[ch] - v.svf_ic2eq[ch];
-                    let v1 = a1 * v.svf_ic1eq[ch] + a2 * v3;
-                    let v2 = v.svf_ic2eq[ch] + a2 * v.svf_ic1eq[ch] + a3 * v3;
-                    v.svf_ic1eq[ch] = 2.0 * v1 - v.svf_ic1eq[ch];
-                    v.svf_ic2eq[ch] = 2.0 * v2 - v.svf_ic2eq[ch];
-                    filt[ch] = v2;
+                    tail.active = false;
                 }
-                sig_l = filt[0];
-                sig_r = filt[1];
-
-                // 5. Equal-power stereo pan + velocity + ADSR envelope
-                let pan_norm = (v.current_pan + 1.0) * 0.5;
-                let angle = pan_norm * std::f32::consts::FRAC_PI_2;
-                let gain_v = v.env_level * v.current_velocity * self.master_gain;
-                sum_l += sig_l * angle.cos() * gain_v;
-                sum_r += sig_r * angle.sin() * gain_v;
             }
 
             frame[0] += sum_l;
@@ -1403,8 +1961,12 @@ pub struct StemClipRegion {
     pub fade_in_samples: usize,
     pub fade_out_samples: usize,
     pub gain: f32,
+    pub gain_end: f32,
     pub pan: f32,
     pub pitch_semitones: f32,
+    pub stretch_ratio: f32,
+    pub equal_power_fades: bool,
+    pub take_lane_id: u16,
 }
 
 impl Default for StemClipRegion {
@@ -1417,8 +1979,12 @@ impl Default for StemClipRegion {
             fade_in_samples: 64,
             fade_out_samples: 64,
             gain: 1.0,
+            gain_end: 1.0,
             pan: 0.0,
             pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            equal_power_fades: true,
+            take_lane_id: 0,
         }
     }
 }
@@ -1429,7 +1995,9 @@ impl Default for StemClipRegion {
 pub struct AudioStemClipPlayerNode {
     pub channel_id: u32,
     pub stem_name: &'static str,
-    audio_data: Vec<StereoFrame>,
+    /// Shared, immutable audio (an `Arc` so asset / render caches and the engine hold one copy;
+    /// retired players are dropped on the GC thread, never on the audio thread).
+    audio_data: std::sync::Arc<Vec<StereoFrame>>,
     regions: Vec<StemClipRegion>,
     region_count: usize,
     pub continuous_mode: bool,
@@ -1443,6 +2011,15 @@ pub struct AudioStemClipPlayerNode {
 
 impl AudioStemClipPlayerNode {
     pub fn new(channel_id: u32, stem_name: &'static str, audio_data: Vec<StereoFrame>) -> Self {
+        Self::new_shared(channel_id, stem_name, std::sync::Arc::new(audio_data))
+    }
+
+    /// Like [`Self::new`], but plays audio shared with its owner (asset / render cache, no copy).
+    pub fn new_shared(
+        channel_id: u32,
+        stem_name: &'static str,
+        audio_data: std::sync::Arc<Vec<StereoFrame>>,
+    ) -> Self {
         let len = audio_data.len();
         let mut regions = vec![StemClipRegion::default(); MAX_STEM_CLIP_REGIONS];
         let mut region_count = 0usize;
@@ -1455,8 +2032,12 @@ impl AudioStemClipPlayerNode {
                 fade_in_samples: 32.min(len / 4),
                 fade_out_samples: 32.min(len / 4),
                 gain: 1.0,
+                gain_end: 1.0,
                 pan: 0.0,
                 pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                equal_power_fades: true,
+                take_lane_id: 0,
             };
             region_count = 1;
         }
@@ -1488,8 +2069,13 @@ impl AudioStemClipPlayerNode {
         self.lookahead_delay.set_delay_samples(lookahead_samples);
     }
 
-    pub fn set_audio_data(&mut self, audio_data: Vec<StereoFrame>) {
+    /// Plays audio shared with its owner (asset / render cache) without copying it.
+    pub fn set_shared_audio_data(&mut self, audio_data: std::sync::Arc<Vec<StereoFrame>>) {
         self.audio_data = audio_data;
+    }
+
+    pub fn set_audio_data(&mut self, audio_data: Vec<StereoFrame>) {
+        self.audio_data = std::sync::Arc::new(audio_data);
     }
 
     #[inline]
@@ -1582,6 +2168,13 @@ impl UnifiedDspNode for AudioStemClipPlayerNode {
         }
     }
 
+    fn swap_stem_clip_regions(&mut self, regions: &mut Vec<StemClipRegion>, count: usize) -> bool {
+        std::mem::swap(&mut self.regions, regions);
+        self.region_count = count.min(self.regions.len());
+        self.continuous_mode = false;
+        true
+    }
+
     fn process_slice(
         &mut self,
         ctx: &ProcessContext,
@@ -1621,28 +2214,43 @@ impl UnifiedDspNode for AudioStemClipPlayerNode {
                         continue;
                     }
                     let rel = (cur_pos - reg.timeline_start_sample) as usize;
-                    let rate =
+                    let stretch = reg.stretch_ratio.clamp(0.25, 4.0) as f64;
+                    let pitch_rate =
                         (((self.pitch_semitones + reg.pitch_semitones) / 12.0).exp2()) as f64;
+                    let rate = pitch_rate / stretch;
                     let src_pos = (reg.source_offset_samples as f64) + (rel as f64) * rate;
                     if !self.loop_enabled && (src_pos as usize) >= src_len {
                         continue;
                     }
                     let s = Self::hermite4_stereo(&self.audio_data, src_pos, self.loop_enabled);
 
-                    // De-click fade-in and fade-out envelope
-                    let mut env = reg.gain;
+                    // Clip Gain ramp + Equal-Power sin(pi/2 * t) / cos(pi/2 * t) Crossfade Envelopes
+                    let dur_f = reg.timeline_duration_samples.max(1) as f32;
+                    let clip_t = (rel as f32) / dur_f;
+                    let mut env = reg.gain + clip_t * (reg.gain_end - reg.gain);
                     if reg.fade_in_samples > 0 && rel < reg.fade_in_samples {
-                        env *= (rel as f32) / (reg.fade_in_samples as f32);
+                        let t = (rel as f32) / (reg.fade_in_samples as f32);
+                        env *= if reg.equal_power_fades {
+                            (std::f32::consts::FRAC_PI_2 * t).sin()
+                        } else {
+                            t
+                        };
                     }
                     let rem = reg.timeline_duration_samples.saturating_sub(rel);
-                    if reg.fade_out_samples > 0 && rem < reg.fade_out_samples {
-                        env *= (rem as f32) / (reg.fade_out_samples as f32);
+                    if reg.fade_out_samples > 0 && rem <= reg.fade_out_samples {
+                        let t_out =
+                            ((reg.fade_out_samples - rem) as f32) / (reg.fade_out_samples as f32);
+                        env *= if reg.equal_power_fades {
+                            (std::f32::consts::FRAC_PI_2 * t_out).cos()
+                        } else {
+                            (rem as f32) / (reg.fade_out_samples as f32)
+                        };
                     }
 
-                    let pan_norm = ((self.pan + reg.pan).clamp(-1.0, 1.0) + 1.0) * 0.5;
-                    let angle = pan_norm * std::f32::consts::FRAC_PI_2;
-                    acc_l += s[0] * angle.cos() * env;
-                    acc_r += s[1] * angle.sin() * env;
+                    // Stereo balance law: unity at centre, the opposite side attenuates linearly.
+                    let p = (self.pan + reg.pan).clamp(-1.0, 1.0);
+                    acc_l += s[0] * (1.0 - p).min(1.0) * env;
+                    acc_r += s[1] * (1.0 + p).min(1.0) * env;
                 }
             }
 
@@ -1673,6 +2281,7 @@ mod tests {
             slice_frames: 256,
             is_playing: true,
             is_offline_rendering: false,
+            ppq_resolution: crate::DEFAULT_PPQ,
         };
 
         // Trigger C4 (key 60) on color_group 0 at sample 0
@@ -1778,6 +2387,7 @@ mod tests {
             clip_offset_ticks: 0,
             gain: 1.0,
             muted: false,
+            ..Default::default()
         });
 
         let synth = PolyphonicSynthGeneratorNode::new(10, sr);
@@ -1808,11 +2418,146 @@ mod tests {
             slice_frames: 64,
             is_playing: true,
             is_offline_rendering: false,
+            ppq_resolution: crate::DEFAULT_PPQ,
         };
         channels[0].render_slice(&ctx, 0, 64);
         let peak = channels[0].output_buf[..64]
             .iter()
             .fold(0.0f32, |acc, f| acc.max(f[0].abs()).max(f[1].abs()));
         assert!(peak > 1e-3, "Expected active synth output, got peak {peak}");
+    }
+
+    #[test]
+    fn test_equal_power_crossfade_zero_db_power_law_and_pro_playlist_piano_roll_ops() {
+        // 1. Verify Equal-Power Crossfade sin^2(pi/2*t) + cos^2(pi/2*t) == 1.0 (0.0 dB power law)
+        // by feeding two uncorrelated signals (+1/-1 orthogonal Walsh or direct envelope gain probe)
+        // Here we test two StemClipRegions overlapping by 256 samples with orthogonal L/R channels:
+        // Clip A on Left ([1.0, 0.0]), Clip B on Right ([0.0, 1.0]) -> L^2 + R^2 must equal 1.0 across entire crossfade!
+        let mut audio_lr = vec![[0.0f32; 2]; 2048];
+        for i in 0..1024 {
+            audio_lr[i] = [1.0, 0.0]; // Source A: Left = 1.0
+        }
+        for i in 1024..2048 {
+            audio_lr[i] = [0.0, 1.0]; // Source B: Right = 1.0
+        }
+        let mut player = AudioStemClipPlayerNode::new(5, "CrossfadeProbe", audio_lr);
+        player.clear_regions();
+        // Clip A: [0 .. 600), fade_in = 0, fade_out = 200 (crossfade on [400..600))
+        player.add_region(StemClipRegion {
+            clip_id: 1,
+            timeline_start_sample: 0,
+            timeline_duration_samples: 600,
+            source_offset_samples: 0,
+            fade_in_samples: 0,
+            fade_out_samples: 200,
+            gain: 1.0,
+            gain_end: 1.0,
+            pan: 0.0,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            equal_power_fades: true,
+            take_lane_id: 0,
+        });
+        // Clip B: [400 .. 1000), fade_in = 200, fade_out = 0
+        player.add_region(StemClipRegion {
+            clip_id: 2,
+            timeline_start_sample: 400,
+            timeline_duration_samples: 600,
+            source_offset_samples: 1024,
+            fade_in_samples: 200,
+            fade_out_samples: 0,
+            gain: 1.0,
+            gain_end: 1.0,
+            pan: 0.0,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            equal_power_fades: true,
+            take_lane_id: 0,
+        });
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            current_sample_pos: 0,
+            ppq_tick: 0,
+            bpm: 120.0,
+            slice_frames: 1000,
+            is_playing: true,
+            is_offline_rendering: false,
+            ppq_resolution: crate::DEFAULT_PPQ,
+        };
+        let mut out = vec![[0.0f32; 2]; 1000];
+        player.process_slice(&ctx, &mut out, None, &mut []);
+        // Centre balance is unity for stereo sources, so the equal-power crossfade must hold
+        // L^2 + R^2 == A^2 + B^2 == 1.0 (0.0 dB) everywhere.
+        for pos in 0..1000 {
+            let pwr = out[pos][0] * out[pos][0] + out[pos][1] * out[pos][1];
+            let err_db = 10.0 * pwr.log10().abs();
+            assert!(
+                err_db < 1e-4,
+                "Equal-power crossfade deviated from 0.0 dB power law at sample {pos}: err_db = {err_db}"
+            );
+        }
+
+        // 2. Razor Slice with 2 ms micro-fade & Duplicate Clip & Multi-Channel Ghost Notes
+        let mut seq = PlaylistSequencer::new();
+        let mut pat_a = PianoRollPattern::new(1, "Chord Pad", 1, 384);
+        pat_a.add_note(PianoRollNote::new(1, 5, 90, 60, 0.8));
+        pat_a.add_note(PianoRollNote::new(2, 7, 90, 64, 0.8));
+        pat_a.add_note(PianoRollNote::new(3, 9, 90, 67, 0.8));
+        seq.upsert_pattern(pat_a);
+
+        let mut pat_b = PianoRollPattern::new(2, "Ghost Lead", 2, 384);
+        pat_b.add_note(PianoRollNote::new(10, 48, 48, 72, 0.9));
+        seq.upsert_pattern(pat_b);
+
+        let ghosts = seq.collect_ghost_notes(1);
+        assert_eq!(ghosts.len(), 1);
+        assert_eq!(ghosts[0].0, 2);
+        assert_eq!(ghosts[0].1.key, 72);
+
+        seq.upsert_clip(PlaylistClip {
+            clip_id: 10,
+            track_row: 0,
+            kind: PlaylistClipKind::AudioStem,
+            source_id: 5,
+            start_tick: 0,
+            duration_ticks: 384,
+            ..Default::default()
+        });
+        let (left_clip, right_clip) = seq
+            .slice_clip_at_tick(10, 192, 11, 48_000.0, 120.0, 96)
+            .expect("razor slice");
+        assert_eq!(left_clip.clip_id, 10);
+        assert_eq!(right_clip.clip_id, 11);
+        assert_eq!(right_clip.start_tick, 192);
+        assert_eq!(right_clip.duration_ticks, 192);
+        assert_eq!(right_clip.fade_in_samples, 96); // 2 ms @ 48 kHz = 96 samples!
+
+        let dup_clip = seq
+            .duplicate_clip(right_clip.clip_id, 12, 192)
+            .expect("duplicate clip");
+        assert_eq!(dup_clip.clip_id, 12);
+        assert_eq!(dup_clip.start_tick, 384);
+
+        // 3. Lasso, Quantize, Strum, and Arpeggiate on PianoRollPattern
+        let pat = seq.find_pattern_mut(1).unwrap();
+        let selected = pat.select_notes_in_lasso(0, 100, 60, 67);
+        assert_eq!(selected.len(), 3);
+        pat.quantize_notes(Some(&selected), 24, 1.0, true);
+        for n in pat.active_notes() {
+            assert_eq!(n.start_tick, 0);
+            assert_eq!(n.duration_ticks, 96);
+        }
+        pat.strum_notes(Some(&selected), 8, -0.1, false);
+        let starts: Vec<i64> = pat.active_notes().iter().map(|n| n.start_tick).collect();
+        assert_eq!(starts, vec![0, 8, 16]);
+
+        // Re-align chord to tick 0 (quarter-note grid = 96 ticks) and arpeggiate Up at 24-tick steps
+        pat.quantize_notes(Some(&selected), 96, 1.0, true);
+        pat.arpeggiate_notes(Some(&selected), 24, 0.75, ArpDirection::Up, 2);
+        assert_eq!(pat.active_notes().len(), 4); // 96 ticks / 24 step = 4 notes
+        assert_eq!(pat.active_notes()[0].key, 60);
+        assert_eq!(pat.active_notes()[1].key, 64);
+        assert_eq!(pat.active_notes()[2].key, 67);
+        assert_eq!(pat.active_notes()[3].key, 72); // +1 octave!
     }
 }

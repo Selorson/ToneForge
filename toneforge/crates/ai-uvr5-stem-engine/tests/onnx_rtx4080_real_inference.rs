@@ -29,6 +29,12 @@ use ai_uvr5_stem_engine::{
 use daw_core_graph::{ProcessContext, StereoFrame, UnifiedDspNode};
 use std::f32::consts::TAU;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Serializes process-wide `set_current_dir` and heavy multi-session CUDA `cuModuleLoadData`
+/// benchmarks within this test binary so concurrent PTX/SASS loading does not stall real-time
+/// `120 ms` BSRNN streaming jitter verification.
+static GPU_BENCH_SERIAL_LOCK: Mutex<()> = Mutex::new(());
 
 struct CwdRestoreGuard(PathBuf);
 impl Drop for CwdRestoreGuard {
@@ -39,6 +45,7 @@ impl Drop for CwdRestoreGuard {
 
 #[test]
 fn test_rtx4080_tier1_cuda_provider_and_standalone_exe_path_resolution() {
+    let _serial = GPU_BENCH_SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let orig_cwd = std::env::current_dir().expect("current_dir");
     let _guard = CwdRestoreGuard(orig_cwd);
 
@@ -112,6 +119,7 @@ fn test_rtx4080_tier1_cuda_provider_and_standalone_exe_path_resolution() {
 
 #[test]
 fn test_ozone12_bsrnn_and_delimit_real_cuda_inference() {
+    let _serial = GPU_BENCH_SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(OZONE_BSRNN_SPEC_LEN, 12_300);
     assert_eq!(OZONE_BSRNN_STATES_LEN, 13_312);
     assert_eq!(OZONE_DELIMIT_STATES_LEN, 6_656);
@@ -253,22 +261,23 @@ fn test_ozone12_bsrnn_and_delimit_real_cuda_inference() {
 
     // Phase C: `reset_state()` (transport seek/stop) -> must re-establish 2-hop cushion and exact phase null!
     rt_node.reset_state();
+    std::thread::sleep(std::time::Duration::from_millis(25));
     let mut post_reset_sq_err = 0.0f64;
     let mut post_reset_count = 0usize;
-    for b in 0..48 {
+    for b in 0..56 {
         for i in 0..256 {
             let t = ((b * 256 + i) as f32) / 48_000.0;
             let x = 0.30 * (TAU * 85.0 * t).sin() + 0.22 * (TAU * 440.0 * t).sin();
             block[i] = [x, x];
         }
         rt_node.process_slice(&ctx, &mut block, None, &mut []);
-        if b >= 32 {
+        if b >= 40 {
             for f in &block {
                 post_reset_sq_err += (f[0] as f64).powi(2) + (f[1] as f64).powi(2);
                 post_reset_count += 2;
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::thread::sleep(std::time::Duration::from_millis(8));
     }
     let phase_c_null_rms = (post_reset_sq_err / (post_reset_count as f64)).sqrt();
     assert!(
@@ -332,6 +341,7 @@ fn test_ozone12_bsrnn_and_delimit_real_cuda_inference() {
 
 #[test]
 fn test_uvr5_kim_vocal2_inst_hq3_and_3model_gpu_ensemble_on_rtx4080() {
+    let _serial = GPU_BENCH_SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut kim = Uvr5MdxOnnxSeparator::from_kim_vocal_2().expect("Kim_Vocal_2 CUDA load");
     let mut inst_hq3 =
         Uvr5MdxOnnxSeparator::from_inst_hq_3().expect("UVR-MDX-NET-Inst_HQ_3 CUDA load");

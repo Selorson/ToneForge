@@ -31,6 +31,290 @@ use std::thread::{self, JoinHandle};
 pub const TRACK_STATE_SILENT: u32 = 0;
 pub const TRACK_STATE_ACTIVE: u32 = 2;
 
+/// Pre-reserved maximum channels on the real-time `MixerEngine` (`Zero-Allocation` guarantee).
+pub const MAX_RT_CHANNELS: usize = 128;
+
+/// Pre-reserved maximum outgoing Send/Sidechain routes per `MixerTrack` (`Zero-Allocation` guarantee).
+pub const MAX_SENDS_PER_TRACK: usize = 16;
+
+/// Default capacity of the lock-free `RtGraphMutation` SPSC ring buffer (`Host -> RT`).
+pub const DEFAULT_RT_MUTATION_RING_CAPACITY: usize = 4096;
+
+/// Default capacity of the lock-free `RetiredRtResource` SPSC ring buffer (`RT -> toneforge-rt-gc`).
+pub const DEFAULT_RT_GC_RING_CAPACITY: usize = 8192;
+
+/// Heap-backed resources retired from the Real-Time WASAPI thread without ever invoking `drop()`
+/// or `HeapFree` on the RT thread. Dropped asynchronously by [`RtGarbageCollector`] (`toneforge-rt-gc`).
+pub enum RetiredRtResource {
+    PluginSlot(Box<Option<PluginRackSlot>>),
+    Channel(Box<Option<ChannelGenerator>>),
+    ChannelBatch(Box<Vec<ChannelGenerator>>),
+    SendRoute(Box<Option<MixerSendRoute>>),
+    Pattern(Box<crate::sequencer_pianoroll::PianoRollPattern>),
+    Articulator(Box<crate::automation_spline::AutomationClipArticulator>),
+    AudioFrames(Box<Vec<StereoFrame>>),
+    RecordTap(Box<Option<crate::audio_io::RtRecordTap>>),
+    HwCaptureBridge(
+        Box<Option<(rtrb::Consumer<StereoFrame>, crate::audio_io::AdaptiveDllDriftResampler)>>,
+    ),
+    MidiInputConsumer(Box<Option<rtrb::Consumer<SequencerVoiceEvent>>>),
+    StemRegions(Box<Vec<crate::sequencer_pianoroll::StemClipRegion>>),
+}
+
+/// Lock-free, Zero-Allocation, Zero-Drop Real-Time Graph Mutation message (`Host -> RT`).
+///
+/// Every heap-bearing variant wraps its payload in a `Box<Option<T>>` or `Box<T>` carrier allocated
+/// on the non-RT host thread. On the RT thread, values are moved/swapped in-place into pre-reserved
+/// engine slots and the carrier `Box` (holding any displaced object) is forwarded to
+/// `rtrb::Producer<RetiredRtResource>` (`0` RT `alloc`, `0` RT `dealloc`).
+pub enum RtGraphMutation {
+    /// Inserts or replaces FX slot `slot_index` (`0..10`) on `track_index` (`0..502`).
+    /// Slots are fixed positions: `slot_index == len` appends, `slot_index > len` is rejected
+    /// (the carrier returns the slot to the GC) — hosts pad the gap with `EmptySlotNode` slots first.
+    SetOrReplacePluginSlot {
+        track_index: u16,
+        slot_index: u8,
+        slot: Box<Option<PluginRackSlot>>,
+    },
+    /// Removes FX slot `slot_index` on `track_index`, storing the removed slot in `recycle_slot` (`Box::new(None)`).
+    RemovePluginSlot {
+        track_index: u16,
+        slot_index: u8,
+        recycle_slot: Box<Option<PluginRackSlot>>,
+    },
+    /// Adds or updates a Send/Sidechain route `src_track -> dest_track` (cycle-checked on RT with `0` alloc).
+    AddOrUpdateSendRoute {
+        src_track: u16,
+        dest_track: u16,
+        gain: f32,
+        is_sidechain_only: bool,
+        route_carrier: Box<Option<MixerSendRoute>>,
+    },
+    /// Removes a Send/Sidechain route `src_track -> dest_track`, retiring it via `recycle_carrier` (`Box::new(None)`).
+    RemoveSendRoute {
+        src_track: u16,
+        dest_track: u16,
+        is_sidechain_only: bool,
+        recycle_carrier: Box<Option<MixerSendRoute>>,
+    },
+    /// Inserts or replaces a `ChannelGenerator` matched by `channel.id`.
+    UpsertChannel {
+        channel: Box<Option<ChannelGenerator>>,
+    },
+    /// Removes a `ChannelGenerator` by `channel_id`, retiring it via `recycle_channel` (`Box::new(None)`).
+    RemoveChannel {
+        channel_id: u32,
+        recycle_channel: Box<Option<ChannelGenerator>>,
+    },
+    /// Atomically replaces stem playback generators on tracks selected by `target_tracks_mask`
+    /// (`bit i` corresponds to Mixer Track `i`, e.g. `0b1_1110` for Insert Tracks `1..=4`).
+    /// `retired_channels` must be pre-allocated on the host with `Vec::with_capacity(16)`.
+    ReplaceStemChannels {
+        target_tracks_mask: u16,
+        new_channels: Box<Vec<ChannelGenerator>>,
+        retired_channels: Box<Vec<ChannelGenerator>>,
+        reset_slicer: bool,
+    },
+    /// Inserts or replaces a `PianoRollPattern` in `PlaylistSequencer` via `std::mem::swap`.
+    UpsertPattern {
+        pattern: Box<crate::sequencer_pianoroll::PianoRollPattern>,
+    },
+    /// Adds or updates a single `PianoRollNote` inside `pattern_id` in-place.
+    AddOrUpdateNote {
+        pattern_id: u32,
+        note: crate::sequencer_pianoroll::PianoRollNote,
+    },
+    /// Removes `note_id` from `pattern_id` in-place.
+    RemoveNote {
+        pattern_id: u32,
+        note_id: u32,
+    },
+    /// Inserts or updates a `PlaylistClip` in-place.
+    UpsertPlaylistClip {
+        clip: crate::sequencer_pianoroll::PlaylistClip,
+    },
+    /// Removes `clip_id` from `PlaylistSequencer` in-place.
+    RemovePlaylistClip {
+        clip_id: u32,
+    },
+    /// Updates `PlaylistSequencer` playback mode and loop parameters.
+    SetSequencerMode {
+        song_mode: bool,
+        active_pattern_id: u32,
+        loop_enabled: bool,
+        loop_length_ticks: i64,
+    },
+    /// Inserts or updates an `AutomationClipArticulator` via `std::mem::swap`.
+    UpsertAutomationArticulator {
+        articulator: Box<crate::automation_spline::AutomationClipArticulator>,
+    },
+    /// Registers or updates a 30-bit fixed-point `ControllerLink` in `InternalControllerBus`.
+    UpsertControllerLink {
+        link: crate::automation_spline::ControllerLink,
+    },
+    /// Clears all active `ControllerLink` entries on `InternalControllerBus` (`0` RT alloc).
+    ClearControllerLinks,
+    /// Updates the engine sample rate (`slicer.sample_rate`) and resets APDC delay lines without allocating.
+    UpdateSampleRate {
+        sample_rate: f64,
+    },
+    /// Configures hardware audio input routing (`input_source_bus`) and record-arming on `track_index`.
+    SetTrackInputAndRecordArm {
+        track_index: u16,
+        input_source_bus: Option<u8>,
+        record_armed: bool,
+        hw_input_latency_samples: u32,
+    },
+    /// Attaches or replaces (or detaches when `None`) the lock-free `RtRecordTap` (`0` RT alloc/drop).
+    AttachRecordTap {
+        tap: Box<Option<crate::audio_io::RtRecordTap>>,
+    },
+    /// Attaches or replaces (or detaches when `None`) the WASAPI Capture + Adaptive DLL Drift Resampler bridge.
+    AttachHwCaptureBridge {
+        bridge: Box<
+            Option<(
+                rtrb::Consumer<StereoFrame>,
+                crate::audio_io::AdaptiveDllDriftResampler,
+            )>,
+        >,
+    },
+    /// Attaches or replaces (or detaches when `None`) the Win32 MIDI hardware input consumer.
+    AttachMidiInputConsumer {
+        consumer: Box<Option<rtrb::Consumer<SequencerVoiceEvent>>>,
+    },
+    /// Replaces the timeline regions of the `AudioStemClipPlayerNode` owned by `channel_id` with
+    /// `regions[..count]` (Playlist audio clip sync). `regions` must be pre-sized on the host to
+    /// `MAX_STEM_CLIP_REGIONS`; the displaced region table is retired to `toneforge-rt-gc`.
+    SetStemClipRegions {
+        channel_id: u32,
+        regions: Box<Vec<crate::sequencer_pianoroll::StemClipRegion>>,
+        count: usize,
+    },
+}
+
+/// Background Non-Real-Time Garbage Collector (`toneforge-rt-gc`) that drains [`RetiredRtResource`]
+/// objects pushed by the Real-Time WASAPI audio thread and drops them safely on a background thread.
+pub struct RtGarbageCollector {
+    shutdown: Arc<AtomicBool>,
+    freed_count: Arc<AtomicU64>,
+    worker: Option<JoinHandle<()>>,
+    disposer: Arc<parking_lot::Mutex<Option<RetiredPluginDisposer>>>,
+}
+
+/// Receives retired resources that own plug-in instances (FX slots, channel generators) so the host
+/// can tear them down on its plug-in thread (VST3 `terminate` / CLAP `destroy` belong on the thread
+/// that runs the editors), instead of on `toneforge-rt-gc`.
+pub type RetiredPluginDisposer = Box<dyn FnMut(RetiredRtResource) + Send>;
+
+impl RtGarbageCollector {
+    /// Spawns the `"toneforge-rt-gc"` background thread consuming from `gc_consumer`.
+    pub fn spawn(mut gc_consumer: rtrb::Consumer<RetiredRtResource>) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let freed_count = Arc::new(AtomicU64::new(0));
+        let shutdown_bg = Arc::clone(&shutdown);
+        let freed_bg = Arc::clone(&freed_count);
+        let disposer: Arc<parking_lot::Mutex<Option<RetiredPluginDisposer>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        let disposer_bg = Arc::clone(&disposer);
+
+        let worker = thread::Builder::new()
+            .name("toneforge-rt-gc".to_string())
+            .spawn(move || {
+                let release = |retired: RetiredRtResource| {
+                    let owns_plugin = matches!(
+                        retired,
+                        RetiredRtResource::PluginSlot(_)
+                            | RetiredRtResource::Channel(_)
+                            | RetiredRtResource::ChannelBatch(_)
+                    );
+                    if owns_plugin {
+                        if let Some(d) = disposer_bg.lock().as_mut() {
+                            d(retired);
+                            return;
+                        }
+                    }
+                    drop(retired);
+                };
+                while !shutdown_bg.load(Ordering::Acquire) {
+                    let mut drained = 0u64;
+                    while let Ok(retired) = gc_consumer.pop() {
+                        release(retired);
+                        drained += 1;
+                    }
+                    if drained > 0 {
+                        freed_bg.fetch_add(drained, Ordering::Relaxed);
+                    } else {
+                        thread::park_timeout(std::time::Duration::from_millis(1));
+                    }
+                }
+                let mut final_drained = 0u64;
+                while let Ok(retired) = gc_consumer.pop() {
+                    release(retired);
+                    final_drained += 1;
+                }
+                if final_drained > 0 {
+                    freed_bg.fetch_add(final_drained, Ordering::Relaxed);
+                }
+            })
+            .expect("failed to spawn toneforge-rt-gc thread");
+
+        Self {
+            shutdown,
+            freed_count,
+            worker: Some(worker),
+            disposer,
+        }
+    }
+
+    /// Installs (or removes) the host's plug-in disposer; see [`RetiredPluginDisposer`].
+    pub fn set_plugin_disposer(&self, disposer: Option<RetiredPluginDisposer>) {
+        *self.disposer.lock() = disposer;
+    }
+
+    /// Wakes the GC thread immediately so retired RT resources are reclaimed without waiting for timeout.
+    #[inline]
+    pub fn wake(&self) {
+        if let Some(w) = &self.worker {
+            w.thread().unpark();
+        }
+    }
+
+    /// Total number of [`RetiredRtResource`] items freed by `toneforge-rt-gc`.
+    #[inline]
+    pub fn freed_count(&self) -> u64 {
+        self.freed_count.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for RtGarbageCollector {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(w) = &self.worker {
+            w.thread().unpark();
+        }
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
+    }
+}
+
+/// Creates the paired lock-free `RtGraphMutation` SPSC channel (`Host -> RT`) and
+/// `RetiredRtResource` SPSC channel + running `RtGarbageCollector` (`RT -> toneforge-rt-gc`).
+pub fn create_rt_mutation_channels(
+    mutation_capacity: usize,
+    gc_capacity: usize,
+) -> (
+    rtrb::Producer<RtGraphMutation>,
+    rtrb::Consumer<RtGraphMutation>,
+    rtrb::Producer<RetiredRtResource>,
+    RtGarbageCollector,
+) {
+    let (mut_prod, mut_cons) = rtrb::RingBuffer::new(mutation_capacity.max(64));
+    let (gc_prod, gc_cons) = rtrb::RingBuffer::new(gc_capacity.max(128));
+    let gc_worker = RtGarbageCollector::spawn(gc_cons);
+    (mut_prod, mut_cons, gc_prod, gc_worker)
+}
+
 /// Error returned when a routing change or graph build encounters a directed cycle in the Mixer DAG.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphCycleError {
@@ -143,6 +427,8 @@ pub struct MixerTrack {
     pub sidechain_buf: Vec<StereoFrame>,      // `+0x44` Sum of incoming Sidechain routes
     pub hw_input_buf: Vec<StereoFrame>,       // `+0xe4`/`+0xec` Hardware ASIO Input buffer
     pub has_hw_input: bool,                   // `+0xe0` (`ASIOInChannelIndex >= 0`)
+    pub input_source_bus: Option<u8>,         // Hardware stereo input bus index (`Some(0)` = In 1-2)
+    pub record_armed: bool,                   // Track armed for `DiskTrackRecorder` `.wav` recording
     pub hw_input_latency_samples: usize,      // Intrinsic latency of the hardware input source
     pub has_channel_input: bool,              // Set when at least one `ChannelGenerator` targets this track
     pub direct_source_latency_samples: usize, // Latency of direct input entering Point 2
@@ -156,6 +442,16 @@ pub struct MixerTrack {
     pub sends: Vec<MixerSendRoute>,           // `+0x130` (`TMixerRoutingTable`, with Point 5 APDC)
     pub gain: f32,
     pub polarity_inverted: bool,
+    /// Stereo balance (`-1.0..=1.0`, unity at centre).
+    pub pan: f32,
+    /// User mute switch.
+    pub muted: bool,
+    /// User solo switch.
+    pub soloed: bool,
+    /// Implicit mute applied while another track is soloed (recomputed by `MixerEngine::recompute_solo_state`).
+    pub solo_muted: bool,
+    /// De-clicked per-channel gain actually applied (one-pole ramp towards the fader/pan/mute target).
+    applied_gain_lr: [f32; 2],
     pub input_arrival_latency: usize, // Target aligned latency at the entrance of `slots`
     pub rack_output_latency: usize,   // Latency immediately after `slots` (before Point 4)
     pub accumulated_latency: usize,   // Latency after Point 4 (`post_rack_apdc_delay`)
@@ -173,6 +469,8 @@ impl MixerTrack {
             sidechain_buf: vec![[0.0; 2]; MAX_BLOCK_SIZE],
             hw_input_buf: vec![[0.0; 2]; MAX_BLOCK_SIZE],
             has_hw_input: false,
+            input_source_bus: None,
+            record_armed: false,
             hw_input_latency_samples: 0,
             has_channel_input: false,
             direct_source_latency_samples: 0,
@@ -183,9 +481,14 @@ impl MixerTrack {
             needs_clear: true,
             slots: Vec::with_capacity(MAX_INSERT_SLOTS),
             post_rack_apdc_delay: ApdcDelayLine::with_capacity(DEFAULT_APDC_CAPACITY),
-            sends: Vec::with_capacity(4),
+            sends: Vec::with_capacity(MAX_SENDS_PER_TRACK),
             gain: 1.0,
             polarity_inverted: false,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            solo_muted: false,
+            applied_gain_lr: [1.0, 1.0],
             input_arrival_latency: 0,
             rack_output_latency: 0,
             accumulated_latency: 0,
@@ -224,6 +527,13 @@ impl MixerTrack {
         plugin.prepare(sample_rate, cap);
         let mut rack_slot = PluginRackSlot::new(plugin, wet_mix);
         rack_slot.prepare(sample_rate, cap);
+        // Fixed slot positions: fill any gap with empty pass-through slots so the plug-in lands
+        // exactly at `slot_index` (never at `len`).
+        while self.slots.len() < slot_index {
+            let mut empty = PluginRackSlot::new(Box::new(crate::EmptySlotNode::new()), 1.0);
+            empty.prepare(sample_rate, cap);
+            self.slots.push(empty);
+        }
         if slot_index < self.slots.len() {
             self.slots[slot_index] = rack_slot;
             Ok(slot_index)
@@ -308,6 +618,7 @@ impl MixerTrack {
 
     /// Resets all delay lines and plugin states on this track.
     pub fn reset_state(&mut self) {
+        self.applied_gain_lr = self.target_gain_lr();
         self.input_apdc_delay.reset();
         for slot in &mut self.slots {
             slot.reset_state();
@@ -316,6 +627,24 @@ impl MixerTrack {
         for send in &mut self.sends {
             send.send_apdc_delay.reset();
         }
+    }
+
+    /// Jumps the de-click gain ramp straight to the current target (off-RT configuration).
+    #[inline]
+    pub fn snap_gain_ramp(&mut self) {
+        self.applied_gain_lr = self.target_gain_lr();
+    }
+
+    /// Per-channel target gain combining fader, polarity, mute/solo and stereo balance
+    /// (balance law: unity at centre, the opposite channel is attenuated linearly).
+    #[inline]
+    pub fn target_gain_lr(&self) -> [f32; 2] {
+        if self.muted || self.solo_muted {
+            return [0.0, 0.0];
+        }
+        let g = if self.polarity_inverted { -self.gain } else { self.gain };
+        let p = self.pan.clamp(-1.0, 1.0);
+        [g * (1.0 - p).min(1.0), g * (1.0 + p).min(1.0)]
     }
 
     /// Clears transient slice buffers for `[slice_offset..slice_offset + slice_len]` before a slice render.
@@ -335,6 +664,7 @@ impl MixerTrack {
     #[inline]
     pub fn render_slice(&mut self, ctx: &ProcessContext, slice_offset: usize, slice_len: usize) {
         let end = slice_offset + slice_len;
+        let target = self.target_gain_lr();
         let buf = &mut self.sub_block_buf[slice_offset..end];
 
         // 1 & 2. Hardware Input (`+0xe4`/`+0xec`) + Point 2 APDC (`[TMixerTrack + 0xa8]`, `0x00d0e2ea`):
@@ -395,16 +725,25 @@ impl MixerTrack {
             }
         }
 
-        // 5. Apply post-fader track gain and polarity inversion
-        let fader_scale = if self.polarity_inverted {
-            -self.gain
-        } else {
-            self.gain
-        };
-        if (fader_scale - 1.0).abs() > 1e-7 {
+        // 5. Apply post-fader gain, polarity, mute/solo and balance with a ~5 ms de-click ramp
+        let mut cur = self.applied_gain_lr;
+        if (cur[0] - target[0]).abs() > 1e-6 || (cur[1] - target[1]).abs() > 1e-6 {
+            let coeff = (1.0 - (-1.0 / (0.005 * ctx.sample_rate.max(8_000.0))).exp()) as f32;
             for frame in buf.iter_mut() {
-                frame[0] *= fader_scale;
-                frame[1] *= fader_scale;
+                cur[0] += coeff * (target[0] - cur[0]);
+                cur[1] += coeff * (target[1] - cur[1]);
+                frame[0] *= cur[0];
+                frame[1] *= cur[1];
+            }
+            if (cur[0] - target[0]).abs() <= 1e-6 && (cur[1] - target[1]).abs() <= 1e-6 {
+                cur = target;
+            }
+            self.applied_gain_lr = cur;
+        } else if (target[0] - 1.0).abs() > 1e-7 || (target[1] - 1.0).abs() > 1e-7 {
+            self.applied_gain_lr = target;
+            for frame in buf.iter_mut() {
+                frame[0] *= target[0];
+                frame[1] *= target[1];
             }
         }
 
@@ -483,6 +822,8 @@ struct SharedLevelWorkGroup {
     ctx_sample_pos: AtomicUsize,
     ctx_ppq_tick: AtomicUsize,
     ctx_bpm_bits: AtomicUsize,
+    /// `bit 0` = `is_playing`, `bit 1` = `is_offline_rendering`, `bits 2..` = `ppq_resolution`.
+    ctx_flags: AtomicUsize,
     slice_offset: AtomicUsize,
     slice_len: AtomicUsize,
     shutdown: AtomicBool,
@@ -499,6 +840,7 @@ impl SharedLevelWorkGroup {
             ctx_sample_pos: AtomicUsize::new(0),
             ctx_ppq_tick: AtomicUsize::new(0),
             ctx_bpm_bits: AtomicUsize::new(128.0f64.to_bits() as usize),
+            ctx_flags: AtomicUsize::new(1),
             slice_offset: AtomicUsize::new(0),
             slice_len: AtomicUsize::new(0),
             shutdown: AtomicBool::new(false),
@@ -554,8 +896,9 @@ impl SharedLevelWorkGroup {
             ppq_tick: self.ctx_ppq_tick.load(Ordering::Relaxed) as i64,
             bpm: f64::from_bits(self.ctx_bpm_bits.load(Ordering::Relaxed) as u64),
             slice_frames: slice_len,
-            is_playing: true,
-            is_offline_rendering: false,
+            is_playing: (self.ctx_flags.load(Ordering::Relaxed) & 1) != 0,
+            is_offline_rendering: (self.ctx_flags.load(Ordering::Relaxed) & 2) != 0,
+            ppq_resolution: (self.ctx_flags.load(Ordering::Relaxed) >> 2) as u32,
         };
         unsafe {
             let track_ref = &mut *base_ptr.add(track_id);
@@ -644,6 +987,12 @@ impl LockFreeAudioThreadPool {
         self.shared
             .ctx_bpm_bits
             .store(ctx.bpm.to_bits() as usize, Ordering::Relaxed);
+        self.shared.ctx_flags.store(
+            (ctx.is_playing as usize)
+                | ((ctx.is_offline_rendering as usize) << 1)
+                | ((ctx.ppq_resolution as usize) << 2),
+            Ordering::Relaxed,
+        );
         self.shared
             .slice_offset
             .store(slice_offset, Ordering::Relaxed);
@@ -686,6 +1035,48 @@ impl Drop for LockFreeAudioThreadPool {
 // TOPOLOGICAL MIXER SCHEDULER (`sub_cf42f0` & 5-POINT APDC SOLVER)
 // ============================================================================
 
+/// Pre-allocated flat topology & Kahn/BFS scratch buffers so live real-time routing mutations
+/// (`AddOrUpdateSendRoute`, `RemoveSendRoute`, `SetOrReplacePluginSlot`, `UpsertChannel`, etc.)
+/// execute full Kahn topological sorting, cycle detection, and 5-Point APDC with **0 allocations and 0 drops**.
+#[derive(Clone, Debug)]
+struct RtTopologyScratch {
+    flat_levels: Vec<usize>,
+    level_ranges: Vec<(usize, usize)>,
+    flat_active_levels: Vec<usize>,
+    active_level_ranges: Vec<(usize, usize)>,
+    use_rt_flat_levels: bool,
+    in_degree: Vec<u16>,
+    out_degree: Vec<u16>,
+    has_predecessor: Vec<bool>,
+    adj_flat: Vec<u16>,
+    adj_len: Vec<u16>,
+    curr_queue: Vec<u16>,
+    next_queue: Vec<u16>,
+    bfs_visited: Vec<bool>,
+    bfs_queue: Vec<u16>,
+}
+
+impl RtTopologyScratch {
+    fn new() -> Self {
+        Self {
+            flat_levels: Vec::with_capacity(MAX_MIXER_TRACKS),
+            level_ranges: Vec::with_capacity(MAX_MIXER_TRACKS),
+            flat_active_levels: Vec::with_capacity(MAX_MIXER_TRACKS),
+            active_level_ranges: Vec::with_capacity(MAX_MIXER_TRACKS),
+            use_rt_flat_levels: false,
+            in_degree: vec![0u16; MAX_MIXER_TRACKS],
+            out_degree: vec![0u16; MAX_MIXER_TRACKS],
+            has_predecessor: vec![false; MAX_MIXER_TRACKS],
+            adj_flat: vec![0u16; MAX_MIXER_TRACKS * MAX_SENDS_PER_TRACK],
+            adj_len: vec![0u16; MAX_MIXER_TRACKS],
+            curr_queue: vec![0u16; MAX_MIXER_TRACKS],
+            next_queue: vec![0u16; MAX_MIXER_TRACKS],
+            bfs_visited: vec![false; MAX_MIXER_TRACKS],
+            bfs_queue: vec![0u16; MAX_MIXER_TRACKS],
+        }
+    }
+}
+
 /// Topological Level-Order Mixer DAG Scheduler (`sub_cf42f0` at `0x00cf42f0` in `FLEngine_x64.dll`).
 #[derive(Clone, Debug)]
 pub struct TopologicalMixerScheduler {
@@ -696,9 +1087,209 @@ pub struct TopologicalMixerScheduler {
     pub active_levels: Vec<Vec<usize>>,
     /// Total compensated latency at Master Track 0 (`tracks[0].accumulated_latency`).
     pub master_output_latency_samples: usize,
+    rt_scratch: RtTopologyScratch,
 }
 
 impl TopologicalMixerScheduler {
+    #[inline]
+    pub fn num_levels(&self) -> usize {
+        if self.rt_scratch.use_rt_flat_levels {
+            self.rt_scratch.level_ranges.len()
+        } else {
+            self.levels.len()
+        }
+    }
+
+    #[inline]
+    pub fn level_at(&self, level_idx: usize) -> &[usize] {
+        if self.rt_scratch.use_rt_flat_levels {
+            let (start, end) = self.rt_scratch.level_ranges[level_idx];
+            &self.rt_scratch.flat_levels[start..end]
+        } else {
+            &self.levels[level_idx]
+        }
+    }
+
+    #[inline]
+    pub fn num_active_levels(&self) -> usize {
+        if self.rt_scratch.use_rt_flat_levels {
+            self.rt_scratch.active_level_ranges.len()
+        } else {
+            self.active_levels.len()
+        }
+    }
+
+    #[inline]
+    pub fn active_level_at(&self, level_idx: usize) -> &[usize] {
+        if self.rt_scratch.use_rt_flat_levels {
+            let (start, end) = self.rt_scratch.active_level_ranges[level_idx];
+            &self.rt_scratch.flat_active_levels[start..end]
+        } else {
+            &self.active_levels[level_idx]
+        }
+    }
+
+    /// Zero-allocation RT BFS cycle check (`0` heap alloc, `0` heap free).
+    #[inline]
+    pub fn would_create_cycle_rt(
+        &mut self,
+        tracks: &[MixerTrack],
+        src_track: usize,
+        dst_track: usize,
+    ) -> bool {
+        let n = tracks.len().min(MAX_MIXER_TRACKS);
+        if src_track >= n || dst_track >= n {
+            return false;
+        }
+        if src_track == dst_track {
+            return true;
+        }
+        let visited = &mut self.rt_scratch.bfs_visited[..n];
+        visited.fill(false);
+        let queue = &mut self.rt_scratch.bfs_queue[..n];
+        visited[dst_track] = true;
+        queue[0] = dst_track as u16;
+        let mut head = 0usize;
+        let mut tail = 1usize;
+        while head < tail {
+            let u = queue[head] as usize;
+            head += 1;
+            for route in &tracks[u].sends {
+                let v = route.dest_track_index;
+                if v == src_track {
+                    return true;
+                }
+                if v < n && !visited[v] {
+                    visited[v] = true;
+                    queue[tail] = v as u16;
+                    tail += 1;
+                }
+            }
+        }
+        false
+    }
+
+    /// Zero-allocation, Zero-drop Real-Time Kahn Topological Sort + 5-Point APDC Solver.
+    /// Returns `true` if `tracks` is acyclic and `flat_levels` / `flat_active_levels` + APDC were updated.
+    pub fn rebuild_levels_and_apdc_rt(
+        &mut self,
+        tracks: &mut [MixerTrack],
+        channels: &mut [ChannelGenerator],
+    ) -> bool {
+        let n = tracks.len().min(MAX_MIXER_TRACKS);
+        {
+            let sc = &mut self.rt_scratch;
+            sc.in_degree[..n].fill(0);
+            sc.out_degree[..n].fill(0);
+            sc.has_predecessor[..n].fill(false);
+            sc.adj_len[..n].fill(0);
+
+            for t in 0..n {
+                tracks[t].has_channel_input = false;
+                let adj_base = t * MAX_SENDS_PER_TRACK;
+                for route in &tracks[t].sends {
+                    let dst = route.dest_track_index;
+                    if dst < n && dst != t {
+                        let cur_len = sc.adj_len[t] as usize;
+                        if cur_len < MAX_SENDS_PER_TRACK {
+                            let mut dup = false;
+                            for k in 0..cur_len {
+                                if sc.adj_flat[adj_base + k] as usize == dst {
+                                    dup = true;
+                                    break;
+                                }
+                            }
+                            if !dup {
+                                sc.adj_flat[adj_base + cur_len] = dst as u16;
+                                sc.adj_len[t] = (cur_len + 1) as u16;
+                                sc.in_degree[dst] += 1;
+                                sc.out_degree[t] += 1;
+                                sc.has_predecessor[dst] = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            for ch in channels.iter() {
+                if ch.enabled && ch.target_mixer_track < n {
+                    tracks[ch.target_mixer_track].has_channel_input = true;
+                }
+            }
+
+            let mut curr_len = 0usize;
+            for i in 0..n {
+                if sc.in_degree[i] == 0 {
+                    sc.curr_queue[curr_len] = i as u16;
+                    curr_len += 1;
+                }
+            }
+
+            // First dry-run check via `in_degree` & temporary flat_levels write; since `flat_levels` is
+            // Copy (`Vec<usize>`), `.clear()` never deallocates.
+            sc.flat_levels.clear();
+            sc.level_ranges.clear();
+            sc.flat_active_levels.clear();
+            sc.active_level_ranges.clear();
+
+            let mut visited_count = 0usize;
+            while curr_len > 0 {
+                visited_count += curr_len;
+                let lvl_start = sc.flat_levels.len();
+                let act_start = sc.flat_active_levels.len();
+                let mut next_len = 0usize;
+
+                for q_idx in 0..curr_len {
+                    let u = sc.curr_queue[q_idx] as usize;
+                    sc.flat_levels.push(u);
+                    if u == MASTER_TRACK_INDEX
+                        || u == PREVIEW_TRACK_INDEX
+                        || sc.out_degree[u] > 0
+                        || sc.has_predecessor[u]
+                        || tracks[u].has_channel_input
+                        || tracks[u].has_hw_input
+                        || tracks[u].input_source_bus.is_some()
+                        || tracks[u].record_armed
+                        || !tracks[u].slots.is_empty()
+                    {
+                        sc.flat_active_levels.push(u);
+                    }
+
+                    let adj_base = u * MAX_SENDS_PER_TRACK;
+                    let deg_out = sc.adj_len[u] as usize;
+                    for k in 0..deg_out {
+                        let v = sc.adj_flat[adj_base + k] as usize;
+                        sc.in_degree[v] -= 1;
+                        if sc.in_degree[v] == 0 {
+                            sc.next_queue[next_len] = v as u16;
+                            next_len += 1;
+                        }
+                    }
+                }
+
+                let lvl_end = sc.flat_levels.len();
+                sc.level_ranges.push((lvl_start, lvl_end));
+                let act_end = sc.flat_active_levels.len();
+                if act_end > act_start {
+                    sc.active_level_ranges.push((act_start, act_end));
+                }
+
+                sc.curr_queue[..next_len].copy_from_slice(&sc.next_queue[..next_len]);
+                curr_len = next_len;
+            }
+
+            if visited_count < n {
+                // Restore fallback to pre-existing `self.levels` if a cycle ever slipped through
+                sc.use_rt_flat_levels = false;
+                return false;
+            }
+            sc.use_rt_flat_levels = true;
+        }
+
+        self.recompute_apdc_rt(tracks, channels);
+        true
+    }
+
     /// Checks whether adding a directed route `src_track -> dst_track` would introduce a cycle.
     pub fn would_create_cycle(tracks: &[MixerTrack], src_track: usize, dst_track: usize) -> bool {
         let n = tracks.len();
@@ -801,8 +1392,11 @@ impl TopologicalMixerScheduler {
         }
 
         // Traverse precomputed topological levels to solve Point 2 and Point 3
-        for lvl in &self.levels {
-            for &u in lvl {
+        let total_levels = self.num_levels();
+        for lvl_idx in 0..total_levels {
+            let lvl_len = self.level_at(lvl_idx).len();
+            for item_idx in 0..lvl_len {
+                let u = self.level_at(lvl_idx)[item_idx];
                 if u >= n {
                     continue;
                 }
@@ -860,10 +1454,6 @@ impl TopologicalMixerScheduler {
             if ch.enabled && ch.target_mixer_track < n {
                 let gen_lat = ch.generator.latency_samples();
                 let dst = ch.target_mixer_track;
-                // When the target track also has hardware input (`has_hw_input`), Point 2 is dedicated
-                // to delaying `hw_input_buf`, so Point 1 aligns the channel generator all the way to
-                // `tracks[dst].input_arrival_latency`. Otherwise Point 1 aligns to `max_channel_latency`
-                // and Point 2 handles the remaining slack to `input_arrival_latency`.
                 let p1_target = if tracks[dst].has_hw_input {
                     tracks[dst].input_arrival_latency
                 } else {
@@ -997,6 +1587,8 @@ impl TopologicalMixerScheduler {
                         || has_predecessor[u]
                         || tracks[u].has_channel_input
                         || tracks[u].has_hw_input
+                        || tracks[u].input_source_bus.is_some()
+                        || tracks[u].record_armed
                         || !tracks[u].slots.is_empty()
                 })
                 .collect();
@@ -1005,10 +1597,25 @@ impl TopologicalMixerScheduler {
             }
         }
 
+        let mut rt_scratch = RtTopologyScratch::new();
+        for lvl in &levels {
+            let s = rt_scratch.flat_levels.len();
+            rt_scratch.flat_levels.extend_from_slice(lvl);
+            let e = rt_scratch.flat_levels.len();
+            rt_scratch.level_ranges.push((s, e));
+        }
+        for act in &active_levels {
+            let s = rt_scratch.flat_active_levels.len();
+            rt_scratch.flat_active_levels.extend_from_slice(act);
+            let e = rt_scratch.flat_active_levels.len();
+            rt_scratch.active_level_ranges.push((s, e));
+        }
+
         let mut sched = Self {
             levels,
             active_levels,
             master_output_latency_samples: 0,
+            rt_scratch,
         };
 
         // Compute all 5 APDC points
@@ -1058,13 +1665,19 @@ impl TopologicalMixerScheduler {
         slice_len: usize,
         process_all_502_tracks: bool,
     ) {
-        let level_list = if process_all_502_tracks {
-            &self.levels
+        let level_count = if process_all_502_tracks {
+            self.num_levels()
         } else {
-            &self.active_levels
+            self.num_active_levels()
         };
 
-        for level_tracks in level_list {
+        for lvl_idx in 0..level_count {
+            let level_tracks = if process_all_502_tracks {
+                self.level_at(lvl_idx)
+            } else {
+                self.active_level_at(lvl_idx)
+            };
+
             // Step A: Render all independent tracks in `level_tracks` (parallel or inline)
             if let Some(pool) = thread_pool {
                 pool.execute_level(tracks, level_tracks, ctx, slice_offset, slice_len);
@@ -1118,10 +1731,52 @@ impl TopologicalMixerScheduler {
 // UNIFIED 502-TRACK REAL-TIME MIXER ENGINE (`sub_d0ece0` + `sub_d0d4c0`)
 // ============================================================================
 
+struct MixerSliceRefs<'a> {
+    sequencer: &'a mut PlaylistSequencer,
+    automation_queue: &'a mut SampleAccurateAutomationQueue,
+    controller_bus: &'a mut InternalControllerBus,
+    channels: &'a mut Vec<ChannelGenerator>,
+    tracks: &'a mut Vec<MixerTrack>,
+    scheduler: &'a mut TopologicalMixerScheduler,
+    thread_pool: Option<&'a LockFreeAudioThreadPool>,
+}
+
+impl<'a> MixerSliceRefs<'a> {
+    #[inline]
+    fn recompute_apdc_rt(&mut self) {
+        self.scheduler
+            .recompute_apdc_rt(self.tracks, self.channels);
+    }
+
+    #[inline]
+    fn propagate_internal_controllers(&mut self) {
+        let links = self.controller_bus.active_links();
+        let mut latency_changed = false;
+        for i in 0..links.len() {
+            let link = links[i];
+            let fixed_val = self.controller_bus.get_fixed30(link.controller_id);
+            let norm_val = link.map_fixed30_to_norm(fixed_val);
+            if let Some(track) = self.tracks.get_mut(link.target_track as usize) {
+                if let Some(slot) = track.slots.get_mut(link.slot_index as usize) {
+                    let prev_lat = slot.plugin.latency_samples();
+                    slot.plugin.set_parameter_normalized(link.param_id, norm_val);
+                    if slot.plugin.latency_samples() != prev_lat {
+                        latency_changed = true;
+                    }
+                }
+            }
+        }
+        if latency_changed {
+            self.recompute_apdc_rt();
+        }
+    }
+}
+
 /// Complete 502-Track Real-Time Audio Engine (`FLEngine_x64.dll` `sub_d0ece0` & `sub_d0d4c0`).
 /// Integrates `HybridPpqSlicer`, `SampleAccurateAutomationQueue`, `InternalControllerBus`,
 /// `ChannelGenerator`s (Phase 1 + Point 1 APDC), 502 `MixerTrack`s (Phase 2 + Point 2 APDC,
-/// Phase 3 + Points 3/4/5 APDC), `rtrb` command ingestion, and 128 KB `TripleBuffer` telemetry.
+/// Phase 3 + Points 3/4/5 APDC), lock-free `rtrb` command + `RtGraphMutation` ingestion,
+/// `toneforge-rt-gc` background retirement, and 128 KB `TripleBuffer` telemetry.
 pub struct MixerEngine {
     pub slicer: HybridPpqSlicer,
     pub sequencer: PlaylistSequencer,
@@ -1132,11 +1787,46 @@ pub struct MixerEngine {
     pub scheduler: TopologicalMixerScheduler,
     pub thread_pool: Option<LockFreeAudioThreadPool>,
     pub cmd_consumer: rtrb::Consumer<EngineCommand>,
+    pub mutation_consumer: Option<rtrb::Consumer<RtGraphMutation>>,
+    pub gc_producer: Option<rtrb::Producer<RetiredRtResource>>,
     pub telemetry_input: triple_buffer::Input<VisualTelemetryFrame>,
+    pub hw_capture_scratch: Vec<StereoFrame>,
+    pub record_tap: Option<crate::audio_io::RtRecordTap>,
+    pub hw_capture_bridge:
+        Option<(rtrb::Consumer<StereoFrame>, crate::audio_io::AdaptiveDllDriftResampler)>,
+    pub midi_in_consumer: Option<rtrb::Consumer<SequencerVoiceEvent>>,
     pub is_playing: bool,
     pub process_all_502_tracks: bool,
+    /// Set by offline render so every `ProcessContext` reports `is_offline_rendering == true`.
+    pub is_offline_rendering: bool,
+    pub last_hw_input_peak: f32,
+    hw_input_injected_this_block: bool,
     frame_seq: u64,
+    audition_note_seq: u32,
+    /// Length (frames) of the de-click fade applied when the transport stops.
+    stop_fade_total: u32,
+    stop_fade_remaining: u32,
+    stop_request_pos: (i64, i64),
+    /// Track whose plugins own the shared Pro-Q 4 / Soothe3 telemetry slots.
+    pub telemetry_focus_track: usize,
+    /// Exponentially averaged measured DSP load (% of the real-time block budget).
+    dsp_load_ema_pct: f32,
+    /// 4x true-peak interpolator history of the master output and the last block's peak (linear).
+    master_tp_hist: [[f32; 12]; 2],
+    master_tp_block_lin: [f32; 2],
+    /// `midi_arrival_clock_ns` at the start of the previous block: live MIDI that arrived during
+    /// that block plays at the same offset in this one.
+    pub midi_prev_block_ns: i64,
 }
+
+/// ITU-R BS.1770-4 Annex 2 4-phase x 12-tap interpolation filter (4x oversampled true peak of the
+/// master bus, used when no true-peak meter runs on the master chain).
+const MASTER_TRUE_PEAK_TAPS: [[f32; 12]; 4] = [
+    [0.0017089844, 0.010986328, -0.01965332, 0.033203125, -0.059448242, 0.1373291, 0.97216797, -0.10229492, 0.047607422, -0.026611328, 0.014892578, -0.008300781],
+    [-0.029174805, 0.029296875, -0.051757812, 0.08911133, -0.1665039, 0.4650879, 0.77978516, -0.20031738, 0.09082031, -0.05029297, 0.028076172, -0.015625],
+    [-0.018920898, 0.033081055, -0.05822754, 0.1015625, -0.20031738, 0.77978516, 0.4650879, -0.1665039, 0.08911133, -0.051757812, 0.029296875, -0.029174805],
+    [-0.008300781, 0.014892578, -0.026611328, 0.047607422, -0.10229492, 0.97216797, 0.1373291, -0.059448242, 0.033203125, -0.01965332, 0.010986328, 0.0017089844],
+];
 
 impl MixerEngine {
     /// Creates a new 502-Track `MixerEngine` along with its UI/Host handles:
@@ -1154,7 +1844,7 @@ impl MixerEngine {
         for idx in 0..MAX_MIXER_TRACKS {
             tracks.push(MixerTrack::new(idx));
         }
-        let mut channels = Vec::new();
+        let mut channels = Vec::with_capacity(MAX_RT_CHANNELS);
         let scheduler =
             TopologicalMixerScheduler::rebuild_levels_and_apdc_checked(&mut tracks, &mut channels)
                 .expect("initial 502 tracks are acyclic");
@@ -1176,12 +1866,445 @@ impl MixerEngine {
             scheduler,
             thread_pool,
             cmd_consumer,
+            mutation_consumer: None,
+            gc_producer: None,
             telemetry_input,
+            hw_capture_scratch: vec![[0.0; 2]; MAX_BLOCK_SIZE],
+            record_tap: None,
+            hw_capture_bridge: None,
+            midi_in_consumer: None,
             is_playing: true,
             process_all_502_tracks: false,
+            is_offline_rendering: false,
+            last_hw_input_peak: 0.0,
+            hw_input_injected_this_block: false,
             frame_seq: 0,
+            audition_note_seq: 1,
+            stop_fade_total: 0,
+            stop_fade_remaining: 0,
+            stop_request_pos: (0, 0),
+            telemetry_focus_track: FIRST_INSERT_TRACK_INDEX,
+            dsp_load_ema_pct: 0.0,
+            master_tp_hist: [[0.0; 12]; 2],
+            master_tp_block_lin: [0.0; 2],
+            midi_prev_block_ns: crate::audio_io::midi_arrival_clock_ns(),
         };
         (engine, cmd_producer, telemetry_output)
+    }
+
+    /// Creates a new 502-Track `MixerEngine` pre-wired with lock-free `RtGraphMutation` ingestion
+    /// and a running `RtGarbageCollector` (`toneforge-rt-gc`) so the RT thread achieves
+    /// **0 Mutex locks, 0 allocations, and 0 deallocations/drops**.
+    pub fn new_with_rt_gc(
+        sample_rate: f64,
+        bpm: f64,
+        worker_threads: usize,
+    ) -> (
+        Self,
+        rtrb::Producer<EngineCommand>,
+        rtrb::Producer<RtGraphMutation>,
+        RtGarbageCollector,
+        triple_buffer::Output<VisualTelemetryFrame>,
+    ) {
+        let (mut engine, cmd_producer, telemetry_output) =
+            Self::new(sample_rate, bpm, worker_threads);
+        let (mut_prod, mut_cons, gc_prod, gc_worker) = create_rt_mutation_channels(
+            DEFAULT_RT_MUTATION_RING_CAPACITY,
+            DEFAULT_RT_GC_RING_CAPACITY,
+        );
+        engine.attach_rt_mutation_channels(mut_cons, gc_prod);
+        (
+            engine,
+            cmd_producer,
+            mut_prod,
+            gc_worker,
+            telemetry_output,
+        )
+    }
+
+    /// Attaches lock-free `RtGraphMutation` and `RetiredRtResource` SPSC rings to this `MixerEngine`.
+    pub fn attach_rt_mutation_channels(
+        &mut self,
+        mutation_consumer: rtrb::Consumer<RtGraphMutation>,
+        gc_producer: rtrb::Producer<RetiredRtResource>,
+    ) {
+        if self.channels.capacity() < MAX_RT_CHANNELS {
+            self.channels
+                .reserve(MAX_RT_CHANNELS - self.channels.len());
+        }
+        self.mutation_consumer = Some(mutation_consumer);
+        self.gc_producer = Some(gc_producer);
+    }
+
+    #[inline(always)]
+    fn is_stem_generator_name(name: &str) -> bool {
+        matches!(
+            name,
+            "UVR5 Separated Stem Playback Generator"
+                | "Custom Audio Stem"
+                | "Vocals"
+                | "Drums"
+                | "Bass"
+                | "Other"
+                | "FL26 Sample Kit"
+        )
+    }
+
+    /// Drains pending lock-free [`RtGraphMutation`] messages with **0 heap allocations** and
+    /// **0 heap frees/drops** on the Real-Time audio thread.
+    #[inline]
+    pub fn drain_rt_mutations(&mut self) {
+        if self.mutation_consumer.is_none() || self.gc_producer.is_none() {
+            return;
+        }
+        let mut topology_dirty = false;
+
+        loop {
+            let gc_ready = self
+                .gc_producer
+                .as_ref()
+                .map(|gc| gc.slots() >= 4)
+                .unwrap_or(false);
+            if !gc_ready {
+                break;
+            }
+            let Some(mutation) = self
+                .mutation_consumer
+                .as_mut()
+                .and_then(|cons| cons.pop().ok())
+            else {
+                break;
+            };
+
+            match mutation {
+                RtGraphMutation::SetOrReplacePluginSlot {
+                    track_index,
+                    slot_index,
+                    mut slot,
+                } => {
+                    let t_idx = track_index as usize;
+                    let s_idx = slot_index as usize;
+                    if t_idx < self.tracks.len() && s_idx < MAX_INSERT_SLOTS {
+                        if let Some(incoming_slot) = slot.take() {
+                            let track = &mut self.tracks[t_idx];
+                            if s_idx < track.slots.len() {
+                                let displaced =
+                                    std::mem::replace(&mut track.slots[s_idx], incoming_slot);
+                                *slot = Some(displaced);
+                                topology_dirty = true;
+                            } else if s_idx == track.slots.len()
+                                && track.slots.len() < track.slots.capacity()
+                            {
+                                // Appends only at the exact index: slots are fixed positions, so a
+                                // gap (`s_idx > len`) is rejected instead of silently landing the
+                                // plug-in at `len`. Hosts pad gaps with `EmptySlotNode` first.
+                                track.slots.push(incoming_slot);
+                                topology_dirty = true;
+                            } else {
+                                *slot = Some(incoming_slot);
+                            }
+                        }
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::PluginSlot(slot));
+                    }
+                }
+                RtGraphMutation::RemovePluginSlot {
+                    track_index,
+                    slot_index,
+                    mut recycle_slot,
+                } => {
+                    let t_idx = track_index as usize;
+                    let s_idx = slot_index as usize;
+                    if recycle_slot.is_none()
+                        && t_idx < self.tracks.len()
+                        && s_idx < self.tracks[t_idx].slots.len()
+                    {
+                        let removed = self.tracks[t_idx].slots.remove(s_idx);
+                        *recycle_slot = Some(removed);
+                        topology_dirty = true;
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::PluginSlot(recycle_slot));
+                    }
+                }
+                RtGraphMutation::AddOrUpdateSendRoute {
+                    src_track,
+                    dest_track,
+                    gain,
+                    is_sidechain_only,
+                    mut route_carrier,
+                } => {
+                    let src = src_track as usize;
+                    let dst = dest_track as usize;
+                    if src < self.tracks.len()
+                        && dst < self.tracks.len()
+                        && src != dst
+                        && !self
+                            .scheduler
+                            .would_create_cycle_rt(&self.tracks, src, dst)
+                    {
+                        let mut updated_existing = false;
+                        for route in &mut self.tracks[src].sends {
+                            if route.dest_track_index == dst
+                                && route.is_sidechain_only == is_sidechain_only
+                            {
+                                route.gain = gain;
+                                updated_existing = true;
+                                break;
+                            }
+                        }
+                        if !updated_existing
+                            && self.tracks[src].sends.len() < self.tracks[src].sends.capacity()
+                        {
+                            if let Some(mut prepared_route) = route_carrier.take() {
+                                prepared_route.dest_track_index = dst;
+                                prepared_route.gain = gain;
+                                prepared_route.is_sidechain_only = is_sidechain_only;
+                                self.tracks[src].sends.push(prepared_route);
+                                topology_dirty = true;
+                            }
+                        }
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::SendRoute(route_carrier));
+                    }
+                }
+                RtGraphMutation::RemoveSendRoute {
+                    src_track,
+                    dest_track,
+                    is_sidechain_only,
+                    mut recycle_carrier,
+                } => {
+                    let src = src_track as usize;
+                    let dst = dest_track as usize;
+                    if recycle_carrier.is_none() && src < self.tracks.len() {
+                        if let Some(pos) = self.tracks[src].sends.iter().position(|r| {
+                            r.dest_track_index == dst && r.is_sidechain_only == is_sidechain_only
+                        }) {
+                            let removed = self.tracks[src].sends.remove(pos);
+                            *recycle_carrier = Some(removed);
+                            topology_dirty = true;
+                        }
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::SendRoute(recycle_carrier));
+                    }
+                }
+                RtGraphMutation::UpsertChannel { mut channel } => {
+                    if let Some(incoming_ch) = channel.take() {
+                        if let Some(pos) =
+                            self.channels.iter().position(|c| c.id == incoming_ch.id)
+                        {
+                            let displaced =
+                                std::mem::replace(&mut self.channels[pos], incoming_ch);
+                            *channel = Some(displaced);
+                            topology_dirty = true;
+                        } else if self.channels.len() < self.channels.capacity() {
+                            self.channels.push(incoming_ch);
+                            topology_dirty = true;
+                        } else {
+                            *channel = Some(incoming_ch);
+                        }
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::Channel(channel));
+                    }
+                }
+                RtGraphMutation::RemoveChannel {
+                    channel_id,
+                    mut recycle_channel,
+                } => {
+                    if recycle_channel.is_none() {
+                        if let Some(pos) = self.channels.iter().position(|c| c.id == channel_id) {
+                            let removed = self.channels.remove(pos);
+                            *recycle_channel = Some(removed);
+                            topology_dirty = true;
+                        }
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::Channel(recycle_channel));
+                    }
+                }
+                RtGraphMutation::ReplaceStemChannels {
+                    target_tracks_mask,
+                    mut new_channels,
+                    mut retired_channels,
+                    reset_slicer,
+                } => {
+                    let mut i = 0usize;
+                    while i < self.channels.len() {
+                        let trk = self.channels[i].target_mixer_track;
+                        let in_mask = trk < 16 && ((target_tracks_mask >> trk) & 1) != 0;
+                        let is_stem = Self::is_stem_generator_name(self.channels[i].generator.name());
+                        if in_mask
+                            && is_stem
+                            && retired_channels.len() < retired_channels.capacity()
+                        {
+                            let removed = self.channels.remove(i);
+                            retired_channels.push(removed);
+                            topology_dirty = true;
+                        } else {
+                            i += 1;
+                        }
+                    }
+
+                    while let Some(ch) = new_channels.pop() {
+                        if self.channels.len() < self.channels.capacity() {
+                            self.channels.push(ch);
+                            topology_dirty = true;
+                        } else if retired_channels.len() < retired_channels.capacity() {
+                            retired_channels.push(ch);
+                        }
+                    }
+
+                    if reset_slicer {
+                        self.slicer.reset();
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::ChannelBatch(new_channels));
+                        let _ = gc.push(RetiredRtResource::ChannelBatch(retired_channels));
+                    }
+                }
+                RtGraphMutation::UpsertPattern { mut pattern } => {
+                    let is_empty = pattern.active_notes().is_empty();
+                    let _ = self.sequencer.upsert_pattern_in_place_box(&mut pattern);
+                    if is_empty {
+                        self.release_all_voices();
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::Pattern(pattern));
+                    }
+                }
+                RtGraphMutation::AddOrUpdateNote { pattern_id, note } => {
+                    if let Some(pat) = self.sequencer.find_pattern_mut(pattern_id) {
+                        if !pat.update_note(note) {
+                            let _ = pat.add_note(note);
+                        }
+                    }
+                }
+                RtGraphMutation::RemoveNote {
+                    pattern_id,
+                    note_id,
+                } => {
+                    if let Some(pat) = self.sequencer.find_pattern_mut(pattern_id) {
+                        let _ = pat.remove_note(note_id);
+                    }
+                }
+                RtGraphMutation::UpsertPlaylistClip { clip } => {
+                    let _ = self.sequencer.upsert_clip(clip);
+                }
+                RtGraphMutation::RemovePlaylistClip { clip_id } => {
+                    let _ = self.sequencer.remove_clip(clip_id);
+                    self.release_all_voices();
+                }
+                RtGraphMutation::SetSequencerMode {
+                    song_mode,
+                    active_pattern_id,
+                    loop_enabled,
+                    loop_length_ticks,
+                } => {
+                    self.sequencer.song_mode = song_mode;
+                    self.sequencer.active_pattern_id = active_pattern_id;
+                    self.sequencer.loop_enabled = loop_enabled;
+                    self.sequencer.loop_length_ticks = loop_length_ticks;
+                }
+                RtGraphMutation::UpsertAutomationArticulator { mut articulator } => {
+                    let _ = self
+                        .sequencer
+                        .upsert_articulator_in_place_box(&mut articulator);
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::Articulator(articulator));
+                    }
+                }
+                RtGraphMutation::UpsertControllerLink { link } => {
+                    let _ = self.controller_bus.add_link(link);
+                }
+                RtGraphMutation::ClearControllerLinks => {
+                    self.controller_bus.clear_links();
+                }
+                RtGraphMutation::UpdateSampleRate { sample_rate } => {
+                    let sr = sample_rate.clamp(8_000.0, 384_000.0);
+                    if (self.slicer.sample_rate - sr).abs() > 0.5 {
+                        self.slicer.sample_rate = sr;
+                        for trk in &mut self.tracks {
+                            trk.reset_state();
+                        }
+                        for ch in &mut self.channels {
+                            ch.reset_state();
+                        }
+                    }
+                }
+                RtGraphMutation::SetTrackInputAndRecordArm {
+                    track_index,
+                    input_source_bus,
+                    record_armed,
+                    hw_input_latency_samples,
+                } => {
+                    let t_idx = track_index as usize;
+                    if t_idx < self.tracks.len() {
+                        // A single hardware input bus feeds one armed/monitored track at a time:
+                        // disarm and stop monitoring on every other track first.
+                        for (i, trk) in self.tracks.iter_mut().enumerate() {
+                            if i != t_idx && (trk.record_armed || trk.input_source_bus.is_some()) {
+                                trk.record_armed = false;
+                                trk.input_source_bus = None;
+                                trk.has_hw_input = false;
+                                trk.hw_input_buf.fill([0.0, 0.0]);
+                            }
+                        }
+                        let trk = &mut self.tracks[t_idx];
+                        trk.input_source_bus = input_source_bus;
+                        trk.record_armed = record_armed;
+                        trk.has_hw_input = input_source_bus.is_some();
+                        trk.hw_input_latency_samples = hw_input_latency_samples as usize;
+                        topology_dirty = true;
+                    }
+                }
+                RtGraphMutation::AttachRecordTap { mut tap } => {
+                    std::mem::swap(&mut self.record_tap, &mut *tap);
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::RecordTap(tap));
+                    }
+                }
+                RtGraphMutation::AttachHwCaptureBridge { mut bridge } => {
+                    std::mem::swap(&mut self.hw_capture_bridge, &mut *bridge);
+                    if self.hw_capture_bridge.is_none() {
+                        for trk in &mut self.tracks {
+                            trk.hw_input_buf.fill([0.0, 0.0]);
+                        }
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::HwCaptureBridge(bridge));
+                    }
+                }
+                RtGraphMutation::AttachMidiInputConsumer { mut consumer } => {
+                    std::mem::swap(&mut self.midi_in_consumer, &mut *consumer);
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::MidiInputConsumer(consumer));
+                    }
+                }
+                RtGraphMutation::SetStemClipRegions {
+                    channel_id,
+                    mut regions,
+                    count,
+                } => {
+                    if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel_id) {
+                        ch.generator.swap_stem_clip_regions(&mut regions, count);
+                    }
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::StemRegions(regions));
+                    }
+                }
+            }
+        }
+
+        if topology_dirty {
+            let _ = self
+                .scheduler
+                .rebuild_levels_and_apdc_rt(&mut self.tracks, &mut self.channels);
+            self.recompute_solo_state();
+        }
     }
 
     /// Configures default FL Studio routing where Insert Tracks `1..=count` route to Master Track `0`.
@@ -1212,17 +2335,7 @@ impl MixerEngine {
             if !target_tracks.contains(&ch.target_mixer_track) {
                 return true;
             }
-            let name = ch.generator.name();
-            !matches!(
-                name,
-                "UVR5 Separated Stem Playback Generator"
-                    | "Custom Audio Stem"
-                    | "Vocals"
-                    | "Drums"
-                    | "Bass"
-                    | "Other"
-                    | "FL26 Sample Kit"
-            )
+            !Self::is_stem_generator_name(ch.generator.name())
         });
     }
 
@@ -1235,8 +2348,11 @@ impl MixerEngine {
         loop_playback: bool,
     ) -> Result<usize, GraphCycleError> {
         self.remove_stem_channels_on_tracks(&[1, 2, 3, 4]);
-        let mut player =
-            crate::sequencer_pianoroll::AudioStemClipPlayerNode::new(900, "Custom Audio Stem", frames);
+        let mut player = crate::sequencer_pianoroll::AudioStemClipPlayerNode::new(
+            900,
+            "Custom Audio Stem",
+            frames,
+        );
         player.continuous_mode = true;
         player.loop_enabled = loop_playback;
         player.prepare(self.slicer.sample_rate, MAX_BLOCK_SIZE);
@@ -1257,6 +2373,12 @@ impl MixerEngine {
             &mut self.tracks,
             &mut self.channels,
         )?;
+        // Off-RT graph (re)build: gains configured directly take effect immediately; only live
+        // changes arriving through the command queue are de-click ramped.
+        self.recompute_solo_state();
+        for t in &mut self.tracks {
+            t.snap_gain_ramp();
+        }
         Ok(())
     }
 
@@ -1274,7 +2396,18 @@ impl MixerEngine {
         while let Ok(cmd) = self.cmd_consumer.pop() {
             match cmd {
                 EngineCommand::SetTransportPlaying(playing) => {
-                    self.is_playing = playing;
+                    if playing {
+                        self.is_playing = true;
+                        self.stop_fade_remaining = 0;
+                    } else if self.is_playing && self.stop_fade_remaining == 0 {
+                        // Keep rendering for ~6 ms while fading the master out, then stop and
+                        // return the transport to the exact position where stop was requested.
+                        self.stop_fade_total =
+                            ((self.slicer.sample_rate * 0.006).round() as u32).max(32);
+                        self.stop_fade_remaining = self.stop_fade_total;
+                        self.stop_request_pos =
+                            (self.slicer.current_sample_pos, self.slicer.global_ppq_tick);
+                    }
                 }
                 EngineCommand::SetBpm(bpm) => {
                     self.slicer.set_bpm(bpm);
@@ -1284,6 +2417,7 @@ impl MixerEngine {
                     ppq_tick,
                 } => {
                     self.slicer.seek(sample_pos, ppq_tick);
+                    self.release_all_voices();
                 }
                 EngineCommand::SetTrackGain {
                     track_index,
@@ -1378,103 +2512,346 @@ impl MixerEngine {
                 EngineCommand::TriggerVoiceEvent(ev) => {
                     PlaylistSequencer::deliver_event_to_channels(&ev, &mut self.channels);
                 }
+                EngineCommand::TriggerAuditionNote {
+                    key,
+                    velocity,
+                    fine_pitch_cents,
+                    pan,
+                    gate_samples,
+                } => {
+                    let target_ch_id = self
+                        .channels
+                        .iter()
+                        .find(|c| {
+                            c.enabled && !Self::is_stem_generator_name(c.generator.name())
+                        })
+                        .map(|c| c.id)
+                        .unwrap_or(1);
+                    let gate = if gate_samples > 0 {
+                        gate_samples
+                    } else {
+                        ((self.slicer.sample_rate * 0.24).round() as u32).max(2_048)
+                    };
+                    let note_id = 0x8000_0000 | (self.audition_note_seq & 0x7FFF_FFFF);
+                    self.audition_note_seq = self.audition_note_seq.wrapping_add(1);
+                    let ev = crate::sequencer_pianoroll::SequencerVoiceEvent {
+                        sample_pos: self.slicer.current_sample_pos,
+                        ppq_tick: self.slicer.global_ppq_tick,
+                        channel_id: target_ch_id,
+                        note_id,
+                        kind: crate::VoiceEventKind::NoteOn,
+                        key: key.min(127),
+                        velocity: velocity.clamp(0.05, 1.0),
+                        pan: pan.clamp(-1.0, 1.0),
+                        fine_pitch_cents: fine_pitch_cents.clamp(-1200.0, 1200.0),
+                        slide_duration_ticks: 0,
+                        slide_duration_samples: gate as usize,
+                        color_group: 15,
+                    };
+                    PlaylistSequencer::deliver_event_to_channels(&ev, &mut self.channels);
+                }
                 EngineCommand::RefreshApdc => {
                     self.recompute_apdc_rt();
                 }
-            }
-        }
-    }
-
-    /// Propagates active 30-bit fixed-point internal controller links to target plugin parameters.
-    /// Zero Heap Allocation.
-    #[inline]
-    fn propagate_internal_controllers(&mut self) {
-        let links = self.controller_bus.active_links();
-        let mut latency_changed = false;
-        for i in 0..links.len() {
-            let link = links[i];
-            let fixed_val = self.controller_bus.get_fixed30(link.controller_id);
-            let norm_val = link.map_fixed30_to_norm(fixed_val);
-            if let Some(track) = self.tracks.get_mut(link.target_track as usize) {
-                if let Some(slot) = track.slots.get_mut(link.slot_index as usize) {
-                    let prev_lat = slot.plugin.latency_samples();
-                    slot.plugin.set_parameter_normalized(link.param_id, norm_val);
-                    if slot.plugin.latency_samples() != prev_lat {
-                        latency_changed = true;
+                EngineCommand::SetTrackMute { track_index, muted } => {
+                    if let Some(t) = self.tracks.get_mut(track_index as usize) {
+                        t.muted = muted;
+                    }
+                }
+                EngineCommand::SetTrackSolo {
+                    track_index,
+                    soloed,
+                } => {
+                    if let Some(t) = self.tracks.get_mut(track_index as usize) {
+                        t.soloed = soloed && (track_index as usize) != MASTER_TRACK_INDEX;
+                    }
+                    self.recompute_solo_state();
+                }
+                EngineCommand::SetTrackPan { track_index, pan } => {
+                    if let Some(t) = self.tracks.get_mut(track_index as usize) {
+                        t.pan = if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 };
+                    }
+                }
+                EngineCommand::SetTelemetryFocusTrack(track_index) => {
+                    self.telemetry_focus_track =
+                        (track_index as usize).min(MAX_MIXER_TRACKS - 1);
+                }
+                EngineCommand::SetChannelParamNormalized {
+                    channel_id,
+                    param_id,
+                    norm_val,
+                } => {
+                    if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel_id) {
+                        ch.generator.set_parameter_normalized(param_id, norm_val);
                     }
                 }
             }
         }
-        if latency_changed {
-            self.recompute_apdc_rt();
+    }
+
+    /// Injects a block of hardware input audio (`ASIO` `bufferSwitch` or duplex test harness)
+    /// directly into every `MixerTrack` configured for hardware audio input (`0` heap allocations).
+    #[inline]
+    pub fn inject_hardware_input_block(&mut self, frames: &[StereoFrame]) {
+        let n = frames.len().min(MAX_BLOCK_SIZE);
+        if n == 0 {
+            return;
         }
+        let mut peak = 0.0f32;
+        for f in &frames[..n] {
+            let p = f[0].abs().max(f[1].abs());
+            if p > peak {
+                peak = p;
+            }
+        }
+        self.last_hw_input_peak = peak;
+        self.hw_capture_scratch[..n].copy_from_slice(&frames[..n]);
+        self.hw_capture_scratch[n..].fill([0.0, 0.0]);
+        for trk in &mut self.tracks {
+            if trk.has_hw_input || trk.input_source_bus.is_some() {
+                trk.hw_input_buf[..n].copy_from_slice(&frames[..n]);
+            }
+        }
+        self.hw_input_injected_this_block = true;
+    }
+
+    #[inline]
+    fn compute_record_telemetry_word(&self) -> u32 {
+        let is_rec = self
+            .record_tap
+            .as_ref()
+            .map(|t| t.is_recording())
+            .unwrap_or(false);
+        let mut any_armed = false;
+        let mut armed_idx = 0u16;
+        for (idx, trk) in self.tracks.iter().enumerate() {
+            if trk.record_armed {
+                any_armed = true;
+                armed_idx = idx as u16;
+                break;
+            }
+        }
+        crate::audio_io::pack_telemetry_record_status(
+            is_rec,
+            any_armed,
+            armed_idx,
+            self.last_hw_input_peak,
+        )
     }
 
     /// Executes a complete hardware audio block (`master_out.len() <= MAX_BLOCK_SIZE`) through:
-    /// 1. `rtrb` Command Queue Ingestion
-    /// 2. `HybridPpqSlicer` (`sub_d0ece0`) + `PlaylistSequencer` (`PianoRollPattern` & `TensionSpline`)
-    /// 3. `SampleAccurateAutomationQueue` (`sub_c61630`) + 30-Bit Fixed-Point Controller Bus (`0x40000000`)
-    /// 4. 3-Phase Engine (`sub_d0d4c0`):
-    ///    - Phase 1: Parallel/Sequential Generators + Point 1 APDC
-    ///    - Phase 2: Hardware Input + Channel-to-Track Accumulation + Point 2 APDC
-    ///    - Phase 3: Topological Level-Order Mixer DAG + Points 3, 4, 5 APDC
-    /// 5. Wait-free 128 KB `VisualTelemetryFrame` publish via `TripleBuffer`.
+    /// 1. `rtrb` Command & `RtGraphMutation` Queue Ingestion (`0` alloc, `0` drop)
+    /// 2. Hardware input acquisition (ASIO injection or WASAPI capture bridge) + input-sourced record tap
+    /// 3. While playing: `HybridPpqSlicer` + `PlaylistSequencer` + sample-accurate automation + 3-phase DAG.
+    ///    While stopped: the full mixer DAG keeps running (input monitoring, FX tails, auditioned notes go
+    ///    through track FX and the master chain) with a frozen transport position.
+    /// 4. A short de-click fade when the transport stops.
+    /// 5. Wait-free 128 KB `VisualTelemetryFrame` publish via `TripleBuffer` with measured DSP load.
     ///
-    /// Strictly **Zero Heap Allocation**.
+    /// Strictly **Zero Heap Allocation** and **Zero Heap Deallocation**.
     pub fn process_audio_block(&mut self, master_out: &mut [StereoFrame]) {
         let total_frames = master_out.len().min(MAX_BLOCK_SIZE);
         if total_frames == 0 {
             return;
         }
+        let block_t0 = std::time::Instant::now();
 
-        // 1. Drain wait-free SPSC commands
+        // 1. Drain wait-free SPSC commands & zero-alloc/zero-drop graph mutations
         self.drain_commands();
+        self.drain_rt_mutations();
 
+        // 1b. Drain hardware Win32 MIDI Input events (`0` alloc). Each event carries its arrival
+        // time; it plays at the same offset into this block as it arrived into the previous one, so
+        // live notes keep their timing with a constant one-block latency.
+        let block_ns = crate::audio_io::midi_arrival_clock_ns();
+        let prev_block_ns = self.midi_prev_block_ns;
+        self.midi_prev_block_ns = block_ns;
+        if let Some(midi_rx) = &mut self.midi_in_consumer {
+            let block_start = self.slicer.current_sample_pos;
+            let ns_to_samples = self.slicer.sample_rate / 1.0e9;
+            let ctx = ProcessContext {
+                sample_rate: self.slicer.sample_rate,
+                current_sample_pos: block_start,
+                ppq_tick: self.slicer.global_ppq_tick,
+                bpm: self.slicer.bpm,
+                slice_frames: total_frames,
+                is_playing: self.is_playing,
+                is_offline_rendering: self.is_offline_rendering,
+                ppq_resolution: self.slicer.ppq,
+            };
+            while let Ok(mut ev) = midi_rx.pop() {
+                let offset = (((ev.sample_pos - prev_block_ns) as f64) * ns_to_samples)
+                    .round()
+                    .clamp(0.0, total_frames.saturating_sub(1) as f64) as i64;
+                ev.sample_pos = block_start + offset;
+                ev.ppq_tick = self.slicer.global_ppq_tick;
+                if self.is_playing {
+                    // The running transport renders in sub-slices; the automation queue splits them
+                    // exactly at the event.
+                    let dv = crate::apdc_engine::DelayedVoiceEvent {
+                        target_sample_pos: ev.sample_pos,
+                        target_id: ev.channel_id,
+                        kind: ev.kind,
+                        note: ev.key,
+                        velocity: (ev.velocity * 127.0).round().clamp(0.0, 127.0) as u8,
+                        value: SequencerVoiceEvent::pack_delayed_value(
+                            ev.color_group,
+                            ev.pan,
+                            ev.fine_pitch_cents,
+                        ),
+                    };
+                    if !self.automation_queue.schedule_voice_event(ev.sample_pos, 0, dv) {
+                        PlaylistSequencer::deliver_event_to_channels(&ev, &mut self.channels);
+                    }
+                } else {
+                    // Stopped: the generators render the whole block in one call and place the
+                    // event at its sample offset.
+                    for ch in self.channels.iter_mut() {
+                        if ch.enabled && ch.id == ev.channel_id {
+                            ch.generator.on_voice_event(&ev, &ctx);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1c. Hardware input: ASIO already injected into `hw_capture_scratch`; otherwise drain the
+        // WASAPI Capture + Adaptive DLL Drift Resampler bridge. Detaching the bridge zeroes every
+        // track input buffer (see `AttachHwCaptureBridge`) so a removed device never loops its last block.
+        if !self.hw_input_injected_this_block {
+            if let Some((rx, dll)) = &mut self.hw_capture_bridge {
+                dll.drain_from_rtrb(rx);
+                let scratch = &mut self.hw_capture_scratch[..total_frames];
+                dll.process_output_block(scratch);
+                let mut peak = 0.0f32;
+                for f in scratch.iter() {
+                    let p = f[0].abs().max(f[1].abs());
+                    if p > peak {
+                        peak = p;
+                    }
+                }
+                self.last_hw_input_peak = peak;
+                let scratch = &self.hw_capture_scratch[..total_frames];
+                for trk in &mut self.tracks {
+                    if trk.has_hw_input || trk.input_source_bus.is_some() {
+                        trk.hw_input_buf[..total_frames].copy_from_slice(scratch);
+                    }
+                }
+            } else {
+                self.hw_capture_scratch[..total_frames].fill([0.0, 0.0]);
+                self.last_hw_input_peak = 0.0;
+            }
+        }
+
+        // 1d. Record tap captures the raw hardware input (pre-FX, pre-fader), never the track output.
+        if let Some(tap) = &mut self.record_tap {
+            tap.push_rt_slice(&self.hw_capture_scratch[..total_frames]);
+        }
+
+        if self.is_playing {
+            self.render_playing_block(total_frames);
+        } else {
+            self.render_stopped_block(total_frames);
+        }
+
+        // Copy Master Track 0 (`MASTER_TRACK_INDEX`) output to `master_out`
+        master_out[..total_frames]
+            .copy_from_slice(&self.tracks[MASTER_TRACK_INDEX].sub_block_buf[..total_frames]);
+
+        // De-click fade-out when the transport stops (the graph keeps running afterwards for tails).
+        if self.stop_fade_remaining > 0 {
+            let total = self.stop_fade_total.max(1) as f32;
+            for frame in master_out[..total_frames].iter_mut() {
+                let g = if self.stop_fade_remaining > 0 {
+                    self.stop_fade_remaining -= 1;
+                    (self.stop_fade_remaining as f32) / total
+                } else {
+                    0.0
+                };
+                frame[0] *= g;
+                frame[1] *= g;
+            }
+            if self.stop_fade_remaining == 0 {
+                self.is_playing = false;
+                let (pos, tick) = self.stop_request_pos;
+                self.slicer.seek(pos, tick);
+                self.release_all_voices();
+            }
+        }
+        self.hw_input_injected_this_block = false;
+
+        // 4x oversampled (BS.1770-4) true peak of what actually leaves the master bus.
+        let mut tp_block = [0.0f32; 2];
+        for frame in master_out[..total_frames].iter() {
+            for ch in 0..2 {
+                let h = &mut self.master_tp_hist[ch];
+                h.copy_within(0..11, 1);
+                h[0] = frame[ch];
+                let mut tp = frame[ch].abs();
+                for phase in &MASTER_TRUE_PEAK_TAPS {
+                    let mut sum = 0.0f32;
+                    for m in 0..12 {
+                        sum += phase[m] * h[m];
+                    }
+                    tp = tp.max(sum.abs());
+                }
+                tp_block[ch] = tp_block[ch].max(tp);
+            }
+        }
+        self.master_tp_block_lin = tp_block;
+
+        // Measured DSP load: wall-clock render time relative to the real-time budget of this block.
+        let budget_s = (total_frames as f64) / self.slicer.sample_rate.max(8_000.0);
+        let load_pct = (block_t0.elapsed().as_secs_f64() / budget_s * 100.0) as f32;
+        self.dsp_load_ema_pct = if self.dsp_load_ema_pct <= 0.0 {
+            load_pct
+        } else {
+            0.9 * self.dsp_load_ema_pct + 0.1 * load_pct
+        };
+
+        self.publish_telemetry_frame();
+    }
+
+    /// Sends an all-notes-off (`ChannelMute`, velocity `0`) to every generator so voices started by
+    /// the sequencer do not keep sounding once the transport has stopped (Zero Heap Allocation).
+    fn release_all_voices(&mut self) {
+        let ctx = ProcessContext {
+            sample_rate: self.slicer.sample_rate,
+            current_sample_pos: self.slicer.current_sample_pos,
+            ppq_tick: self.slicer.global_ppq_tick,
+            bpm: self.slicer.bpm,
+            slice_frames: 0,
+            is_playing: false,
+            is_offline_rendering: self.is_offline_rendering,
+            ppq_resolution: self.slicer.ppq,
+        };
+        for ch in self.channels.iter_mut() {
+            let ev = SequencerVoiceEvent {
+                sample_pos: ctx.current_sample_pos,
+                ppq_tick: ctx.ppq_tick,
+                channel_id: ch.id,
+                note_id: 0,
+                kind: crate::VoiceEventKind::ChannelMute,
+                key: 0,
+                velocity: 0.0,
+                pan: 0.0,
+                fine_pitch_cents: 0.0,
+                slide_duration_ticks: 0,
+                slide_duration_samples: 0,
+                color_group: 0,
+            };
+            ch.generator.on_voice_event(&ev, &ctx);
+        }
+    }
+
+    /// Transport-running render: PPQ slicer, sequencer dispatch, sample-accurate automation and the
+    /// 3-phase mixer DAG (Zero Heap Allocation).
+    fn render_playing_block(&mut self, total_frames: usize) {
         let sample_rate = self.slicer.sample_rate;
         let ppq_res = self.slicer.ppq;
-        let is_playing = self.is_playing;
+        let is_playing = true;
         let process_all = self.process_all_502_tracks;
-
-        // When paused (`!is_playing`), freeze `slicer` (`current_sample_pos` and `global_ppq_tick`),
-        // output silence, set all track meters & Pro-Q 4 spectrums to -120.0 dB, and publish telemetry.
-        if !is_playing {
-            master_out[..total_frames].fill([0.0, 0.0]);
-            let silent_meter = TrackMeterEntry {
-                peak_l_db: -120.0,
-                peak_r_db: -120.0,
-                rms_l_db: -120.0,
-                rms_r_db: -120.0,
-                gr_db: 0.0,
-                activity_flags: TRACK_STATE_SILENT,
-            };
-            for track in &mut self.tracks {
-                track.activity_state.store(TRACK_STATE_SILENT, Ordering::Relaxed);
-                track.meter = silent_meter;
-            }
-            self.frame_seq = self.frame_seq.wrapping_add(1);
-            let frame = self.telemetry_input.input_buffer_mut();
-            frame.header.frame_seq = self.frame_seq;
-            frame.header.sample_pos = self.slicer.current_sample_pos;
-            frame.header.ppq_tick = self.slicer.global_ppq_tick;
-            frame.header.bpm = self.slicer.bpm as f32;
-            frame.header.cpu_load_pct = 0.0;
-            frame.header.lufs_momentary = -120.0;
-            frame.header.lufs_short_term = -120.0;
-            frame.header.master_gr_db = 0.0;
-            frame.header.true_peak_db = [-120.0, -120.0];
-            frame.header.active_stem_mode = 0;
-            frame.track_meters.fill(silent_meter);
-            frame.proq4_spectrum.pre_db.fill(-120.0);
-            frame.proq4_spectrum.post_db.fill(-120.0);
-            frame.proq4_spectrum.sc_db.fill(-120.0);
-            frame.proq4_spectrum.collision_mask.fill(0.0);
-            frame.soothe3_reduction.reduction_db_1024_mut().fill(0.0);
-            frame.soothe3_reduction.input_spec_db.fill(-120.0);
-            self.controller_bus
-                .export_telemetry_norm(&mut frame.automation_spline.controller_values_norm);
-            self.telemetry_input.publish();
-            return;
-        }
+        let is_offline = self.is_offline_rendering;
 
         // Clear track slice buffers for `[0..total_frames]`
         if process_all {
@@ -1482,81 +2859,199 @@ impl MixerEngine {
                 track.clear_slice_buffers(0, total_frames);
             }
         } else {
-            for lvl in &self.scheduler.active_levels {
+            let act_lvl_count = self.scheduler.num_active_levels();
+            for lvl_idx in 0..act_lvl_count {
+                let lvl = self.scheduler.active_level_at(lvl_idx);
                 for &u in lvl {
                     self.tracks[u].clear_slice_buffers(0, total_frames);
                 }
             }
         }
 
-        // 2. Slice hardware block at PPQ Tick boundaries (`sub_d0ece0`)
-        let mut slicer = std::mem::replace(
-            &mut self.slicer,
-            HybridPpqSlicer::new(sample_rate, 128.0, ppq_res),
-        );
-        let mut cur_sample_cursor = slicer.current_sample_pos;
+        // 2. Slice hardware block at PPQ Tick boundaries (`sub_d0ece0`) via split borrow (0 drops!)
+        let mut cur_sample_cursor = self.slicer.current_sample_pos;
+        {
+            let Self {
+                slicer,
+                sequencer,
+                automation_queue,
+                controller_bus,
+                channels,
+                tracks,
+                scheduler,
+                thread_pool,
+                ..
+            } = self;
 
-        slicer.process_buffer_state(
-            self,
-            total_frames,
-            |engine, ppq_tick, tick_sample_pos, bpm| {
-                if is_playing {
-                    engine.sequencer.on_ppq_tick(
-                        ppq_tick,
-                        tick_sample_pos,
-                        bpm,
-                        sample_rate,
-                        ppq_res,
-                        &mut engine.channels,
-                        &mut engine.controller_bus,
-                    );
-                }
-                let tick_ctx = ProcessContext {
-                    sample_rate,
-                    current_sample_pos: tick_sample_pos,
-                    ppq_tick,
-                    bpm,
-                    slice_frames: 0,
-                    is_playing,
-                    is_offline_rendering: false,
-                };
-                for ch in &mut engine.channels {
-                    if ch.enabled {
-                        ch.generator.on_ppq_tick(&tick_ctx);
+            let mut refs = MixerSliceRefs {
+                sequencer,
+                automation_queue,
+                controller_bus,
+                channels,
+                tracks,
+                scheduler,
+                thread_pool: thread_pool.as_ref(),
+            };
+
+            slicer.process_buffer_state(
+                &mut refs,
+                total_frames,
+                |engine, ppq_tick, tick_sample_pos, bpm| {
+                    if is_playing {
+                        engine.sequencer.on_ppq_tick(
+                            ppq_tick,
+                            tick_sample_pos,
+                            bpm,
+                            sample_rate,
+                            ppq_res,
+                            engine.channels,
+                            engine.controller_bus,
+                        );
                     }
-                }
-                for lvl in &engine.scheduler.active_levels {
-                    for &u in lvl {
-                        for slot in &mut engine.tracks[u].slots {
-                            if slot.enabled {
-                                slot.plugin.on_ppq_tick(&tick_ctx);
+                    let tick_ctx = ProcessContext {
+                        sample_rate,
+                        current_sample_pos: tick_sample_pos,
+                        ppq_tick,
+                        bpm,
+                        slice_frames: 0,
+                        is_playing,
+                        is_offline_rendering: is_offline,
+                        ppq_resolution: ppq_res,
+                    };
+                    for ch in engine.channels.iter_mut() {
+                        if ch.enabled {
+                            ch.generator.on_ppq_tick(&tick_ctx);
+                        }
+                    }
+                    let act_lvl_count = engine.scheduler.num_active_levels();
+                    for lvl_idx in 0..act_lvl_count {
+                        let lvl = engine.scheduler.active_level_at(lvl_idx);
+                        for &u in lvl {
+                            for slot in &mut engine.tracks[u].slots {
+                                if slot.enabled {
+                                    slot.plugin.on_ppq_tick(&tick_ctx);
+                                }
                             }
                         }
                     }
-                }
-            },
-            |engine, slice_offset, slice_len, active_ppq_tick, bpm| {
-                let slice_end_pos = cur_sample_cursor + (slice_len as i64);
+                },
+                |engine, slice_offset, slice_len, active_ppq_tick, bpm| {
+                    let slice_end_pos = cur_sample_cursor + (slice_len as i64);
 
-                // Propagate 30-bit fixed-point internal controllers (`sub_d24d80`) at PPQ boundary
-                engine.propagate_internal_controllers();
+                    // Propagate 30-bit fixed-point internal controllers (`sub_d24d80`) at PPQ boundary
+                    engine.propagate_internal_controllers();
 
-                // Sub-slice `[slice_offset..slice_offset + slice_len]` at exact `SampleAccurateAutomationQueue`
-                // event timestamps (`sub_c61630`) so scheduled events take effect with 0-sample error.
-                let mut sub_offset = slice_offset;
-                let mut sub_remaining = slice_len;
-                let mut sub_cur_pos = cur_sample_cursor;
+                    // Sub-slice `[slice_offset..slice_offset + slice_len]` at exact `SampleAccurateAutomationQueue`
+                    // event timestamps (`sub_c61630`) so scheduled events take effect with 0-sample error.
+                    let mut sub_offset = slice_offset;
+                    let mut sub_remaining = slice_len;
+                    let mut sub_cur_pos = cur_sample_cursor;
 
-                while sub_remaining > 0 {
-                    // Drain all automation and voice events due at or before `sub_cur_pos`
-                    let mut latency_changed = false;
+                    while sub_remaining > 0 {
+                        let mut latency_changed = false;
+                        {
+                            let tracks_ref: &mut [MixerTrack] = engine.tracks;
+                            let channels_ref: &mut [ChannelGenerator] = engine.channels;
+                            engine.automation_queue.drain_up_to(
+                                sub_cur_pos,
+                                |param_ev| {
+                                    if let Some(t) =
+                                        tracks_ref.get_mut(param_ev.target_track as usize)
+                                    {
+                                        if param_ev.slot_index == 0xFF {
+                                            t.gain = param_ev.norm_value;
+                                        } else if let Some(s) =
+                                            t.slots.get_mut(param_ev.slot_index as usize)
+                                        {
+                                            let prev_lat = s.plugin.latency_samples();
+                                            s.plugin.set_parameter_normalized(
+                                                param_ev.param_index,
+                                                param_ev.norm_value,
+                                            );
+                                            if s.plugin.latency_samples() != prev_lat {
+                                                latency_changed = true;
+                                            }
+                                        }
+                                    }
+                                },
+                                |voice_ev| {
+                                    let seq_ev =
+                                        SequencerVoiceEvent::from_delayed_voice_event(voice_ev);
+                                    PlaylistSequencer::deliver_event_to_channels(
+                                        &seq_ev,
+                                        channels_ref,
+                                    );
+                                },
+                            );
+                        }
+                        if latency_changed {
+                            engine.recompute_apdc_rt();
+                        }
+
+                        let step_len = match engine.automation_queue.next_event_sample_pos() {
+                            Some(next_ev_pos)
+                                if next_ev_pos > sub_cur_pos && next_ev_pos < slice_end_pos =>
+                            {
+                                ((next_ev_pos - sub_cur_pos) as usize).min(sub_remaining)
+                            }
+                            _ => sub_remaining,
+                        };
+
+                        let ctx = ProcessContext {
+                            sample_rate,
+                            current_sample_pos: sub_cur_pos,
+                            ppq_tick: active_ppq_tick,
+                            bpm,
+                            slice_frames: step_len,
+                            is_playing,
+                            is_offline_rendering: is_offline,
+                            ppq_resolution: ppq_res,
+                        };
+
+                        // Phase 1 (`0xd0e22f`): Render Generators + Point 1 APDC (`[TChannel + 0x130]`)
+                        // Phase 2 (`0xd0e3c7`): Accumulate Channel outputs into target Mixer Tracks
+                        let end = sub_offset + step_len;
+                        for ch in engine.channels.iter_mut() {
+                            if ch.enabled {
+                                ch.render_slice(&ctx, sub_offset, step_len);
+                                let dst_idx = ch.target_mixer_track;
+                                if let Some(dst_track) = engine.tracks.get_mut(dst_idx) {
+                                    let ch_out = &ch.output_buf[sub_offset..end];
+                                    let trk_in = &mut dst_track.sub_block_buf[sub_offset..end];
+                                    for i in 0..step_len {
+                                        trk_in[i][0] += ch_out[i][0];
+                                        trk_in[i][1] += ch_out[i][1];
+                                    }
+                                }
+                            }
+                        }
+
+                        // Phase 3 (`sub_cf42f0`): Topological Level-Order Mixer Graph + Points 2, 3, 4, 5 APDC
+                        engine.scheduler.process_slice_levels(
+                            &ctx,
+                            engine.tracks,
+                            engine.thread_pool,
+                            sub_offset,
+                            step_len,
+                            process_all,
+                        );
+
+                        sub_offset += step_len;
+                        sub_remaining -= step_len;
+                        sub_cur_pos += step_len as i64;
+                    }
+
+                    // Drain any automation events scheduled exactly at `slice_end_pos`
+                    let mut end_latency_changed = false;
                     {
-                        let tracks_ref = &mut engine.tracks;
-                        let channels_ref = &mut engine.channels;
+                        let tracks_ref: &mut [MixerTrack] = engine.tracks;
+                        let channels_ref: &mut [ChannelGenerator] = engine.channels;
                         engine.automation_queue.drain_up_to(
-                            sub_cur_pos,
+                            slice_end_pos,
                             |param_ev| {
-                                if let Some(t) = tracks_ref.get_mut(param_ev.target_track as usize) {
+                                if let Some(t) =
+                                    tracks_ref.get_mut(param_ev.target_track as usize)
+                                {
                                     if param_ev.slot_index == 0xFF {
                                         t.gain = param_ev.norm_value;
                                     } else if let Some(s) =
@@ -1568,154 +3063,204 @@ impl MixerEngine {
                                             param_ev.norm_value,
                                         );
                                         if s.plugin.latency_samples() != prev_lat {
-                                            latency_changed = true;
+                                            end_latency_changed = true;
                                         }
                                     }
                                 }
                             },
                             |voice_ev| {
-                                let seq_ev = SequencerVoiceEvent::from_delayed_voice_event(voice_ev);
-                                PlaylistSequencer::deliver_event_to_channels(&seq_ev, channels_ref);
+                                let seq_ev =
+                                    SequencerVoiceEvent::from_delayed_voice_event(voice_ev);
+                                PlaylistSequencer::deliver_event_to_channels(
+                                    &seq_ev,
+                                    channels_ref,
+                                );
                             },
                         );
                     }
-                    if latency_changed {
+                    if end_latency_changed {
                         engine.recompute_apdc_rt();
                     }
 
-                    // Determine how many frames we can render before the next scheduled automation event
-                    let step_len = match engine.automation_queue.next_event_sample_pos() {
-                        Some(next_ev_pos) if next_ev_pos > sub_cur_pos && next_ev_pos < slice_end_pos => {
-                            ((next_ev_pos - sub_cur_pos) as usize).min(sub_remaining)
-                        }
-                        _ => sub_remaining,
-                    };
+                    cur_sample_cursor = slice_end_pos;
+                },
+            );
+        }
 
-                    let ctx = ProcessContext {
-                        sample_rate,
-                        current_sample_pos: sub_cur_pos,
-                        ppq_tick: active_ppq_tick,
-                        bpm,
-                        slice_frames: step_len,
-                        is_playing,
-                        is_offline_rendering: false,
-                    };
+    }
 
-                    // Phase 1 (`0xd0e22f`): Render Generators + Point 1 APDC (`[TChannel + 0x130]`)
-                    // Phase 2 (`0xd0e3c7`): Accumulate Channel outputs into target Mixer Tracks
-                    let end = sub_offset + step_len;
-                    for ch in &mut engine.channels {
-                        if ch.enabled {
-                            ch.render_slice(&ctx, sub_offset, step_len);
-                            let dst_idx = ch.target_mixer_track;
-                            if let Some(dst_track) = engine.tracks.get_mut(dst_idx) {
-                                let ch_out = &ch.output_buf[sub_offset..end];
-                                let trk_in = &mut dst_track.sub_block_buf[sub_offset..end];
-                                for i in 0..step_len {
-                                    trk_in[i][0] += ch_out[i][0];
-                                    trk_in[i][1] += ch_out[i][1];
-                                }
-                            }
-                        }
+    /// Transport-stopped render: the transport position stays frozen, generators receive
+    /// `is_playing == false` (stem/clip players fall silent, synth voices still sound), and the whole
+    /// mixer DAG keeps processing so input monitoring, FX tails and auditioned notes are heard
+    /// through every track insert and the master chain (Zero Heap Allocation).
+    fn render_stopped_block(&mut self, total_frames: usize) {
+        let process_all = self.process_all_502_tracks;
+        if process_all {
+            for track in &mut self.tracks {
+                track.clear_slice_buffers(0, total_frames);
+            }
+        } else {
+            let act_lvl_count = self.scheduler.num_active_levels();
+            for lvl_idx in 0..act_lvl_count {
+                let lvl = self.scheduler.active_level_at(lvl_idx);
+                for &u in lvl {
+                    self.tracks[u].clear_slice_buffers(0, total_frames);
+                }
+            }
+        }
+        let ctx = ProcessContext {
+            sample_rate: self.slicer.sample_rate,
+            current_sample_pos: self.slicer.current_sample_pos,
+            ppq_tick: self.slicer.global_ppq_tick,
+            bpm: self.slicer.bpm,
+            slice_frames: total_frames,
+            is_playing: false,
+            is_offline_rendering: self.is_offline_rendering,
+            ppq_resolution: self.slicer.ppq,
+        };
+        for ch in self.channels.iter_mut() {
+            if ch.enabled {
+                ch.render_slice(&ctx, 0, total_frames);
+                if let Some(dst_track) = self.tracks.get_mut(ch.target_mixer_track) {
+                    let ch_out = &ch.output_buf[..total_frames];
+                    let trk_in = &mut dst_track.sub_block_buf[..total_frames];
+                    for i in 0..total_frames {
+                        trk_in[i][0] += ch_out[i][0];
+                        trk_in[i][1] += ch_out[i][1];
                     }
-
-                    // Phase 3 (`sub_cf42f0`): Topological Level-Order Mixer Graph + Points 2, 3, 4, 5 APDC
-                    engine.scheduler.process_slice_levels(
-                        &ctx,
-                        &mut engine.tracks,
-                        engine.thread_pool.as_ref(),
-                        sub_offset,
-                        step_len,
-                        process_all,
-                    );
-
-                    sub_offset += step_len;
-                    sub_remaining -= step_len;
-                    sub_cur_pos += step_len as i64;
                 }
-
-                // Drain any automation events scheduled exactly at `slice_end_pos`
-                let mut end_latency_changed = false;
-                {
-                    let tracks_ref = &mut engine.tracks;
-                    let channels_ref = &mut engine.channels;
-                    engine.automation_queue.drain_up_to(
-                        slice_end_pos,
-                        |param_ev| {
-                            if let Some(t) = tracks_ref.get_mut(param_ev.target_track as usize) {
-                                if param_ev.slot_index == 0xFF {
-                                    t.gain = param_ev.norm_value;
-                                } else if let Some(s) =
-                                    t.slots.get_mut(param_ev.slot_index as usize)
-                                {
-                                    let prev_lat = s.plugin.latency_samples();
-                                    s.plugin.set_parameter_normalized(
-                                        param_ev.param_index,
-                                        param_ev.norm_value,
-                                    );
-                                    if s.plugin.latency_samples() != prev_lat {
-                                        end_latency_changed = true;
-                                    }
-                                }
-                            }
-                        },
-                        |voice_ev| {
-                            let seq_ev = SequencerVoiceEvent::from_delayed_voice_event(voice_ev);
-                            PlaylistSequencer::deliver_event_to_channels(&seq_ev, channels_ref);
-                        },
-                    );
-                }
-                if end_latency_changed {
-                    engine.recompute_apdc_rt();
-                }
-
-                cur_sample_cursor = slice_end_pos;
-            },
+            }
+        }
+        self.scheduler.process_slice_levels(
+            &ctx,
+            &mut self.tracks,
+            self.thread_pool.as_ref(),
+            0,
+            total_frames,
+            process_all,
         );
+    }
 
-        self.slicer = slicer;
+    /// Recomputes the implicit solo mutes: when any track is soloed, every track that is neither
+    /// soloed, upstream of a soloed track (feeding it), nor downstream of one (receiving from it) is
+    /// muted. Master is never solo-muted. Zero Heap Allocation (stack-only scratch).
+    pub fn recompute_solo_state(&mut self) {
+        let n = self.tracks.len().min(MAX_MIXER_TRACKS);
+        let any_solo = self.tracks[..n].iter().any(|t| t.soloed);
+        if !any_solo {
+            for t in &mut self.tracks[..n] {
+                t.solo_muted = false;
+            }
+            return;
+        }
+        let mut keep_up = [false; MAX_MIXER_TRACKS];
+        let mut keep_down = [false; MAX_MIXER_TRACKS];
+        for (i, t) in self.tracks[..n].iter().enumerate() {
+            if t.soloed {
+                keep_up[i] = true;
+                keep_down[i] = true;
+            }
+        }
+        // Relaxation over the send graph (acyclic, so it converges within `n` passes).
+        for _ in 0..n {
+            let mut changed = false;
+            for u in 0..n {
+                for send in &self.tracks[u].sends {
+                    let d = send.dest_track_index;
+                    if d >= n {
+                        continue;
+                    }
+                    if keep_down[u] && !keep_down[d] {
+                        keep_down[d] = true;
+                        changed = true;
+                    }
+                    if keep_up[d] && !keep_up[u] {
+                        keep_up[u] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (i, t) in self.tracks[..n].iter_mut().enumerate() {
+            t.solo_muted = i != MASTER_TRACK_INDEX && !(keep_up[i] || keep_down[i]);
+        }
+    }
 
-        // Copy Master Track 0 (`MASTER_TRACK_INDEX`) output to `master_out`
-        master_out[..total_frames]
-            .copy_from_slice(&self.tracks[MASTER_TRACK_INDEX].sub_block_buf[..total_frames]);
-
-        // Publish 120 FPS `VisualTelemetryFrame` (`131,072` bytes) in-place via `TripleBuffer`
+    /// Publishes the 120 FPS `VisualTelemetryFrame` (`131,072` bytes) in-place via `TripleBuffer`.
+    /// Every track meter is rewritten each block (inactive tracks read as silent), and plugins on the
+    /// telemetry focus track export last so the shared Pro-Q 4 / Soothe3 slots show that instance.
+    fn publish_telemetry_frame(&mut self) {
+        let rec_word = self.compute_record_telemetry_word();
         self.frame_seq = self.frame_seq.wrapping_add(1);
+        let process_all = self.process_all_502_tracks;
+        let silent_meter = TrackMeterEntry {
+            peak_l_db: -120.0,
+            peak_r_db: -120.0,
+            rms_l_db: -120.0,
+            rms_r_db: -120.0,
+            gr_db: 0.0,
+            activity_flags: TRACK_STATE_SILENT,
+        };
+        let focus = self.telemetry_focus_track;
         let frame = self.telemetry_input.input_buffer_mut();
         frame.header.frame_seq = self.frame_seq;
         frame.header.sample_pos = self.slicer.current_sample_pos;
         frame.header.ppq_tick = self.slicer.global_ppq_tick;
         frame.header.bpm = self.slicer.bpm as f32;
         frame.header.master_gr_db = self.tracks[MASTER_TRACK_INDEX].meter.gr_db;
-        frame.header.true_peak_db = [
-            self.tracks[MASTER_TRACK_INDEX].meter.peak_l_db,
-            self.tracks[MASTER_TRACK_INDEX].meter.peak_r_db,
-        ];
-        let mut active_slots = 0usize;
+        // Block true peak (dBTP) of the master output; a true-peak meter on the master chain
+        // overwrites this below with its own reading.
+        let tp_db = |x: f32| if x > 1.0e-6 { 20.0 * x.log10() } else { -120.0 };
+        frame.header.true_peak_db = [tp_db(self.master_tp_block_lin[0]), tp_db(self.master_tp_block_lin[1])];
+        frame.header.reserved[0] = rec_word;
+        frame.header.cpu_load_pct = self.dsp_load_ema_pct.clamp(0.0, 999.0);
+        frame.track_meters.fill(silent_meter);
+        // Shared plugin views rest at their floor unless a live instance exports this block.
+        frame.proq4_spectrum.pre_db.fill(-120.0);
+        frame.proq4_spectrum.post_db.fill(-120.0);
+        frame.proq4_spectrum.sc_db.fill(-120.0);
+        frame.proq4_spectrum.collision_mask.fill(0.0);
+        frame.soothe3_reduction.reduction_db_1024_mut().fill(0.0);
+        frame.soothe3_reduction.input_spec_db.fill(-120.0);
         if process_all {
             for i in 0..MAX_MIXER_TRACKS {
                 frame.track_meters[i] = self.tracks[i].meter;
+                if i == focus {
+                    continue;
+                }
                 for slot in &self.tracks[i].slots {
                     if slot.enabled {
-                        active_slots += 1;
                         slot.plugin.export_visual_telemetry(frame);
                     }
                 }
             }
         } else {
-            for lvl in &self.scheduler.active_levels {
+            let act_lvl_count = self.scheduler.num_active_levels();
+            for lvl_idx in 0..act_lvl_count {
+                let lvl = self.scheduler.active_level_at(lvl_idx);
                 for &u in lvl {
                     frame.track_meters[u] = self.tracks[u].meter;
+                    if u == focus {
+                        continue;
+                    }
                     for slot in &self.tracks[u].slots {
                         if slot.enabled {
-                            active_slots += 1;
                             slot.plugin.export_visual_telemetry(frame);
                         }
                     }
                 }
             }
         }
-        frame.header.cpu_load_pct = (1.2 + (active_slots as f32) * 0.85).min(99.9);
+        if let Some(track) = self.tracks.get(focus) {
+            for slot in &track.slots {
+                if slot.enabled {
+                    slot.plugin.export_visual_telemetry(frame);
+                }
+            }
+        }
         self.controller_bus
             .export_telemetry_norm(&mut frame.automation_spline.controller_values_norm);
         self.telemetry_input.publish();

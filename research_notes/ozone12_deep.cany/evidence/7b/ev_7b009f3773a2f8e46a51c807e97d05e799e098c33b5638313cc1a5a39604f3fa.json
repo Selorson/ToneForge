@@ -1,0 +1,125 @@
+{
+  "id": "ev_7b009f3773a2f8e46a51c807e97d05e799e098c33b5638313cc1a5a39604f3fa",
+  "subject": {
+    "kind": "pe",
+    "sha256": "44a104fee42335b3ec2b37c30467172f8abcca5b8f86e83a45a270b8a1f08254",
+    "name": "iZOzone12Core.dll"
+  },
+  "operation": "core_target_triage",
+  "params": {
+    "path": null
+  },
+  "result": {
+    "architecture": "x86_64",
+    "bits": 64,
+    "dotnet_arch": null,
+    "entry_point": "0x1848ed198",
+    "format": "pe",
+    "format_name": "PE (Windows)",
+    "kind": "shared-library",
+    "libraries": [
+      "ADVAPI32.dll",
+      "COMCTL32.dll",
+      "COMDLG32.dll",
+      "CRYPT32.dll",
+      "GDI32.dll",
+      "GLU32.dll",
+      "IPHLPAPI.DLL",
+      "KERNEL32.dll",
+      "MFPlat.DLL",
+      "MFReadWrite.dll",
+      "OLEACC.dll",
+      "OLEAUT32.dll",
+      "OPENGL32.dll",
+      "POWRPROF.dll",
+      "PROPSYS.dll",
+      "PSAPI.DLL",
+      "RPCRT4.dll",
+      "SETUPAPI.dll",
+      "SHELL32.dll",
+      "SHLWAPI.dll",
+      "USER32.dll",
+      "USERENV.dll",
+      "VERSION.dll",
+      "WINHTTP.dll",
+      "WINTRUST.dll",
+      "WS2_32.dll",
+      "WSOCK32.dll",
+      "bcrypt.dll",
+      "d3d9.dll",
+      "dwmapi.dll",
+      "gdiplus.dll",
+      "imagehlp.dll"
+    ],
+    "next_steps": [
+      {
+        "tool": "core_overview_show",
+        "why": "a one-page summary: sections, imports, counts"
+      },
+      {
+        "tool": "native_functions_list",
+        "why": "every function we found"
+      },
+      {
+        "tool": "native_strings_find",
+        "why": "find text the program shows or uses"
+      },
+      {
+        "tool": "native_function_study",
+        "why": "a full dossier on one function (start with main or the entry point)"
+      },
+      {
+        "tool": "core_feature_find",
+        "why": "follow a word you see in the app to the code behind it"
+      },
+      {
+        "tool": "native_pe_resources_list",
+        "why": "icons, version information and the manifest"
+      }
+    ],
+    "operating_system": "Windows",
+    "plain_english": "iZOzone12Core.dll is a library (code other programs load) for Windows, built for x86_64 (64-bit). Its internal names were removed (stripped), so most functions will have generated names.",
+    "recommended_toolsets": [
+      "core",
+      "native",
+      "formats"
+    ],
+    "stripped": true,
+    "symbol_table_stripped": true,
+    "toolchain_hints": [
+      {
+        "category": "compiler",
+        "evidence": "Rich header",
+        "id": "msvc",
+        "label": "Microsoft Visual C++ toolchain",
+        "strength": "strong"
+      }
+    ]
+  },
+  "summary": "iZOzone12Core.dll is a library (code other programs load) for Windows, built for x86_64 (64-bit). Its internal names were removed (stripped), so most functions will have generated names.",
+  "confidence": "observed",
+  "authority": "original-files",
+  "environment": {
+    "clean_room": false,
+    "engine": "builtin",
+    "engine_version": "0.4.0",
+    "host": "windows-x86_64"
+  },
+  "limitations": [
+    {
+      "code": "heuristic_hints",
+      "message": "toolchain and packer hints come from markers that can be faked or borrowed"
+    }
+  ],
+  "coverage": {
+    "status": "unknown"
+  },
+  "locations": [
+    {
+      "kind": "address",
+      "value": "0x1848ed198",
+      "label": "entry point"
+    }
+  ],
+  "links": []
+}

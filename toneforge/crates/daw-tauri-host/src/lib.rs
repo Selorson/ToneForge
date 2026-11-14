@@ -13,6 +13,7 @@
 //! - [`ipc_commands`]: Lock-free IPC command handlers and DTOs.
 //! - [`wgpu_compositor`]: 120 FPS WebGPU / WGPU uniform and SDF instance packers.
 
+pub mod audio_assets;
 pub mod audio_stream_controller;
 pub mod ipc_commands;
 pub mod native_audio_decoder;
@@ -20,6 +21,8 @@ pub mod offline_render_engine;
 pub mod preset_library;
 pub mod project_state;
 pub mod shm_telemetry_server;
+pub mod slot_rack;
+pub mod undo_history;
 pub mod wgpu_compositor;
 
 pub use ai_uvr5_stem_engine::{
@@ -28,25 +31,46 @@ pub use ai_uvr5_stem_engine::{
 pub use audio_stream_controller::{
     AudioStreamController, StemPlaybackGeneratorNode, Uvr5EnsembleStudioOutput,
 };
+pub use daw_core_graph::{
+    AdaptiveDllDriftResampler, AsioDriverInfo, AsioHardwareStream, AsioStreamStatusSnapshot,
+    DiskTrackRecorder, MidiInputDeviceInfo, RecordedTakeInfo, RtGarbageCollector, RtGraphMutation,
+    RtRecordTap, WasapiCaptureStatusSnapshot, WasapiCaptureStream, WasapiEndpointInfo,
+    WasapiHardwareStream, WasapiSampleFormat, WasapiStreamStatusSnapshot, Win32MidiInputPort,
+    enumerate_asio_drivers, enumerate_midi_input_devices, enumerate_wasapi_input_devices,
+    enumerate_wasapi_output_devices,
+};
 pub use ipc_commands::{
-    DawAppState, PatcherCanvasEdgeDto, PatcherCanvasNodeDto, PatcherCanvasUpdateDto,
-    ProQ4BandUpdateDto, ProQ4GlobalUpdateDto, Soothe3ScBandUpdateDto, Soothe3UpdateDto,
-    Uvr5SeparationRequestDto, Uvr5SeparationResultDto, cmd_apply_proq4_ffp_preset,
-    cmd_apply_soothe3_factory_preset, cmd_execute_offline_render, cmd_load_fl26_fx_preset,
-    cmd_load_fl26_sample_kit, cmd_load_fl26_score, cmd_load_ozone12_genre_or_xml_preset,
-    cmd_load_proq4_preset, cmd_load_soothe3_preset_json, cmd_load_uvr5_model_profile,
-    cmd_poll_binary_telemetry_frame, cmd_query_gpu_accelerator_status, cmd_route_mixer_track,
-    cmd_route_mixer_track_on_engine, cmd_run_ozone12_ai_master_assistant, cmd_run_uvr5_separation,
-    cmd_seek_transport, cmd_set_internal_controller_norm, cmd_set_ppq_resolution,
-    cmd_set_track_gain, cmd_set_transport, cmd_trigger_piano_roll_note,
-    cmd_update_automation_spline, cmd_update_bsrnn_stem_gains, cmd_update_bsrnn_stem_state,
-    cmd_update_ozone12_master, cmd_update_patcher_graph, cmd_update_proq4_band,
+    DawAppState, ExternalPluginGuiWorker, HardwareAudioMidiInventoryDto, INSTRUMENT_SLOT_INDEX,
+    LivePluginEditor,
+    HardwareRecordingStatusDto, LoadedExternalPluginInfoDto, Ozone12CodecPreviewDto,
+    Ozone12LowEndFocusDto, PatcherCanvasEdgeDto, PatcherCanvasNodeDto, PatcherCanvasUpdateDto,
+    PianoRollTransformRequestDto, PlaylistClipEditRequestDto, ProQ4BandUpdateDto,
+    ProQ4GlobalUpdateDto, RecordedTakeUiDto, Soothe3ScBandUpdateDto, Soothe3UpdateDto,
+    Uvr5SeparationRequestDto, Uvr5SeparationResultDto, VocalPitchAnalysisResultDto,
+    analyze_vocal_pitch_blobs_dsp, cmd_apply_proq4_ffp_preset, cmd_apply_soothe3_factory_preset,
+    cmd_bounce_stems_to_mixer_rt, cmd_execute_offline_render, cmd_list_audio_midi_inputs_sync,
+    cmd_load_external_plugin_slot_rt, cmd_load_fl26_fx_preset, cmd_load_fl26_sample_kit,
+    cmd_load_fl26_score, cmd_load_ozone12_genre_or_xml_preset, cmd_load_proq4_preset,
+    cmd_load_soothe3_preset_json, cmd_load_uvr5_model_profile, cmd_ozone12_set_codec_preview,
+    cmd_ozone12_set_low_end_focus, cmd_piano_roll_transform_notes_rt,
+    cmd_playlist_slice_or_edit_clip_rt, cmd_poll_binary_telemetry_frame, cmd_proq4_fit_eq_sketch,
+    cmd_proq4_set_collision_reference, cmd_query_gpu_accelerator_status,
+    cmd_replace_custom_audio_stem_rt, cmd_route_mixer_track, cmd_route_mixer_track_on_engine,
+    cmd_route_mixer_track_rt, cmd_run_ozone12_ai_master_assistant, cmd_run_uvr5_separation,
+    cmd_seek_transport, cmd_set_external_plugin_param_rt, cmd_set_internal_controller_norm,
+    cmd_set_ppq_resolution, cmd_set_track_gain, cmd_set_transport,
+    cmd_soothe3_set_external_sidechain, cmd_trigger_audition_note, cmd_trigger_piano_roll_note,
+    cmd_update_automation_spline, cmd_update_automation_spline_rt, cmd_update_bsrnn_stem_gains,
+    cmd_update_bsrnn_stem_state, cmd_update_ozone12_master, cmd_update_patcher_graph,
+    cmd_update_patcher_graph_rt, cmd_update_pitcher_rt_params, cmd_update_proq4_band,
     cmd_update_proq4_global, cmd_update_soothe3_params, cmd_update_soothe3_sc_band,
-    cmd_upsert_piano_roll_pattern, cmd_upsert_playlist_clip, execute_uvr5_separation_dsp,
+    cmd_upsert_piano_roll_pattern, cmd_upsert_piano_roll_pattern_rt, cmd_upsert_playlist_clip,
+    cmd_upsert_playlist_clip_rt, commit_vocal_pitch_edits_dsp, execute_uvr5_separation_dsp,
 };
 pub use native_audio_decoder::{
     NativeDecodedAudio, NativeLoadedAudioDto, decode_audio_file_native,
-    encode_exact_sr_pcm16_wav_bytes, pick_audio_file_dialog_native, pick_directory_dialog_native,
+    encode_exact_sr_pcm16_wav_bytes, pick_audio_file_dialog_native, pick_directory_dialog_native, pick_project_open_path_native,
+    pick_project_save_path_native, write_f32_wav_file,
 };
 pub use offline_render_engine::{
     DecodedWavFile, ExportedTrackWav, OfflineRenderConfig, OfflineRenderEngine,
@@ -57,20 +81,43 @@ pub use offline_render_engine::{
 pub use preset_library::{
     Fl26FxPresetDto, Fl26SampleKitDto, Fl26SampleVoiceDto, Ozone12AssistantPresetDto,
     ProQ4PresetStateDto, ProQ4UiBandDto, Soothe3PresetStateDto, Soothe3ScBandUiDto,
-    Uvr5ModelProfileDto, apply_fl26_fx_preset_to_engine, apply_fl26_sample_kit_to_engine,
-    apply_proq4_preset, apply_soothe3_preset, load_fl26_fx_preset, load_fl26_sample_kit,
-    load_fl26_score_preset, load_ozone12_genre_preset, load_ozone12_global_xml_preset,
+    Uvr5ModelProfileDto, apply_fl26_fx_preset_rt, apply_fl26_fx_preset_to_engine,
+    apply_fl26_sample_kit_rt, apply_fl26_sample_kit_to_engine, apply_proq4_preset,
+    apply_soothe3_preset, load_fl26_fx_preset, load_fl26_sample_kit, load_fl26_score_preset,
+    load_fl26_score_preset_rt, load_ozone12_genre_preset, load_ozone12_global_xml_preset,
     load_uvr5_model_profile, parse_fl26_fsc_bytes, parse_proq4_ffp, parse_soothe3_preset,
     read_fl26_sample_kit_wav_bytes, resolve_assets_root, resolve_gpu_runtime_root,
     resolve_proq4_ffp_path, resolve_soothe3_preset_path, run_ozone12_master_assistant,
+    run_ozone12_master_assistant_with_audio,
+};
+pub use audio_assets::{
+    ASSET_ID_CUSTOM_AUDIO, ASSET_ID_DERIVED_BASE, ASSET_ID_NEWTONE_BASE, ASSET_ID_TAKE_BASE,
+    ASSET_ID_UVR5_BASE, AudioAssetDto, KIND_CUSTOM_AUDIO, KIND_NEWTONE_COMMIT, KIND_RECORDED_TAKE,
+    KIND_UVR5_STEM, asset_region_table, build_all_asset_channels, build_asset_channel,
+    build_derived_clip_channel, clip_driven_asset_ids, clip_needs_derived_render,
+    load_asset_frames, next_take_asset_id, toneforge_user_audio_dir, upsert_asset,
 };
 pub use project_state::{
-    AutomationClipStateDto, BsrnnStemStateDto, ControllerLinkStateDto, LfoModulatorDto,
-    MixerSendRouteDto, MixerTrackStateDto, Ozone12MasterConfigDto, PatcherAudioEdgeDto,
-    PatcherGraphStateDto, PatcherNodeLayoutDto, PatcherNodeStateDto, PatcherParamEdgeDto,
-    PianoRollNoteDto, PianoRollPatternDto, PlaylistClipDto, PluginConfigDto, PluginSlotStateDto,
-    ProQ4StateDto, Soothe3StateDto, TONEFORGE_PROJECT_SCHEMA_VERSION, TensionControlPointDto,
-    ToneForgeProjectState,
+    Fl26SlotPresetDto,
+    AutomationClipStateDto, BsrnnStemStateDto, ControllerLinkStateDto, ExternalPluginStateDto,
+    LfoModulatorDto, MixerSendRouteDto, MixerTrackStateDto, Ozone12MasterConfigDto,
+    PatcherAudioEdgeDto, PatcherGraphStateDto, PatcherNodeLayoutDto, PatcherNodeStateDto,
+    PatcherParamEdgeDto, PianoRollNoteDto, PianoRollPatternDto, PitcherStateDto, PlaylistClipDto,
+    PluginConfigDto, PluginSlotStateDto, ProQ4StateDto, Soothe3StateDto,
+    TONEFORGE_PROJECT_SCHEMA_VERSION, TensionControlPointDto, ToneForgeProjectState,
+    decode_hex_bytes, encode_hex_bytes,
+};
+pub use slot_rack::{
+    NATIVE_INSERT_PLUGIN_KINDS, apply_fl26_fx_preset_slot_rt, apply_patcher_canvas_slot_rt,
+    build_empty_rack_slot, clear_plugin_slot, default_native_plugin_dto, drop_slot_overlays,
+    empty_slot_dto, fl26_preset_plugin_dto, insert_native_plugin_slot, is_empty_slot,
+    mirror_fl26_preset_into_slot, pad_project_slots_for_overlays, pad_slots_up_to,
+    place_plugin_slot, set_project_slot,
+};
+pub use undo_history::{
+    DEFAULT_UNDO_HISTORY_LIMIT, ProjectUndoHistory, UndoRedoStatusDto, UndoRedoTransition,
+    apply_ozone12_dto_to_chain, build_ozone12_chain_boxed, build_plugin_node_from_dto,
+    sync_project_state_diff_to_rt,
 };
 pub use shm_telemetry_server::{
     OFFSET_AUTOMATION_SPLINE, OFFSET_HEADER, OFFSET_HEADER_ALIGN_PAD, OFFSET_OZONE12_TELEMETRY,

@@ -142,6 +142,7 @@ fn test_strict_zero_heap_allocation_in_realtime_render_cycle() {
         clip_offset_ticks: 0,
         gain: 1.0,
         muted: false,
+        ..Default::default()
     });
     let spline = TensionSpline::new(vec![
         TensionControlPoint::new(0.0, 0.2, 0.35),
@@ -294,4 +295,212 @@ fn test_strict_zero_heap_allocation_in_realtime_render_cycle() {
     let frame = telem_out.read();
     assert_eq!(frame.header.frame_seq, 64);
     assert!(frame.header.ppq_tick > 0);
+}
+
+#[test]
+fn gate6_1000_live_rt_graph_mutations_zero_alloc_zero_dealloc() {
+    use daw_core_graph::{
+        EmphasisLimiterNode, GrossBeatTimeBufferNode, LuxeVerbFdnShimmerNode, MixerSendRoute,
+        PluginRackSlot, RtGraphMutation,
+    };
+
+    let sample_rate = 48_000.0;
+    let (mut engine, mut cmd_prod, mut mut_prod, _rt_gc, _telem_out) =
+        MixerEngine::new_with_rt_gc(sample_rate, 128.0, 0);
+
+    // Seed initial channels, native FX (LuxeVerb, GrossBeat, Emphasis), and routing before RT loop
+    let mut verb = LuxeVerbFdnShimmerNode::new();
+    verb.shimmer_mix = 0.35;
+    verb.prepare(sample_rate, 256);
+
+    let mut gb = GrossBeatTimeBufferNode::new(240_000);
+    gb.prepare(sample_rate, 256);
+
+    let mut emph = EmphasisLimiterNode::new(64, -1.0);
+    emph.prepare(sample_rate, 256);
+
+    engine
+        .add_channel_generator(ChannelGenerator::new(
+            0,
+            1,
+            Box::new(DeterministicGeneratorNode::new(8, 0.5, false)),
+        ))
+        .unwrap();
+    engine.tracks[1].add_plugin_slot(Box::new(verb), 0.35).unwrap();
+    engine.tracks[1].add_plugin_slot(Box::new(gb), 1.0).unwrap();
+    engine.tracks[0].add_plugin_slot(Box::new(emph), 1.0).unwrap();
+    engine.tracks[1].add_send(2, 0.75, false);
+    engine.tracks[2].add_send(0, 1.0, false);
+    engine.rebuild_graph().unwrap();
+
+    cmd_prod
+        .push(EngineCommand::SetTransportPlaying(true))
+        .unwrap();
+
+    // Spawn a host mutation producer thread that fires 1,000 live RtGraphMutation ops
+    // (plugin insert/replace/remove, send add/update/remove, channel upsert/remove,
+    // pattern/note/clip/articulator mutations) concurrently while the RT thread renders!
+    let producer_handle = std::thread::spawn(move || {
+        let mut pushed = 0usize;
+        for i in 0..1_000usize {
+            let mutation = match i % 10 {
+                0 => {
+                    let mut slot = PluginRackSlot::new(
+                        Box::new(FixedLatencyTransformNode::new((i % 64) + 4, 0.9, false)),
+                        0.8,
+                    );
+                    slot.plugin.prepare(sample_rate, 256);
+                    RtGraphMutation::SetOrReplacePluginSlot {
+                        track_index: 2,
+                        slot_index: 0,
+                        slot: Box::new(Some(slot)),
+                    }
+                }
+                1 => RtGraphMutation::RemovePluginSlot {
+                    track_index: 2,
+                    slot_index: 0,
+                    recycle_slot: Box::new(None),
+                },
+                2 => RtGraphMutation::AddOrUpdateSendRoute {
+                    src_track: 1,
+                    dest_track: 3,
+                    gain: 0.5,
+                    is_sidechain_only: false,
+                    route_carrier: Box::new(Some(MixerSendRoute::new(3, 0.5, false))),
+                },
+                3 => RtGraphMutation::RemoveSendRoute {
+                    src_track: 1,
+                    dest_track: 3,
+                    is_sidechain_only: false,
+                    recycle_carrier: Box::new(None),
+                },
+                4 => {
+                    let mut ch = ChannelGenerator::new(
+                        10,
+                        2,
+                        Box::new(DeterministicGeneratorNode::new(12, 0.3, false)),
+                    );
+                    ch.generator.prepare(sample_rate, 256);
+                    RtGraphMutation::UpsertChannel {
+                        channel: Box::new(Some(ch)),
+                    }
+                }
+                5 => RtGraphMutation::RemoveChannel {
+                    channel_id: 10,
+                    recycle_channel: Box::new(None),
+                },
+                6 => {
+                    let mut pat = PianoRollPattern::new(2, "LiveMutPat", 0, 96);
+                    pat.add_note(PianoRollNote::new(1, 0, 24, 64, 0.85));
+                    RtGraphMutation::UpsertPattern {
+                        pattern: Box::new(pat),
+                    }
+                }
+                7 => RtGraphMutation::AddOrUpdateNote {
+                    pattern_id: 2,
+                    note: PianoRollNote::new(2, 24, 24, 67, 0.80),
+                },
+                8 => RtGraphMutation::UpsertPlaylistClip {
+                    clip: PlaylistClip {
+                        clip_id: 50,
+                        track_row: 1,
+                        kind: PlaylistClipKind::Pattern,
+                        source_id: 2,
+                        start_tick: 0,
+                        duration_ticks: 192,
+                        clip_offset_ticks: 0,
+                        gain: 0.9,
+                        muted: false,
+                        ..Default::default()
+                    },
+                },
+                _ => {
+                    let sp = TensionSpline::new(vec![
+                        TensionControlPoint::new(0.0, 0.25, 0.0),
+                        TensionControlPoint::new(96.0, 0.75, 0.0),
+                    ]);
+                    RtGraphMutation::UpsertAutomationArticulator {
+                        articulator: Box::new(AutomationClipArticulator::new(1, sp)),
+                    }
+                }
+            };
+
+            while mut_prod.is_full() {
+                std::thread::yield_now();
+            }
+            assert!(mut_prod.push(mutation).is_ok());
+            pushed += 1;
+            if pushed % 32 == 0 {
+                std::thread::yield_now();
+            }
+        }
+        pushed
+    });
+
+    let mut master_out = [[0.0f32; 2]; 256];
+    let t0 = std::time::Instant::now();
+    let mut blocks = 0usize;
+
+    begin_rt_no_alloc_region();
+    loop {
+        engine.process_audio_block(&mut master_out);
+        blocks += 1;
+        if producer_handle.is_finished() && blocks >= 128 {
+            // Run 8 extra drain blocks to ensure 100% of queued mutations were ingested inside the guard
+            for _ in 0..8 {
+                engine.process_audio_block(&mut master_out);
+                blocks += 1;
+            }
+            break;
+        }
+    }
+    let (alloc_count, alloc_bytes, dealloc_count) = end_rt_no_alloc_region();
+
+    let total_elapsed = t0.elapsed();
+    let pushed = producer_handle.join().unwrap();
+    assert_eq!(pushed, 1_000);
+
+    assert_eq!(
+        alloc_count, 0,
+        "Gate 6 VIOLATION: RT thread performed {alloc_count} heap allocations ({alloc_bytes} bytes) during 1,000 live graph mutations!"
+    );
+    assert_eq!(
+        dealloc_count, 0,
+        "Gate 6 VIOLATION: RT thread performed {dealloc_count} heap deallocations (drop/HeapFree) during 1,000 live graph mutations!"
+    );
+
+    let avg_us_per_block = total_elapsed.as_secs_f64() * 1_000_000.0 / (blocks.max(1) as f64);
+    assert!(
+        avg_us_per_block < 1_500.0,
+        "Gate 6 latency budget exceeded: avg block time {avg_us_per_block:.1} us >= 1500 us"
+    );
+}
+
+/// Retired resources that own plug-in instances go to the host's disposer (its plug-in thread);
+/// everything else is still freed on `toneforge-rt-gc`.
+#[test]
+fn test_rt_gc_routes_retired_plugins_to_host_disposer() {
+    use daw_core_graph::{RetiredRtResource, create_rt_mutation_channels};
+    use std::sync::{Arc, Mutex};
+    let (_mp, _mc, mut gc_prod, gc) = create_rt_mutation_channels(64, 128);
+    let routed: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let routed_bg = Arc::clone(&routed);
+    gc.set_plugin_disposer(Some(Box::new(move |r| {
+        let kind = match r {
+            RetiredRtResource::PluginSlot(_) => "slot",
+            RetiredRtResource::Channel(_) => "channel",
+            _ => "other",
+        };
+        routed_bg.lock().unwrap().push(kind);
+    })));
+    assert!(gc_prod.push(RetiredRtResource::PluginSlot(Box::new(None))).is_ok());
+    assert!(gc_prod.push(RetiredRtResource::AudioFrames(Box::new(vec![[0.0; 2]; 16]))).is_ok());
+    assert!(gc_prod.push(RetiredRtResource::Channel(Box::new(None))).is_ok());
+    gc.wake();
+    let t0 = std::time::Instant::now();
+    while gc.freed_count() < 3 && t0.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(gc.freed_count(), 3);
+    assert_eq!(*routed.lock().unwrap(), vec!["slot", "channel"]);
 }

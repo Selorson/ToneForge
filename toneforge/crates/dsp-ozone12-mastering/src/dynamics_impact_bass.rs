@@ -247,12 +247,36 @@ impl UnifiedDspNode for ImpactModule {
 }
 
 // ============================================================================
-// 2. OZONE 12 UNLIMITER (TRANSIENT RECOVERY)
+// 2. OZONE 12 UNLIMITER (TRANSIENT RECOVERY + NEURAL DELIMIT BACKEND HOOK)
 // ============================================================================
+
+/// Maximum stereo lookahead delay supported by `UnlimiterModule` (`8192` frames -> up to `384 kHz` STFT).
+pub const MAX_UNLIMITER_DELAY: usize = 8192;
+
+/// Pluggable neural transient-restoration backend for `DSP::OzoneUnlimiter` (`0x1834DCB90` /
+/// `delimit_exp009_ep080_fixed2.onnx`). Implementations MUST be zero-allocation on RT paths.
+pub trait NeuralUnlimiterBackend: Send + Sync {
+    /// Computes the non-negative transient residual envelope `out_residual[n]` from
+    /// threshold-normalized mono audio `mono_norm[n] = 0.5 * (L + R) / 10^(threshold_db / 20)`.
+    /// Returns `true` when neural inference succeeded and `out_residual` was populated.
+    fn process_delimit_envelope(
+        &mut self,
+        mono_norm: &[f32],
+        sample_rate: f64,
+        out_residual: &mut [f32],
+    ) -> bool;
+
+    /// Intrinsic algorithmic lookahead latency in samples at `sample_rate` (e.g. `2048` @ `48 kHz`).
+    fn latency_samples(&self, sample_rate: f64) -> usize;
+
+    /// Clears internal STFT overlap-add buffers and recurrent states.
+    fn reset(&mut self);
+}
 
 /// iZotope Ozone 12 Unlimiter (`UnlimiterModule` / `OzoneUnlimiter`).
 /// Restores dynamic range and transient peaks crushed by brickwall limiters or clippers.
-#[derive(Clone, Debug)]
+/// When a `NeuralUnlimiterBackend` (`delimit_exp009_ep080_fixed2.onnx`) is attached, applies
+/// Ozone 12's exact `0x1834DCB90` delayed residual envelope gain restoration with 0 RT allocations.
 pub struct UnlimiterModule {
     pub enabled: bool,
     /// Transient recovery amount in `[0.0, 100.0]`%.
@@ -272,9 +296,53 @@ pub struct UnlimiterModule {
     env_rms_sq: f64,
     out_rms_sq: f64,
     expansion_gain: f64,
-    /// Latest upward transient restoration in dB (`[0.0, +9.0]` dB).
+    /// Latest upward transient restoration in dB (`[0.0, +18.0]` dB).
     pub restored_transient_db: f32,
     sample_rate: f64,
+
+    neural_backend: Option<Box<dyn NeuralUnlimiterBackend>>,
+    delay_ring: Box<[[f32; 2]; MAX_UNLIMITER_DELAY]>,
+    delay_write_pos: usize,
+}
+
+impl Clone for UnlimiterModule {
+    fn clone(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            amount_percent: self.amount_percent,
+            threshold_db: self.threshold_db,
+            sensitivity_percent: self.sensitivity_percent,
+            attack_ms: self.attack_ms,
+            release_ms: self.release_ms,
+            auto_level_enabled: self.auto_level_enabled,
+            env_peak: self.env_peak,
+            env_rms_sq: self.env_rms_sq,
+            out_rms_sq: self.out_rms_sq,
+            expansion_gain: self.expansion_gain,
+            restored_transient_db: self.restored_transient_db,
+            sample_rate: self.sample_rate,
+            neural_backend: None,
+            delay_ring: self.delay_ring.clone(),
+            delay_write_pos: self.delay_write_pos,
+        }
+    }
+}
+
+impl std::fmt::Debug for UnlimiterModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnlimiterModule")
+            .field("enabled", &self.enabled)
+            .field("amount_percent", &self.amount_percent)
+            .field("threshold_db", &self.threshold_db)
+            .field("sensitivity_percent", &self.sensitivity_percent)
+            .field("attack_ms", &self.attack_ms)
+            .field("release_ms", &self.release_ms)
+            .field("auto_level_enabled", &self.auto_level_enabled)
+            .field("restored_transient_db", &self.restored_transient_db)
+            .field("sample_rate", &self.sample_rate)
+            .field("has_neural_backend", &self.neural_backend.is_some())
+            .finish()
+    }
 }
 
 pub type OzoneUnlimiter = UnlimiterModule;
@@ -301,6 +369,36 @@ impl UnlimiterModule {
             expansion_gain: 1.0,
             restored_transient_db: 0.0,
             sample_rate: sample_rate.max(8000.0),
+            neural_backend: None,
+            delay_ring: Box::new([[0.0f32; 2]; MAX_UNLIMITER_DELAY]),
+            delay_write_pos: 0,
+        }
+    }
+
+    /// Attaches or detaches a `NeuralUnlimiterBackend` (`delimit_exp009_ep080_fixed2.onnx`).
+    pub fn set_neural_backend(&mut self, backend: Option<Box<dyn NeuralUnlimiterBackend>>) {
+        self.neural_backend = backend;
+        self.delay_ring.fill([0.0; 2]);
+        self.delay_write_pos = 0;
+        if let Some(ref mut b) = self.neural_backend {
+            b.reset();
+        }
+    }
+
+    /// Returns `true` if a `NeuralUnlimiterBackend` is currently attached.
+    #[inline]
+    pub fn has_neural_backend(&self) -> bool {
+        self.neural_backend.is_some()
+    }
+
+    #[inline]
+    fn active_neural_latency_samples(&self) -> usize {
+        if !self.enabled {
+            return 0;
+        }
+        match self.neural_backend.as_ref() {
+            Some(b) => b.latency_samples(self.sample_rate).min(MAX_UNLIMITER_DELAY - 1),
+            None => 0,
         }
     }
 
@@ -310,10 +408,15 @@ impl UnlimiterModule {
         self.out_rms_sq = 1e-6;
         self.expansion_gain = 1.0;
         self.restored_transient_db = 0.0;
+        self.delay_ring.fill([0.0; 2]);
+        self.delay_write_pos = 0;
+        if let Some(ref mut b) = self.neural_backend {
+            b.reset();
+        }
     }
 
     #[inline]
-    pub fn process_frame(&mut self, l_in: f32, r_in: f32) -> [f32; 2] {
+    fn process_envelope_fallback_frame(&mut self, l_in: f32, r_in: f32) -> [f32; 2] {
         if !self.enabled || self.amount_percent <= 0.0 {
             self.restored_transient_db = 0.0;
             return [l_in, r_in];
@@ -373,12 +476,117 @@ impl UnlimiterModule {
     }
 
     #[inline]
+    pub fn process_frame(&mut self, l_in: f32, r_in: f32) -> [f32; 2] {
+        if !self.enabled {
+            self.restored_transient_db = 0.0;
+            return [l_in, r_in];
+        }
+        if self.neural_backend.is_some() {
+            let mut frame = [[l_in, r_in]];
+            self.process_frames_in_place(&mut frame);
+            return frame[0];
+        }
+        self.process_envelope_fallback_frame(l_in, r_in)
+    }
+
+    #[inline]
     pub fn process_frames_in_place(&mut self, io: &mut [StereoFrame]) {
         if !self.enabled {
+            self.restored_transient_db = 0.0;
             return;
         }
+        if self.neural_backend.is_some() {
+            const CHUNK: usize = 256;
+            let thresh_lin = 10.0_f32
+                .powf(self.threshold_db.clamp(-24.0, 0.0) / 20.0)
+                .max(1.0e-6);
+            let inv_thresh = 1.0 / thresh_lin;
+            let amount = (self.amount_percent.clamp(0.0, 100.0)) * 0.01;
+            let rms_alpha = (-1.0 / (0.150 * self.sample_rate)).exp();
+
+            let mut mono_norm = [0.0f32; CHUNK];
+            let mut residual = [0.0f32; CHUNK];
+            let mut offset = 0;
+            let total = io.len();
+
+            while offset < total {
+                let n = (total - offset).min(CHUNK);
+                for i in 0..n {
+                    let f = io[offset + i];
+                    mono_norm[i] = 0.5 * (f[0] + f[1]) * inv_thresh;
+                    residual[i] = 0.0;
+                }
+
+                let (ok, delay_len) = if let Some(ref mut backend) = self.neural_backend {
+                    let ok = backend.process_delimit_envelope(
+                        &mono_norm[..n],
+                        self.sample_rate,
+                        &mut residual[..n],
+                    );
+                    let d = backend
+                        .latency_samples(self.sample_rate)
+                        .min(MAX_UNLIMITER_DELAY - 1);
+                    (ok, d)
+                } else {
+                    (false, 0)
+                };
+
+                if ok {
+                    let mut g_max = 1.0_f32;
+                    for i in 0..n {
+                        let dry = io[offset + i];
+                        let w_pos = self.delay_write_pos;
+                        self.delay_ring[w_pos] = dry;
+                        let r_pos = (w_pos + MAX_UNLIMITER_DELAY - delay_len) % MAX_UNLIMITER_DELAY;
+                        let delayed = self.delay_ring[r_pos];
+                        self.delay_write_pos = (w_pos + 1) % MAX_UNLIMITER_DELAY;
+
+                        let r_val = if residual[i].is_finite() {
+                            residual[i].max(0.0)
+                        } else {
+                            0.0
+                        };
+                        // Exact Ozone 12 `0x1834DCB90` formula:
+                        // g[n] = 1.0 + amount * max(r[n], 0.0), y_c[n] = x_c[n - D] * g[n]
+                        let g = 1.0 + amount * r_val;
+                        if g > g_max {
+                            g_max = g;
+                        }
+                        let mut out_l = delayed[0] * g;
+                        let mut out_r = delayed[1] * g;
+
+                        if self.auto_level_enabled {
+                            let in_e =
+                                0.5 * ((delayed[0] as f64).powi(2) + (delayed[1] as f64).powi(2));
+                            let out_e = 0.5 * ((out_l as f64).powi(2) + (out_r as f64).powi(2));
+                            self.env_rms_sq = rms_alpha * self.env_rms_sq + (1.0 - rms_alpha) * in_e;
+                            self.out_rms_sq =
+                                rms_alpha * self.out_rms_sq + (1.0 - rms_alpha) * out_e;
+                            if self.env_rms_sq > 1e-8 && self.out_rms_sq > 1e-8 {
+                                let comp =
+                                    (self.env_rms_sq / self.out_rms_sq).sqrt().clamp(0.4, 1.2)
+                                        as f32;
+                                out_l *= comp;
+                                out_r *= comp;
+                            }
+                        }
+
+                        io[offset + i] = [out_l, out_r];
+                    }
+                    self.restored_transient_db = 20.0 * g_max.max(1.0).log10();
+                } else {
+                    for i in 0..n {
+                        let f = io[offset + i];
+                        io[offset + i] = self.process_envelope_fallback_frame(f[0], f[1]);
+                    }
+                }
+                offset += n;
+            }
+            return;
+        }
+
         for frame in io.iter_mut() {
-            *frame = self.process_frame(frame[0], frame[1]);
+            *frame = self.process_envelope_fallback_frame(frame[0], frame[1]);
         }
     }
 }
@@ -395,14 +603,37 @@ impl OzoneDspModule for UnlimiterModule {
 
     fn process_block(&mut self, left: &mut [f32], right: &mut [f32]) {
         if !self.enabled {
+            self.restored_transient_db = 0.0;
             return;
         }
-        let n = left.len().min(right.len());
-        for i in 0..n {
-            let [l, r] = self.process_frame(left[i], right[i]);
+        let total = left.len().min(right.len());
+        if self.neural_backend.is_some() {
+            const CHUNK: usize = 256;
+            let mut frames = [[0.0f32; 2]; CHUNK];
+            let mut offset = 0;
+            while offset < total {
+                let n = (total - offset).min(CHUNK);
+                for i in 0..n {
+                    frames[i] = [left[offset + i], right[offset + i]];
+                }
+                self.process_frames_in_place(&mut frames[..n]);
+                for i in 0..n {
+                    left[offset + i] = frames[i][0];
+                    right[offset + i] = frames[i][1];
+                }
+                offset += n;
+            }
+            return;
+        }
+        for i in 0..total {
+            let [l, r] = self.process_envelope_fallback_frame(left[i], right[i]);
             left[i] = l;
             right[i] = r;
         }
+    }
+
+    fn latency_samples(&self) -> usize {
+        self.active_neural_latency_samples()
     }
 }
 
@@ -412,7 +643,7 @@ impl UnifiedDspNode for UnlimiterModule {
     }
 
     fn latency_samples(&self) -> usize {
-        0
+        self.active_neural_latency_samples()
     }
 
     fn prepare(&mut self, sample_rate: f64, max_block_size: usize) {
@@ -429,6 +660,8 @@ impl UnifiedDspNode for UnlimiterModule {
             0 => self.amount_percent = v * 100.0,
             1 => self.threshold_db = -24.0 + v * 24.0,
             2 => self.sensitivity_percent = v * 100.0,
+            3 => self.enabled = v >= 0.5,
+            4 => self.auto_level_enabled = v >= 0.5,
             _ => {}
         }
     }

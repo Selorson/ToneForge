@@ -95,8 +95,50 @@
       >
         Delta Solo
       </button>
+
+      <button
+        class={telemetry.soothe3ExternalScEnabled ? 'active ext-sc' : ''}
+        onclick={() =>
+          telemetry.setSoothe3ExternalSidechain(
+            !telemetry.soothe3ExternalScEnabled,
+            telemetry.soothe3ExternalScSourceTrack
+          )}
+        title="Bật/Tắt Spectral Sidechain Ducking từ một kênh khác trên Mixer (ví dụ Giọng hát Track 1 tự dìm tần số trùng trên nhạc nền)"
+      >
+        🔗 Ext Sidechain ({telemetry.soothe3ExternalScEnabled ? 'ON' : 'OFF'})
+      </button>
+
+      {#if telemetry.soothe3ExternalScEnabled}
+        <label class="preset-select">
+          SC Source:
+          <select
+            value={telemetry.soothe3ExternalScSourceTrack}
+            onchange={(e) =>
+              telemetry.setSoothe3ExternalSidechain(
+                true,
+                parseInt((e.currentTarget as HTMLSelectElement).value, 10)
+              )}
+          >
+            {#each [1, 2, 3, 4, 5, 6, 7, 8] as trk}
+              <option value={trk}>
+                Track {trk} ({telemetry.mixerTracks[trk]?.name ?? `Insert ${trk}`})
+              </option>
+            {/each}
+          </select>
+        </label>
+      {/if}
     </div>
   </header>
+
+  {#if telemetry.soothe3ExternalScEnabled}
+    <div class="ext-sc-banner">
+      <span>
+        🎯 <strong>External Spectral Sidechain Active:</strong> Detector đang nghe phổ từ
+        <strong>Track #{telemetry.soothe3ExternalScSourceTrack} ({telemetry.mixerTracks[telemetry.soothe3ExternalScSourceTrack]?.name ?? 'Source'})</strong>
+        và tự động cắt chính xác dải tần trùng lấn (Dual-Spectrum Telemetry @ 0x03000 + 0x2000).
+      </span>
+    </div>
+  {/if}
 
   <canvas bind:this={sootheCanvas} width={920} height={220} class="soothe3-canvas"></canvas>
 
@@ -251,6 +293,9 @@
   .mode-toggles button.active { background: var(--accent); color: #0b2b1e; border-color: var(--accent); font-weight: 600; }
   .mode-toggles button.active.hard { background: var(--err); color: #0b2b1e; border-color: var(--err); }
   .mode-toggles button.active.delta { background: var(--warn); color: #0b2b1e; border-color: var(--warn); }
+  .mode-toggles button.active.ext-sc { background: var(--ok); color: #0b2b1e; border-color: var(--ok); }
+  .ext-sc-banner { margin-bottom: 8px; padding: 6px 10px; border-radius: 6px; background: rgba(74, 222, 128, 0.12); border: 1px solid var(--ok); font-size: 0.73rem; color: var(--text); font-family: var(--font-mono); }
+  .ext-sc-banner strong { color: var(--ok); }
   .soothe3-canvas { width: 100%; height: 220px; background: var(--sub-surface); border-radius: var(--radius); border: 1px solid var(--border); display: block; }
   .soothe-controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--sub-surface-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius); }
   .sc-bands-strip { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 8px; }

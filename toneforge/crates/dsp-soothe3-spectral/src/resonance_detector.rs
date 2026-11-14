@@ -9,7 +9,7 @@
 //! - Per-bin `Attack` / `Release` ballistics and `Stereo link`
 
 use crate::params_143::{Soothe3GlobalParams, SootheProcessMode};
-use crate::tilt_curves::update_per_bin_tilt_tables;
+use crate::tilt_curves::{integrate_asym, update_per_bin_tilt_tables};
 
 pub const DETECTOR_FFT_SIZE: usize = 4096;
 pub const DETECTOR_NUM_BINS: usize = (DETECTOR_FFT_SIZE / 2) + 1; // 2049
@@ -144,7 +144,9 @@ impl ResonanceDetector {
             let r_count = (r_hi - r_lo + 1) as f64;
 
             let detail_k = self.detail_per_bin[k].clamp(0.1, 25.0);
-            let det_rad = if detail_k >= 4.0 {
+            // Below ~260 Hz (`k <= 22` at 48 kHz, where 1 bin = 11.7 Hz), keep single-bin detail resolution
+            // so adjacent musical bass notes (e.g. 55 Hz, 80 Hz, 110 Hz) stay cleanly resolved.
+            let det_rad = if k <= 22 || detail_k >= 4.0 {
                 0
             } else {
                 (((4.0 - detail_k) * 0.25 * (ref_rad as f32)).round() as usize)
@@ -158,7 +160,26 @@ impl ResonanceDetector {
             let r_sum = self.prefix_power[r_hi + 1] - self.prefix_power[r_lo];
 
             let p_det = (d_sum / d_count) as f32;
-            let hole_rad = det_rad.max(2).min(ref_rad.saturating_sub(2));
+            let pw_curr = self.prefix_power[k + 1] - self.prefix_power[k];
+            let pw_prev = if k > 0 {
+                self.prefix_power[k] - self.prefix_power[k - 1]
+            } else {
+                0.0
+            };
+            let pw_next = if k + 1 < DETECTOR_NUM_BINS {
+                self.prefix_power[k + 2] - self.prefix_power[k + 1]
+            } else {
+                0.0
+            };
+            let is_local_peak = pw_curr >= pw_prev && pw_curr >= pw_next;
+            let min_hole = if !is_local_peak {
+                0
+            } else if k <= 22 {
+                1
+            } else {
+                2
+            };
+            let hole_rad = det_rad.max(min_hole).min(ref_rad.saturating_sub(2));
             let h_lo = k.saturating_sub(hole_rad);
             let h_hi = (k + hole_rad).min(DETECTOR_NUM_BINS - 1);
             let h_count = (h_hi - h_lo + 1) as f64;
@@ -203,50 +224,54 @@ impl ResonanceDetector {
                     -(depth_norm * 2.4) * knee
                 }
                 SootheProcessMode::Hard => {
+                    let prom_gate = ((prominence_db - 0.5 * selectivity_thresh_db)
+                        / (0.5 * selectivity_thresh_db).max(0.5))
+                        .clamp(0.0, 1.0);
                     let abs_thresh_db = -12.0 - 48.0 * depth_norm;
                     let abs_excess = (l_det_db - abs_thresh_db).max(0.0);
-                    let combined = 0.65 * prominence_db + 0.35 * abs_excess;
+                    let combined = 0.70 * prominence_db + 0.30 * abs_excess * prom_gate;
                     let excess = (combined - 0.7 * selectivity_thresh_db).max(0.0);
-                    -(depth_norm * 3.2) * excess
+                    -(depth_norm * 3.2) * excess * prom_gate
                 }
             };
 
             self.raw_cut_db_scratch[k] = raw_cut_db;
         }
 
-        // Step 4: Spectral notch smoothing controlled by `Detail` & clamp to `Max cut`
+        // Step 4: Constant-Q zero-phase forward-backward 1-pole spectral smoothing (`apply_filtfilt`)
+        // controlled by per-bin `Detail` & frequency, then clamp to `Max cut`.
+        // Sub-bass bins (`k <= 15`, `< 175 Hz`) use minimal bin-to-bin bleed so narrow sub resonances
+        // (e.g. 80 Hz between 55 Hz and 110 Hz) are surgically isolated without brickwall ringing.
+        let mut fwd_state = self.raw_cut_db_scratch[0];
         for k in 0..DETECTOR_NUM_BINS {
             let detail_k = self.detail_per_bin[k].clamp(0.1, 25.0);
-            let smooth_rad = ((10.0 / (1.0 + 1.5 * detail_k)).round() as usize).min(12);
-            let s_lo = k.saturating_sub(smooth_rad);
-            let s_hi = (k + smooth_rad).min(DETECTOR_NUM_BINS - 1);
-            let mut sum_db = 0.0f32;
-            let mut w_sum = 0.0f32;
-            for j in s_lo..=s_hi {
-                let dist = (j as isize - k as isize).unsigned_abs() as f32;
-                let w = 1.0 / (1.0 + dist);
-                sum_db += self.raw_cut_db_scratch[j] * w;
-                w_sum += w;
-            }
-            let smoothed_db = sum_db / w_sum.max(1.0);
+            let freq_scale = ((k as f32) / 48.0).clamp(0.02, 2.5);
+            let pole = ((0.65 * freq_scale) / (1.0 + 1.35 * detail_k)).clamp(0.0, 0.82);
+            fwd_state = pole * fwd_state + (1.0 - pole) * self.raw_cut_db_scratch[k];
+            self.smooth_cut_db_scratch[k] = fwd_state;
+        }
+        let mut bwd_state = self.smooth_cut_db_scratch[DETECTOR_NUM_BINS - 1];
+        for k in (0..DETECTOR_NUM_BINS).rev() {
+            let detail_k = self.detail_per_bin[k].clamp(0.1, 25.0);
+            let freq_scale = ((k as f32) / 48.0).clamp(0.02, 2.5);
+            let pole = ((0.65 * freq_scale) / (1.0 + 1.35 * detail_k)).clamp(0.0, 0.82);
+            bwd_state = pole * bwd_state + (1.0 - pole) * self.smooth_cut_db_scratch[k];
             let clamped_cut_db = if unlimited_cut {
-                smoothed_db.max(-60.0)
+                bwd_state.max(-60.0)
             } else {
-                smoothed_db.max(global.max_cut_db)
+                bwd_state.max(global.max_cut_db)
             };
             self.smooth_cut_db_scratch[k] = clamped_cut_db.min(0.0);
         }
 
-        // Step 5: Temporal Attack / Release ballistics per bin
+        // Step 5: Temporal Attack / Release ballistics per bin (`integrate_asym`)
         for k in 0..DETECTOR_NUM_BINS {
-            let target_db = self.smooth_cut_db_scratch[k];
-            let prev_db = self.env_gr_db[ch][k];
-            let alpha = if target_db < prev_db {
-                self.attack_alpha_per_bin[k]
-            } else {
-                self.release_alpha_per_bin[k]
-            };
-            self.env_gr_db[ch][k] = alpha * prev_db + (1.0 - alpha) * target_db;
+            self.env_gr_db[ch][k] = integrate_asym(
+                self.env_gr_db[ch][k],
+                self.smooth_cut_db_scratch[k],
+                self.attack_alpha_per_bin[k],
+                self.release_alpha_per_bin[k],
+            );
         }
     }
 

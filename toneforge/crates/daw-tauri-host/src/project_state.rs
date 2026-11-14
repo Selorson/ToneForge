@@ -169,12 +169,50 @@ impl From<ControllerLinkStateDto> for ControllerLink {
     }
 }
 
+/// Encodes binary plugin state bytes as lowercase hex for lossless JSON `.tfproj` serialization.
+pub fn encode_hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0F) as usize] as char);
+    }
+    out
+}
+
+/// Decodes hex-encoded binary plugin state bytes from JSON `.tfproj`.
+pub fn decode_hex_bytes(hex_str: &str) -> Result<Vec<u8>, String> {
+    let trimmed = hex_str.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    if trimmed.len() % 2 != 0 {
+        return Err("Invalid odd-length hex string".to_string());
+    }
+    let bytes = trimmed.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let nibble = |c: u8| -> Result<u8, String> {
+        match c {
+            b'0'..=b'9' => Ok(c - b'0'),
+            b'a'..=b'f' => Ok(c - b'a' + 10),
+            b'A'..=b'F' => Ok(c - b'A' + 10),
+            _ => Err(format!("Invalid hex character: 0x{c:02X}")),
+        }
+    };
+    for chunk in bytes.chunks_exact(2) {
+        out.push((nibble(chunk[0])? << 4) | nibble(chunk[1])?);
+    }
+    Ok(out)
+}
+
 /// Serializable 601-parameter FabFilter Pro-Q 4 state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProQ4StateDto {
     pub bands: Vec<EqBandParams>,
     pub global: ProQ4GlobalParams,
     pub normalized_601: Vec<f32>,
+    #[serde(default)]
+    pub collision_reference_track: Option<u16>,
 }
 
 impl Default for ProQ4StateDto {
@@ -193,6 +231,7 @@ impl ProQ4StateDto {
             bands: ps.bands.to_vec(),
             global: ps.global,
             normalized_601: norm,
+            collision_reference_track: None,
         }
     }
 
@@ -218,6 +257,8 @@ pub struct Soothe3StateDto {
     pub global: Soothe3GlobalParams,
     pub sc_bands: Vec<SidechainEqBandParams>,
     pub normalized_143: Vec<f32>,
+    #[serde(default)]
+    pub external_sidechain_source_track: Option<u16>,
 }
 
 impl Default for Soothe3StateDto {
@@ -232,6 +273,7 @@ impl Soothe3StateDto {
             global: ps.global,
             sc_bands: ps.sc_bands.to_vec(),
             normalized_143: ps.normalized_mirror.to_vec(),
+            external_sidechain_source_track: None,
         }
     }
 
@@ -249,6 +291,10 @@ impl Soothe3StateDto {
         ps.sync_mirror_from_structured();
         ps
     }
+}
+
+fn default_lef_upper_hz() -> f32 {
+    150.0
 }
 
 /// Serializable configuration for the iZotope Ozone 12 Mastering Chain.
@@ -279,6 +325,34 @@ pub struct Ozone12MasterConfigDto {
     pub impact_band_amounts: [f32; 4],
     pub clarity_amount_pct: f32,
     pub clarity_tilt_db_oct: f32,
+    #[serde(default)]
+    pub unlimiter_enabled: bool,
+    #[serde(default)]
+    pub unlimiter_amount_pct: f32,
+    #[serde(default = "default_unlimiter_threshold_db")]
+    pub unlimiter_threshold_db: f32,
+    #[serde(default)]
+    pub low_end_focus_enabled: bool,
+    #[serde(default)]
+    pub low_end_focus_punchy: bool,
+    #[serde(default = "default_lef_upper_hz")]
+    pub low_end_focus_upper_hz: f32,
+    #[serde(default)]
+    pub low_end_focus_contrast_pct: f32,
+    #[serde(default)]
+    pub low_end_focus_gain_db: f32,
+    #[serde(default)]
+    pub low_end_focus_solo: bool,
+    #[serde(default)]
+    pub codec_preview_enabled: bool,
+    #[serde(default)]
+    pub codec_preview_codec: u8, // 0=PcmBypass, 1=Mp3_128, 2=Mp3_320, 3=Aac_128, 4=Aac_256, 5=Opus_128
+    #[serde(default)]
+    pub codec_preview_artifact_solo: bool,
+}
+
+fn default_unlimiter_threshold_db() -> f32 {
+    -6.0
 }
 
 impl Default for Ozone12MasterConfigDto {
@@ -309,6 +383,18 @@ impl Default for Ozone12MasterConfigDto {
             impact_band_amounts: [10.0, 5.0, 5.0, 10.0],
             clarity_amount_pct: 30.0,
             clarity_tilt_db_oct: 0.5,
+            unlimiter_enabled: false,
+            unlimiter_amount_pct: 0.0,
+            unlimiter_threshold_db: -6.0,
+            low_end_focus_enabled: false,
+            low_end_focus_punchy: true,
+            low_end_focus_upper_hz: 150.0,
+            low_end_focus_contrast_pct: 0.0,
+            low_end_focus_gain_db: 0.0,
+            low_end_focus_solo: false,
+            codec_preview_enabled: false,
+            codec_preview_codec: 0,
+            codec_preview_artifact_solo: false,
         }
     }
 }
@@ -512,6 +598,46 @@ impl PatcherGraphStateDto {
     }
 }
 
+/// Serializable configuration for `AutoPitchCorrectorNode` (`Pitcher` real-time vocal pitch & formant corrector).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PitcherStateDto {
+    pub root_key: u8,
+    pub scale_index: u8,
+    pub retune_speed_ms: f32,
+    pub humanize: f32,
+    pub formant_preserve: bool,
+    pub formant_shift_semitones: f32,
+    pub mix: f32,
+    pub bypass: bool,
+}
+
+impl Default for PitcherStateDto {
+    fn default() -> Self {
+        Self {
+            root_key: 0,
+            scale_index: 0,
+            retune_speed_ms: 15.0,
+            humanize: 0.25,
+            formant_preserve: true,
+            formant_shift_semitones: 0.0,
+            mix: 1.0,
+            bypass: false,
+        }
+    }
+}
+
+/// Serializable state for an external hosted Steinberg VST3 3.7 or CLAP 1.2 plugin binary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExternalPluginStateDto {
+    pub binary_path: String,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    #[serde(default)]
+    pub state_hex: String,
+    #[serde(default)]
+    pub param_overrides: Vec<(u32, f64)>,
+}
+
 /// Union of all supported plugin configurations inside a Mixer Track FX Slot (`0..10`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "plugin_type", content = "config")]
@@ -521,6 +647,9 @@ pub enum PluginConfigDto {
     Ozone12Master(Ozone12MasterConfigDto),
     RealTimeBsrnnStem(BsrnnStemStateDto),
     PatcherModular(PatcherGraphStateDto),
+    AutoPitchCorrector(PitcherStateDto),
+    ExternalVst3(ExternalPluginStateDto),
+    ExternalClap(ExternalPluginStateDto),
     NativeSparseCompressor {
         threshold_linear: f32,
         ratio: f32,
@@ -534,6 +663,9 @@ pub enum PluginConfigDto {
     },
     NativeGrossBeat,
     NativeLuxeVerbFdn,
+    /// Unoccupied fixed insert position (engine: zero-latency pass-through `EmptySlotNode`).
+    /// Removing a plug-in leaves this in place so later slots never shift.
+    Empty,
 }
 
 /// Serializable state of one of the 10 FX Insert Slots on a `MixerTrack`.
@@ -562,8 +694,23 @@ pub struct MixerTrackStateDto {
     pub polarity_inverted: bool,
     pub has_hw_input: bool,
     pub hw_input_latency_samples: usize,
+    #[serde(default)]
+    pub input_source_bus: Option<u8>,
+    #[serde(default)]
+    pub record_armed: bool,
     pub sends: Vec<MixerSendRouteDto>,
     pub slots: Vec<PluginSlotStateDto>,
+    /// Stereo balance (`-1.0..=1.0`, unity at centre).
+    #[serde(default)]
+    pub pan: f32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub soloed: bool,
+    /// External VST3/CLAP instrument loaded as this insert's channel generator
+    /// (`ChannelGenerator` id `200 + index`): `PluginConfigDto::ExternalVst3` / `ExternalClap`.
+    #[serde(default)]
+    pub channel_instrument: Option<PluginConfigDto>,
 }
 
 impl MixerTrackStateDto {
@@ -588,8 +735,14 @@ impl MixerTrackStateDto {
             polarity_inverted: false,
             has_hw_input: false,
             hw_input_latency_samples: 0,
+            input_source_bus: None,
+            record_armed: false,
             sends,
             slots: Vec::new(),
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            channel_instrument: None,
         }
     }
 }
@@ -675,6 +828,10 @@ impl PianoRollPatternDto {
     }
 }
 
+fn default_clip_stretch_ratio() -> f32 {
+    1.0
+}
+
 /// Serializable Playlist Arrangement Clip DTO.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlaylistClipDto {
@@ -687,6 +844,40 @@ pub struct PlaylistClipDto {
     pub clip_offset_ticks: i64,
     pub gain: f32,
     pub muted: bool,
+    #[serde(default)]
+    pub source_offset_samples: usize,
+    #[serde(default)]
+    pub fade_in_samples: usize,
+    #[serde(default)]
+    pub fade_out_samples: usize,
+    #[serde(default = "default_clip_stretch_ratio")]
+    pub stretch_ratio: f32,
+    #[serde(default)]
+    pub pitch_semitones: f32,
+    #[serde(default)]
+    pub take_lane_id: u16,
+}
+
+impl Default for PlaylistClipDto {
+    fn default() -> Self {
+        Self {
+            clip_id: 0,
+            track_row: 0,
+            kind: "Pattern".to_string(),
+            source_id: 0,
+            start_tick: 0,
+            duration_ticks: 384,
+            clip_offset_ticks: 0,
+            gain: 1.0,
+            muted: false,
+            source_offset_samples: 0,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            stretch_ratio: 1.0,
+            pitch_semitones: 0.0,
+            take_lane_id: 0,
+        }
+    }
 }
 
 impl PlaylistClipDto {
@@ -706,6 +897,16 @@ impl PlaylistClipDto {
             clip_offset_ticks: self.clip_offset_ticks,
             gain: self.gain,
             muted: self.muted,
+            source_offset_samples: self.source_offset_samples,
+            fade_in_samples: self.fade_in_samples,
+            fade_out_samples: self.fade_out_samples,
+            stretch_ratio: if self.stretch_ratio > 0.0 {
+                self.stretch_ratio.clamp(0.25, 4.0)
+            } else {
+                1.0
+            },
+            pitch_semitones: self.pitch_semitones.clamp(-24.0, 24.0),
+            take_lane_id: self.take_lane_id,
         }
     }
 
@@ -725,6 +926,12 @@ impl PlaylistClipDto {
             clip_offset_ticks: clip.clip_offset_ticks,
             gain: clip.gain,
             muted: clip.muted,
+            source_offset_samples: clip.source_offset_samples,
+            fade_in_samples: clip.fade_in_samples,
+            fade_out_samples: clip.fade_out_samples,
+            stretch_ratio: clip.stretch_ratio,
+            pitch_semitones: clip.pitch_semitones,
+            take_lane_id: clip.take_lane_id,
         }
     }
 }
@@ -758,6 +965,25 @@ pub struct ToneForgeProjectState {
     pub piano_roll_patterns: Vec<PianoRollPatternDto>,
     #[serde(default)]
     pub playlist_clips: Vec<PlaylistClipDto>,
+    #[serde(default)]
+    pub vocal_note_blobs: Vec<dsp_pitch_time::VocalNoteBlob>,
+    /// Audio files the project plays (loaded songs, UVR5 stems, committed vocals, recorded takes).
+    #[serde(default)]
+    pub audio_assets: Vec<crate::audio_assets::AudioAssetDto>,
+    /// Interactive Patcher canvases applied to insert slots (re-applied on undo / render / load).
+    #[serde(default)]
+    pub patcher_canvases: Vec<crate::ipc_commands::PatcherCanvasUpdateDto>,
+    /// FL Studio 26 native FX presets loaded into insert slots (re-applied on render / load).
+    #[serde(default)]
+    pub fl26_fx_presets: Vec<Fl26SlotPresetDto>,
+}
+
+/// An FL Studio 26 `.fst` preset loaded into `track_idx` / `slot_idx`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Fl26SlotPresetDto {
+    pub track_idx: u16,
+    pub slot_idx: u8,
+    pub preset_query: String,
 }
 
 impl Default for ToneForgeProjectState {
@@ -853,6 +1079,7 @@ impl ToneForgeProjectState {
                     clip_offset_ticks: 0,
                     gain: 1.0,
                     muted: false,
+                    ..Default::default()
                 },
                 PlaylistClipDto {
                     clip_id: 2,
@@ -864,8 +1091,13 @@ impl ToneForgeProjectState {
                     clip_offset_ticks: 0,
                     gain: 1.0,
                     muted: false,
+                    ..Default::default()
                 },
             ],
+            vocal_note_blobs: Vec::new(),
+            audio_assets: Vec::new(),
+            patcher_canvases: Vec::new(),
+            fl26_fx_presets: Vec::new(),
         }
     }
 
@@ -938,6 +1170,81 @@ impl ToneForgeProjectState {
         });
 
         proj
+    }
+
+    /// Creates a 100% blank initial DAW session (`Untitled Project`):
+    /// - Zero leftover Piano Roll patterns, zero Playlist clips, zero Automation clips, zero controller links,
+    ///   zero audio assets, and transport stopped (`is_playing = false`).
+    /// - Neutral default Mixer chains so workspace panels & GPU workers attach cleanly with flat `0.0 dB` EQ
+    ///   and `[0.0; 4] dB` BSRNN unity bypass (`0` GPU hops / `0` latency when idle).
+    pub fn new_blank_project(sample_rate: f64, bpm: f64) -> Self {
+        let mut mixer_tracks = Vec::with_capacity(MAX_MIXER_TRACKS);
+        for idx in 0..MAX_MIXER_TRACKS {
+            mixer_tracks.push(MixerTrackStateDto::new_default(idx));
+        }
+
+        let proq4_state = ProQ4StateDto::from_parameter_set(&ProQ4ParameterSet::new());
+        let soothe3_state = Soothe3StateDto::from_parameter_set(&Soothe3ParameterSet::new());
+        mixer_tracks[1].slots = vec![
+            PluginSlotStateDto {
+                slot_index: 0,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: PluginConfigDto::ProQ4(proq4_state),
+            },
+            PluginSlotStateDto {
+                slot_index: 1,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: PluginConfigDto::Soothe3(soothe3_state),
+            },
+            PluginSlotStateDto {
+                slot_index: 2,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: PluginConfigDto::PatcherModular(
+                    PatcherGraphStateDto::new_parallel_mastering_patcher(),
+                ),
+            },
+        ];
+
+        mixer_tracks[MASTER_TRACK_INDEX].slots = vec![
+            PluginSlotStateDto {
+                slot_index: 0,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: PluginConfigDto::RealTimeBsrnnStem(BsrnnStemStateDto::default()),
+            },
+            PluginSlotStateDto {
+                slot_index: 1,
+                enabled: true,
+                wet_mix: 1.0,
+                plugin: PluginConfigDto::Ozone12Master(Ozone12MasterConfigDto::default()),
+            },
+        ];
+
+        Self {
+            project_name: "Untitled Project".to_string(),
+            schema_version: TONEFORGE_PROJECT_SCHEMA_VERSION,
+            sample_rate: sample_rate.max(8000.0),
+            max_block_size: 256,
+            bpm: bpm.clamp(20.0, 999.0),
+            ppq_resolution: daw_core_graph::DEFAULT_PPQ,
+            is_playing: false,
+            sample_pos: 0,
+            ppq_tick: 0,
+            process_all_502_tracks: false,
+            mixer_tracks,
+            patcher_graphs: Vec::new(),
+            automation_clips: Vec::new(),
+            controller_links: Vec::new(),
+            piano_roll_patterns: Vec::new(),
+            playlist_clips: Vec::new(),
+            vocal_note_blobs: Vec::new(),
+            audio_assets: Vec::new(),
+            patcher_canvases: Vec::new(),
+            fl26_fx_presets: Vec::new(),
+        }
     }
 
     /// Validates the entire project state:
