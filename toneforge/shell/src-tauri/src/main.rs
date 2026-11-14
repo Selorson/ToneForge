@@ -3306,10 +3306,34 @@ fn main() {
 
     app.run(move |_app_handle, event| {
         if let RunEvent::Exit = event {
+            // Tắt app là tắt hẳn (đợt tối ưu tài nguyên 2026-11-14): một lần đo, cửa sổ đã đóng mà tiến trình
+            // kẹt ở bước thoát, giữ 2,4 GB RAM. Kẹt trong lúc dọn → luồng canh kết thúc sau 5 s; dọn xong →
+            // kết thúc ngay, không đợi Windows gỡ DLL CUDA/ONNX (bước có thể kẹt và luồng canh không cứu được).
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                terminate_self();
+            });
             if let Some(mut stream) = audio_driver_exit.lock().take() {
                 stream.shutdown();
             }
             clean_webview_cache();
+            terminate_self();
         }
     });
+}
+
+/// Kết thúc tiến trình ngay (TerminateProcess), bỏ qua bước gỡ DLL lúc thoát.
+fn terminate_self() {
+    #[cfg(windows)]
+    {
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn TerminateProcess(process: *mut std::ffi::c_void, exit_code: u32) -> i32;
+        }
+        // SAFETY: GetCurrentProcess trả pseudo-handle luôn hợp lệ cho chính tiến trình này.
+        unsafe {
+            TerminateProcess(GetCurrentProcess(), 0);
+        }
+    }
+    std::process::exit(0);
 }

@@ -4,13 +4,16 @@
 //! y nguyên — 4 bộ tách sống trong biến toàn cục suốt đời app. Nay mỗi bộ nằm trong một `IdleSlot`:
 //! dùng xong thì `touch()`, rảnh `IDLE_RELEASE` thì luồng canh đưa ô về "chưa nạp" (giải phóng phiên ONNX
 //! và vùng nhớ CUDA), lần dùng sau tự nạp lại.
+//!
+//! Vì sao chỉ 15 s: đo cùng file 30 s — tách lần đầu 21,5 s, tách ngay khi còn nạp sẵn 20,8 s, tách lại sau
+//! khi đã nhả 21,3 s. Nạp lại chỉ tốn ~0,5 s, nên giữ VRAM lâu hơn không đáng.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-pub const IDLE_RELEASE: Duration = Duration::from_secs(600);
-const CHECK_EVERY: Duration = Duration::from_secs(30);
+pub const IDLE_RELEASE: Duration = Duration::from_secs(15);
+const CHECK_EVERY: Duration = Duration::from_secs(5);
 
 /// Thứ gì giữ phiên ONNX thì cài cái này để luồng canh buông được. `false` = đang bận, để lần kiểm sau.
 pub trait Release: Sync {
