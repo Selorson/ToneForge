@@ -1024,6 +1024,21 @@ impl GpuStemEnsembleEngine {
 
 static GLOBAL_GPU_ENSEMBLE_ENGINE: OnceLock<Mutex<Option<GpuStemEnsembleEngine>>> = OnceLock::new();
 
+/// Cho luồng canh nhả bộ ensemble khi rảnh (`idle_release`); lần dùng sau `run_global_gpu_stem_ensemble` tự dựng lại.
+struct EnsembleRelease;
+impl crate::idle_release::Release for EnsembleRelease {
+    fn release(&self) -> bool {
+        match GLOBAL_GPU_ENSEMBLE_ENGINE.get().map(|m| m.try_lock()) {
+            None => true,
+            Some(Ok(mut guard)) => {
+                *guard = None;
+                true
+            }
+            Some(Err(_)) => false,
+        }
+    }
+}
+
 /// Runs the cached global RTX 4080 `GpuStemEnsembleEngine` (lazily initializing the 3 ONNX
 /// sessions once on first offline separation and keeping them warm in VRAM for instant reuse).
 /// When ONNX Runtime DLLs are unavailable on a headless CPU host, cleanly falls back to the
@@ -1033,7 +1048,10 @@ pub fn run_global_gpu_stem_ensemble(
     sample_rate_hz: u32,
     cfg: &GpuStemEnsembleConfig,
 ) -> Result<GpuStemEnsembleOutput, String> {
-    let mutex = GLOBAL_GPU_ENSEMBLE_ENGINE.get_or_init(|| Mutex::new(None));
+    let mutex = GLOBAL_GPU_ENSEMBLE_ENGINE.get_or_init(|| {
+        crate::idle_release::register(&EnsembleRelease);
+        Mutex::new(None)
+    });
     let mut guard = mutex
         .lock()
         .map_err(|_| "Global GpuStemEnsembleEngine mutex poisoned".to_string())?;
@@ -1076,8 +1094,11 @@ pub fn run_global_gpu_stem_ensemble(
             }
         }
     }
-    guard
+    let out = guard
         .as_mut()
         .expect("GpuStemEnsembleEngine initialized")
-        .separate_ensemble(mix_frames, sample_rate_hz, cfg)
+        .separate_ensemble(mix_frames, sample_rate_hz, cfg);
+    drop(guard);
+    crate::idle_release::touch();
+    out
 }

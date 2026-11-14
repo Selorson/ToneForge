@@ -14,7 +14,9 @@ use daw_core_graph::StereoFrame;
 use realfft::RealFftPlanner;
 use rustfft::num_complex::Complex32;
 use std::f32::consts::PI;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use crate::idle_release::IdleSlot;
 
 /// Exact Atrous Spatial Pyramid Pooling dilation rates used in UVR5 VR Arch (`nets_new.py`).
 pub const VR_ASPP_DILATIONS: [usize; 5] = [1, 2, 4, 8, 16];
@@ -151,7 +153,7 @@ impl AsppModule {
     }
 }
 
-static GLOBAL_VR_INST_HQ3: OnceLock<Mutex<Option<Uvr5MdxOnnxSeparator>>> = OnceLock::new();
+static GLOBAL_VR_INST_HQ3: IdleSlot<Uvr5MdxOnnxSeparator> = IdleSlot::new();
 
 /// Applies UVR5 VR `aggressiveness` (`[-1.0, +1.0]`) power-law Wiener mask sharpening to a real
 /// neural `(vocals, instrumental)` pair while preserving exact mixture phase and `vocals + inst == mix`.
@@ -360,23 +362,18 @@ impl CascadedASPPNet {
         }
 
         // 1. Primary path: Real `UVR-MDX-NET-Inst_HQ_3.onnx` ONNX inference
-        let mutex = GLOBAL_VR_INST_HQ3
-            .get_or_init(|| Mutex::new(Uvr5MdxOnnxSeparator::from_inst_hq_3().ok()));
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(sep) = guard.as_mut() {
-                if let Ok((voc_raw, inst_raw)) =
-                    sep.separate_vocal_instrumental(mix, 48_000, false)
-                {
-                    return sharpen_vocal_mask_aggressiveness(
-                        mix,
-                        &voc_raw,
-                        &inst_raw,
-                        self.n_fft,
-                        self.hop_size,
-                        self.aggressiveness,
-                    );
-                }
-            }
+        if let Some(Ok((voc_raw, inst_raw))) = GLOBAL_VR_INST_HQ3.with(
+            || Uvr5MdxOnnxSeparator::from_inst_hq_3().ok(),
+            |sep| sep.separate_vocal_instrumental(mix, 48_000, false),
+        ) {
+            return sharpen_vocal_mask_aggressiveness(
+                mix,
+                &voc_raw,
+                &inst_raw,
+                self.n_fft,
+                self.hop_size,
+                self.aggressiveness,
+            );
         }
 
         // 2. Pure-Rust real-weight fallback: 3-model GRU-512 `.npz` separator

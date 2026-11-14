@@ -584,7 +584,9 @@ impl GpuRuntimeManager {
             .with_device_id(0)
             .with_tf32(true)
             .with_conv_algorithm_search(ep::cuda::ConvAlgorithmSearch::Heuristic)
-            .with_arena_extend_strategy(ArenaExtendStrategy::NextPowerOfTwo)
+            // Nới vùng nhớ vừa đúng yêu cầu: NextPowerOfTwo nhân đôi mỗi lần thiếu, một lần tách 30 s
+            // đã để lại 11,1 GB VRAM (đo 2026-11-14).
+            .with_arena_extend_strategy(ArenaExtendStrategy::SameAsRequested)
             .build();
         if error_on_failure {
             dispatch.error_on_failure()

@@ -11,7 +11,9 @@
 use crate::mdx_onnx_gpu::Uvr5MdxOnnxSeparator;
 use crate::npz_gru_legacy::{GenreCnnClassifier, GruThreeStemSeparator, OzoneNpzGruEngine};
 use daw_core_graph::StereoFrame;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use crate::idle_release::IdleSlot;
 
 #[inline]
 fn gelu(x: f32) -> f32 {
@@ -191,7 +193,7 @@ impl TfcTdfBlock {
     }
 }
 
-static GLOBAL_MDX23C_KIM_VOCAL: OnceLock<Mutex<Option<Uvr5MdxOnnxSeparator>>> = OnceLock::new();
+static GLOBAL_MDX23C_KIM_VOCAL: IdleSlot<Uvr5MdxOnnxSeparator> = IdleSlot::new();
 
 /// UVR5 MDX-Net / MDX23C Stem Separator (`Mdx23cSeparator`) wired to real `Kim_Vocal_2.onnx`
 /// GPU/CPU ONNX Runtime inference (with `GruThreeStemSeparator` `.npz` fallback when ORT is unavailable).
@@ -241,16 +243,11 @@ impl Mdx23cSeparator {
         }
 
         // 1. Primary path: Real `Kim_Vocal_2.onnx` TFC-TDF v3 ONNX inference
-        let mutex = GLOBAL_MDX23C_KIM_VOCAL
-            .get_or_init(|| Mutex::new(Uvr5MdxOnnxSeparator::from_kim_vocal_2().ok()));
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(sep) = guard.as_mut() {
-                if let Ok((primary, complement)) =
-                    sep.separate_vocal_instrumental(audio_in, 48_000, self.enable_denoise_2pass)
-                {
-                    return (primary, complement);
-                }
-            }
+        if let Some(Ok((primary, complement))) = GLOBAL_MDX23C_KIM_VOCAL.with(
+            || Uvr5MdxOnnxSeparator::from_kim_vocal_2().ok(),
+            |sep| sep.separate_vocal_instrumental(audio_in, 48_000, self.enable_denoise_2pass),
+        ) {
+            return (primary, complement);
         }
 
         // 2. Pure-Rust real-weight fallback: `vocals-small_sanitized.npz` GRU-512 stem separator

@@ -11,7 +11,9 @@
 use crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator;
 use crate::npz_gru_legacy::{GenreCnnClassifier, GruThreeStemSeparator};
 use daw_core_graph::StereoFrame;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use crate::idle_release::IdleSlot;
 
 /// 4-Stem output order of `HTDemucs4` (`htdemucs_ft.yaml`: `['drums', 'bass', 'other', 'vocals']`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,7 +242,7 @@ impl CrossTransformerEncoder {
     }
 }
 
-static GLOBAL_HTDEMUCS_BSRNN: OnceLock<Mutex<Option<OzoneBsrnnOnnxSeparator>>> = OnceLock::new();
+static GLOBAL_HTDEMUCS_BSRNN: IdleSlot<OzoneBsrnnOnnxSeparator> = IdleSlot::new();
 
 /// Hybrid Transformer Demucs v4 (`HTDemucs4`) 4-Stem Separator backed by real neural weights
 /// (`OzoneBsrnnOnnxSeparator` on GPU/ORT with `GruThreeStemSeparator` `.npz` fallback).
@@ -288,16 +290,13 @@ impl HTDemucs4 {
             return [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         }
 
-        let mut bsrnn_out: Option<[Vec<StereoFrame>; 4]> = None;
-        let mutex = GLOBAL_HTDEMUCS_BSRNN
-            .get_or_init(|| Mutex::new(OzoneBsrnnOnnxSeparator::from_default_assets().ok()));
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(sep) = guard.as_mut() {
-                if let Ok([vocals, drums, bass, other]) = sep.separate_4stems_offline(mix) {
-                    bsrnn_out = Some([drums, bass, other, vocals]);
-                }
-            }
-        }
+        let bsrnn_out: Option<[Vec<StereoFrame>; 4]> = GLOBAL_HTDEMUCS_BSRNN
+            .with(
+                || OzoneBsrnnOnnxSeparator::from_default_assets().ok(),
+                |sep| sep.separate_4stems_offline(mix),
+            )
+            .and_then(Result::ok)
+            .map(|[vocals, drums, bass, other]| [drums, bass, other, vocals]);
 
         let gru_out = GruThreeStemSeparator::from_global_cache().map(|mut gru| {
             let [vocals, drums, bass, other] = gru.separate_4stems(mix, 48_000);

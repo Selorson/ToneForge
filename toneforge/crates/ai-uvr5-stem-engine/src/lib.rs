@@ -25,6 +25,7 @@
 pub mod bsrnn_onnx_gpu;
 pub mod bsrnn_streaming;
 pub mod delimit_onnx;
+pub mod idle_release;
 pub mod mdx_onnx_gpu;
 pub mod npz_gru_legacy;
 pub mod onnx_gpu_runtime;
