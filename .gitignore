@@ -22,6 +22,12 @@ Thumbs.db
 *.tmp
 *.bak
 *.log
+*.key
+signing.key
+*.sig
+*.msi
+dist/
+release-notes-current.md
 **/__pycache__/
 *.pyc
 

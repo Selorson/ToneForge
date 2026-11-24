@@ -20,7 +20,8 @@ export type WorkspaceTabKey =
   | 'ozone12'
   | 'uvr5'
   | 'render'
-  | 'handbook';
+  | 'handbook'
+  | 'update';
 
 export type Guide = {
   title: string;

@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default ToneForge Studio desktop window and IPC permissions.",
+  "description": "Default ToneForge Studio desktop window, IPC and Ed25519 updater permissions.",
   "windows": [
     "main"
   ],
@@ -14,6 +14,9 @@
     "core:window:allow-set-decorations",
     "core:window:allow-set-always-on-top",
     "core:window:allow-center",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "opener:default",
+    "updater:default",
+    "process:default"
   ]
 }

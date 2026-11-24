@@ -3174,6 +3174,9 @@ fn main() {
     rt_gc.set_plugin_disposer(Some(plugin_gui_worker.plugin_disposer()));
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SharedDawController {
             app_state,
             telemetry_streamer: Mutex::new(telemetry_streamer),

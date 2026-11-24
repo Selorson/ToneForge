@@ -10,7 +10,6 @@
 **/node_modules/
 **/dist/
 **/.svelte-kit/
-/ui-svelte5-wgpu/package-lock.json
 
 # Large downloaded UVR5 model binaries (> 50 MB)
 /assets/uvr5/models/**/*.onnx

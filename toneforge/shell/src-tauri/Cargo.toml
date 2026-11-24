@@ -19,6 +19,9 @@ dsp-proq4-eq.workspace = true
 dsp-soothe3-spectral.workspace = true
 daw-tauri-host = { path = "../../crates/daw-tauri-host" }
 tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true

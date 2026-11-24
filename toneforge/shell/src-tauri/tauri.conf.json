@@ -6,7 +6,8 @@
   "build": {
     "frontendDist": "../../ui-svelte5-wgpu/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm --prefix ../../ui-svelte5-wgpu run dev"
+    "beforeDevCommand": "npm --prefix ../ui-svelte5-wgpu run dev",
+    "beforeBuildCommand": "npm --prefix ../ui-svelte5-wgpu run build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -27,10 +28,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdERDE3RDFDOTczRUFCOUEKUldTYXF6NlhISDNSZmZGYUVFcFoxbHNWbitzOW1CVTMyQWNTeHdrMFhxVG93eXBwZDNCOHdBaVAK",
+      "endpoints": [
+        "https://github.com/Selorson/ToneForge-Release/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
-      "msi",
       "nsis"
     ],
     "icon": [

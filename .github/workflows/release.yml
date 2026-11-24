@@ -1,0 +1,158 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RELEASE_REPO: Selorson/ToneForge-Release
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: toneforge/ui-svelte5-wgpu/package-lock.json
+
+      # PHẢI trùng phiên bản ghim trong warm-cache.yml
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "toneforge"
+          shared-key: "toneforge-release"
+          save-if: false
+
+      - name: Install JS dependencies
+        working-directory: toneforge/ui-svelte5-wgpu
+        run: npm ci
+
+      - name: Sync version from git tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $raw = $tag.TrimStart('v')
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+          foreach ($p in @("toneforge/shell/src-tauri/tauri.conf.json", "toneforge/ui-svelte5-wgpu/package.json")) {
+            $obj = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json
+            $obj.version = $raw
+            [System.IO.File]::WriteAllText((Resolve-Path $p), ($obj | ConvertTo-Json -Depth 10) + "`n", $utf8NoBom)
+          }
+
+          foreach ($cp in @("toneforge/Cargo.toml", "toneforge/shell/src-tauri/Cargo.toml")) {
+            $cargoPath = Resolve-Path $cp
+            $cargo = Get-Content $cargoPath -Raw -Encoding UTF8
+            $cargo = $cargo -replace '(?m)^version = "[\d.]+"', "version = `"$raw`""
+            [System.IO.File]::WriteAllText($cargoPath, $cargo, $utf8NoBom)
+          }
+
+      - name: Write signing key to file
+        shell: bash
+        run: printf '%s' '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}' > toneforge/shell/src-tauri/signing.key
+
+      - name: Build signed NSIS installer
+        working-directory: toneforge/shell
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          rm -rf ../target/release/build/toneforge-studio-*
+          export TAURI_SIGNING_PRIVATE_KEY=$(cat src-tauri/signing.key)
+          node ../ui-svelte5-wgpu/node_modules/@tauri-apps/cli/tauri.js build
+          rm -f src-tauri/signing.key
+
+      # GitHub đổi khoảng trắng trong "ToneForge Studio" thành dấu chấm -> chuẩn hoá tên tệp không dấu cách để khớp 100% URL trong latest.json
+      - name: Generate latest.json
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $raw = $tag.TrimStart('v')
+          $repo = "${{ env.RELEASE_REPO }}"
+          $nsisDir = if (Test-Path "toneforge/target/release/bundle/nsis") {
+            "toneforge/target/release/bundle/nsis"
+          } else {
+            "toneforge/shell/src-tauri/target/release/bundle/nsis"
+          }
+          $srcExe = Get-ChildItem -Path $nsisDir -Filter "*setup.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $srcExe) {
+            throw "Không tìm thấy bộ cài NSIS trong $nsisDir"
+          }
+          $srcSig = "$($srcExe.FullName).sig"
+          if (-not (Test-Path $srcSig)) {
+            throw "Không tìm thấy chữ ký $srcSig"
+          }
+
+          $exeName = "ToneForge_${raw}_x64-setup.exe"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $srcExe.FullName "dist/$exeName"
+          Copy-Item $srcSig "dist/$exeName.sig"
+
+          $notes = "Bản cập nhật tự động từ ToneForge Studio ($tag)."
+          if (Test-Path "RELEASE_NOTES.md") {
+            $parts = (Get-Content "RELEASE_NOTES.md" -Raw -Encoding UTF8) -split '\r?\n---\r?\n'
+            $notes = (($parts | Select-Object -First 5) -join "`n`n---`n`n").Trim()
+            if ($notes.Length -gt 60000) { $notes = $notes.Substring(0, 60000) }
+            $utf8 = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText((Join-Path (Get-Location) "release-notes-current.md"), $notes, $utf8)
+          }
+
+          $sig = (Get-Content $srcSig -Raw -Encoding UTF8).Trim()
+          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $manifest = [ordered]@{
+            version   = $tag
+            notes     = $notes
+            pub_date  = $pubDate
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $sig
+                url       = "https://github.com/$repo/releases/download/$tag/$exeName"
+              }
+            }
+          }
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) "dist/latest.json"), ($manifest | ConvertTo-Json -Depth 5) + "`n", $utf8NoBom)
+
+      - name: Publish Release to Public Repo
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $repo = "${{ env.RELEASE_REPO }}"
+          $notesArgs = if (Test-Path "release-notes-current.md") {
+            @("--notes-file", "release-notes-current.md")
+          } else {
+            @("--notes", "Bản cập nhật tự động từ ToneForge Studio ($tag).")
+          }
+
+          $oldEap = $ErrorActionPreference
+          $ErrorActionPreference = "Continue"
+          gh release view $tag --repo $repo *>$null
+          $exists = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = $oldEap
+
+          if ($exists) {
+            gh release upload $tag --repo $repo --clobber dist/*
+          } else {
+            gh release create $tag --repo $repo --title "ToneForge Studio $tag" @notesArgs dist/*
+          }

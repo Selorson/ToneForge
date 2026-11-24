@@ -3,6 +3,7 @@
   import type { WorkspaceTabKey } from './lib/state/guides';
   import Guide from './lib/components/Guide.svelte';
   import HandbookView from './lib/components/HandbookView.svelte';
+  import UpdaterView from './lib/components/UpdaterView.svelte';
   import MixerRack502 from './lib/components/MixerRack502.svelte';
   import PatcherNodeCanvas from './lib/components/PatcherNodeCanvas.svelte';
   import ProQ4InteractiveAnalyzer from './lib/components/ProQ4InteractiveAnalyzer.svelte';
@@ -411,6 +412,7 @@
         ['uvr5', 'UVR5 Stem Studio'],
         ['render', 'Offline Render & Bounce'],
         ['handbook', '📖 Cẩm nang (Hướng dẫn người mới)'],
+        ['update', '⬆ Cập nhật'],
       ] as [tabKey, label]}
         <button
           class="{activeTab === tabKey ? 'active' : ''} {tabKey === 'handbook' ? 'handbook-tab' : ''}"
@@ -432,6 +434,10 @@
 
     {#if activeTab === 'handbook'}
       <HandbookView initialSectionId={handbookSectionId} />
+    {/if}
+
+    {#if activeTab === 'update'}
+      <UpdaterView isRecording={telemetry.isDiskRecording} isDesktopTauri={telemetry.isDesktopTauri} />
     {/if}
 
     {#if activeTab === 'all' || activeTab === 'playlist'}
