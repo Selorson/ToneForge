@@ -196,21 +196,21 @@ impl ProQ4CollisionBus {
         }
     }
 
-    /// Helper converting a bin index `0..1024` back to its center frequency in Hz (`20 Hz .. 20 kHz`).
+    /// Helper converting a bin index `0..1024` back to its center frequency in Hz (`10 Hz .. 30 kHz`).
     #[inline]
     pub fn bin_to_freq_hz(bin_index: usize) -> f32 {
-        let min_oct = 20.0f32.log2();
-        let max_oct = 20_000.0f32.log2();
+        let min_oct = 10.0f32.log2();
+        let max_oct = 30_000.0f32.log2();
         let step = (max_oct - min_oct) / ((SPECTRUM_FRAME_BINS - 1) as f32);
         (min_oct + (bin_index.min(SPECTRUM_FRAME_BINS - 1) as f32) * step).exp2()
     }
 
-    /// Helper converting a frequency in Hz (`20 Hz .. 20 kHz`) to the nearest `0..1024` spectrum bin.
+    /// Helper converting a frequency in Hz (`10 Hz .. 30 kHz`) to the nearest `0..1024` spectrum bin.
     #[inline]
     pub fn freq_hz_to_bin(freq_hz: f32) -> usize {
-        let min_oct = 20.0f32.log2();
-        let max_oct = 20_000.0f32.log2();
-        let norm = ((freq_hz.clamp(20.0, 20_000.0).log2() - min_oct) / (max_oct - min_oct))
+        let min_oct = 10.0f32.log2();
+        let max_oct = 30_000.0f32.log2();
+        let norm = ((freq_hz.clamp(10.0, 30_000.0).log2() - min_oct) / (max_oct - min_oct))
             .clamp(0.0, 1.0);
         (norm * ((SPECTRUM_FRAME_BINS - 1) as f32)).round() as usize
     }

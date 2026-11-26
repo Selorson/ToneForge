@@ -55,7 +55,13 @@
     if (!meterCanvas) return;
     const r = new WebGpu120FpsRenderer(meterCanvas, 'mixer_meters');
     renderer = r;
-    r.initialize();
+    void r.initialize();
+    return () => {
+      r.destroy();
+      if (renderer === r) {
+        renderer = null;
+      }
+    };
   });
 
   $effect(() => {

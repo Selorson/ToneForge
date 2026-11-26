@@ -86,8 +86,15 @@ pub struct ProQ4Processor {
     has_active_brickwall_band: bool,
     linear_phase_ir_dirty: bool,
     /// Band snapshot used by the in-flight (block-amortised) linear-phase IR design.
-    lp_design_bands: [FractionalSlopeBiquadBand; PROQ4_NUM_BANDS],
+    static_bands: Box<[FractionalSlopeBiquadBand]>,
+    dyn_delta_bands: Box<[FractionalSlopeBiquadBand]>,
+    lp_design_bands: Box<[FractionalSlopeBiquadBand]>,
     lp_design_enabled: [bool; PROQ4_NUM_BANDS],
+    lp_design_placements: [StereoPlacement; PROQ4_NUM_BANDS],
+    lp_active_ms_domain: bool,
+    lp_pending_ms_domain: bool,
+    spectrogram_history: Box<[[f32; SPECTRUM_FRAME_BINS]]>,
+    spectrogram_cursor: usize,
     brickwall_delay_ring: [[f64; BRICKWALL_EXTRA_LATENCY_SAMPLES]; 2],
     brickwall_cursor: usize,
 }
@@ -129,8 +136,18 @@ impl ProQ4Processor {
             has_active_spectral_band: false,
             has_active_brickwall_band: false,
             linear_phase_ir_dirty: false,
-            lp_design_bands: [FractionalSlopeBiquadBand::new_unity(); PROQ4_NUM_BANDS],
+            static_bands: vec![FractionalSlopeBiquadBand::new_unity(); PROQ4_NUM_BANDS]
+                .into_boxed_slice(),
+            dyn_delta_bands: vec![FractionalSlopeBiquadBand::new_unity(); PROQ4_NUM_BANDS]
+                .into_boxed_slice(),
+            lp_design_bands: vec![FractionalSlopeBiquadBand::new_unity(); PROQ4_NUM_BANDS]
+                .into_boxed_slice(),
             lp_design_enabled: [false; PROQ4_NUM_BANDS],
+            lp_design_placements: [StereoPlacement::Stereo; PROQ4_NUM_BANDS],
+            lp_active_ms_domain: false,
+            lp_pending_ms_domain: false,
+            spectrogram_history: vec![[-120.0; SPECTRUM_FRAME_BINS]; 20].into_boxed_slice(),
+            spectrogram_cursor: 0,
             brickwall_delay_ring: [[0.0; BRICKWALL_EXTRA_LATENCY_SAMPLES]; 2],
             brickwall_cursor: 0,
         }
@@ -193,6 +210,8 @@ impl ProQ4Processor {
             self.sample_rate,
             gq,
         );
+        self.static_bands[band_idx] = self.bands[band_idx];
+        self.dyn_delta_bands[band_idx] = FractionalSlopeBiquadBand::new_unity();
 
         self.natural_phase_bank.bands_2x[band_idx].configure_shape_natural_phase(
             bp.shape,
@@ -223,11 +242,34 @@ impl ProQ4Processor {
             .processing_resolution
             .fir_length(self.sample_rate as f32)
             .min(self.linear_phase_convolver.max_fir_len());
-        self.lp_design_bands = self.bands;
+        self.lp_design_bands.copy_from_slice(&self.static_bands);
         self.lp_design_enabled = self.band_enabled;
+        for b in 0..PROQ4_NUM_BANDS {
+            self.lp_design_placements[b] = self.params.bands[b].placement;
+        }
+        let mut any_ms = matches!(self.params.global.channel_mode, ChannelMode::MidSide);
+        for b in 0..PROQ4_NUM_BANDS {
+            if self.lp_design_enabled[b]
+                && matches!(
+                    self.lp_design_placements[b],
+                    StereoPlacement::Mid | StereoPlacement::Side
+                )
+            {
+                any_ms = true;
+                break;
+            }
+        }
+        self.lp_pending_ms_domain = any_ms;
+        // When switching between L/R and M/S convolution basis, flush convolver history cleanly
+        // so crossfading does not mix M/S-encoded FDL spectra with L/R-encoded FDL spectra.
+        let effective_smooth = smooth_ir_crossfade && (self.lp_active_ms_domain == any_ms);
+        if self.lp_active_ms_domain != any_ms {
+            self.linear_phase_convolver.reset_state();
+            self.lp_active_ms_domain = any_ms;
+        }
         self.linear_phase_convolver
-            .begin_ir_design(fir_len, self.sample_rate, smooth_ir_crossfade);
-        if !smooth_ir_crossfade || !self.linear_phase_convolver.is_primed() {
+            .begin_ir_design(fir_len, self.sample_rate, effective_smooth);
+        if !effective_smooth || !self.linear_phase_convolver.is_primed() {
             self.continue_linear_phase_ir_design(usize::MAX);
         }
         self.linear_phase_ir_dirty = false;
@@ -238,16 +280,36 @@ impl ProQ4Processor {
         let fs = self.sample_rate;
         let bands = &self.lp_design_bands;
         let enabled = &self.lp_design_enabled;
-        self.linear_phase_convolver
-            .continue_ir_design(max_evals, |freq_hz| {
-                let mut h = Complex64::new(1.0, 0.0);
+        let placements = &self.lp_design_placements;
+        let finished = self
+            .linear_phase_convolver
+            .continue_dual_ir_design(max_evals, |freq_hz| {
+                let f = freq_hz.max(1.0);
+                let mut h0 = Complex64::new(1.0, 0.0);
+                let mut h1 = Complex64::new(1.0, 0.0);
                 for b in 0..PROQ4_NUM_BANDS {
-                    if enabled[b] {
-                        h *= bands[b].eval_complex_response(freq_hz.max(1.0), fs);
+                    if !enabled[b] {
+                        continue;
+                    }
+                    let hb = bands[b].eval_complex_response(f, fs);
+                    match placements[b] {
+                        StereoPlacement::Stereo => {
+                            h0 *= hb;
+                            h1 *= hb;
+                        }
+                        StereoPlacement::Left | StereoPlacement::Mid => {
+                            h0 *= hb;
+                        }
+                        StereoPlacement::Right | StereoPlacement::Side => {
+                            h1 *= hb;
+                        }
                     }
                 }
-                h.norm() as f32
+                [h0.norm() as f32, h1.norm() as f32]
             });
+        if finished {
+            self.lp_active_ms_domain = self.lp_pending_ms_domain;
+        }
     }
 
     pub fn refresh_global_aggregates(&mut self, smooth_ir_crossfade: bool) {
@@ -517,6 +579,9 @@ impl UnifiedDspNode for ProQ4Processor {
         for b in &mut self.bands {
             b.reset_state();
         }
+        for b in self.dyn_delta_bands.iter_mut() {
+            b.reset_state();
+        }
         self.natural_phase_bank.reset();
         self.linear_phase_convolver.reset_state();
         for d in &mut self.dynamic_bands {
@@ -525,6 +590,8 @@ impl UnifiedDspNode for ProQ4Processor {
         self.spectral_core.reset();
         self.character_shaper.reset();
         self.spectrum_analyzer.reset();
+        self.spectrogram_history.fill([-120.0; SPECTRUM_FRAME_BINS]);
+        self.spectrogram_cursor = 0;
         self.brickwall_delay_ring = [[0.0; BRICKWALL_EXTRA_LATENCY_SAMPLES]; 2];
         self.brickwall_cursor = 0;
         self.current_gr_db = 0.0;
@@ -568,8 +635,13 @@ impl UnifiedDspNode for ProQ4Processor {
 
     fn export_visual_telemetry(&self, frame: &mut VisualTelemetryFrame) {
         self.export_spectrum_frame(&mut frame.proq4_spectrum);
-        let row = (frame.header.frame_seq as usize) % 20;
-        frame.spectrogram_ring[row] = frame.proq4_spectrum.post_db;
+        let head_dst = (frame.header.frame_seq as usize) % 20;
+        let latest_src = (self.spectrogram_cursor + 19) % 20;
+        for age in 0..20 {
+            let dst_row = (head_dst + 20 - age) % 20;
+            let src_row = (latest_src + 20 - age) % 20;
+            frame.spectrogram_ring[dst_row] = self.spectrogram_history[src_row];
+        }
     }
 
     fn process_slice(
@@ -658,32 +730,34 @@ impl UnifiedDspNode for ProQ4Processor {
             }
 
             // Step 1: Update Wideband Dynamic EQ (`Detector` + `ProgramDependentCapacitor`)
-            for b in 0..PROQ4_NUM_BANDS {
-                if self.band_enabled[b]
-                    && self.params.bands[b].dyn_enabled
-                    && !self.params.bands[b].spectral_enabled
-                {
-                    let (trig_l, trig_r) = if self.params.bands[b].ext_sidechain {
-                        (ext_sc_l, ext_sc_r)
-                    } else {
-                        (in_l, in_r)
-                    };
-                    let dyn_db = self.dynamic_bands[b].step_dynamic_band_full(
-                        &self.params.bands[b],
-                        &mut self.bands[b],
-                        if matches!(mode, ProcessingMode::NaturalPhase) {
-                            Some(&mut self.natural_phase_bank.bands_2x[b])
+            if !matches!(mode, ProcessingMode::LinearPhase) {
+                for b in 0..PROQ4_NUM_BANDS {
+                    if self.band_enabled[b]
+                        && self.params.bands[b].dyn_enabled
+                        && !self.params.bands[b].spectral_enabled
+                    {
+                        let (trig_l, trig_r) = if self.params.bands[b].ext_sidechain {
+                            (ext_sc_l, ext_sc_r)
                         } else {
-                            None
-                        },
-                        trig_l,
-                        trig_r,
-                        gain_scale,
-                        gq,
-                        self.sample_rate,
-                    );
-                    if dyn_db < min_gr_db {
-                        min_gr_db = dyn_db;
+                            (in_l, in_r)
+                        };
+                        let dyn_db = self.dynamic_bands[b].step_dynamic_band_full(
+                            &self.params.bands[b],
+                            &mut self.bands[b],
+                            if matches!(mode, ProcessingMode::NaturalPhase) {
+                                Some(&mut self.natural_phase_bank.bands_2x[b])
+                            } else {
+                                None
+                            },
+                            trig_l,
+                            trig_r,
+                            gain_scale,
+                            gq,
+                            self.sample_rate,
+                        );
+                        if dyn_db < min_gr_db {
+                            min_gr_db = dyn_db;
+                        }
                     }
                 }
             }
@@ -761,10 +835,61 @@ impl UnifiedDspNode for ProQ4Processor {
                         (dl, dr)
                     }
                     ProcessingMode::LinearPhase => {
-                        let conv_out = self
-                            .linear_phase_convolver
-                            .process_stereo_sample(in_l as f32, in_r as f32);
-                        (conv_out[0] as f64, conv_out[1] as f64)
+                        let (mut yl, mut yr) = if self.lp_active_ms_domain {
+                            let in_m = (0.5 * (in_l + in_r)) as f32;
+                            let in_s = (0.5 * (in_l - in_r)) as f32;
+                            let conv_ms = self
+                                .linear_phase_convolver
+                                .process_stereo_sample(in_m, in_s);
+                            (
+                                (conv_ms[0] + conv_ms[1]) as f64,
+                                (conv_ms[0] - conv_ms[1]) as f64,
+                            )
+                        } else {
+                            let conv_out = self
+                                .linear_phase_convolver
+                                .process_stereo_sample(in_l as f32, in_r as f32);
+                            (conv_out[0] as f64, conv_out[1] as f64)
+                        };
+                        // Apply dynamic EQ delta bands aligned at the LinearPhase output
+                        for b in 0..PROQ4_NUM_BANDS {
+                            if self.band_enabled[b]
+                                && self.params.bands[b].dyn_enabled
+                                && !self.params.bands[b].spectral_enabled
+                            {
+                                let (trig_l, trig_r) = if self.params.bands[b].ext_sidechain {
+                                    (ext_sc_l, ext_sc_r)
+                                } else {
+                                    (yl, yr)
+                                };
+                                let mut delta_bp = self.params.bands[b];
+                                delta_bp.gain_db = 0.0;
+                                let dyn_db = self.dynamic_bands[b].step_dynamic_band_full(
+                                    &delta_bp,
+                                    &mut self.dyn_delta_bands[b],
+                                    None,
+                                    trig_l,
+                                    trig_r,
+                                    gain_scale,
+                                    gq,
+                                    self.sample_rate,
+                                );
+                                if dyn_db < min_gr_db {
+                                    min_gr_db = dyn_db;
+                                }
+                                if dyn_db.abs() > 1e-4 {
+                                    let placement = self.params.bands[b].placement;
+                                    Self::process_band_with_placement(
+                                        &mut self.dyn_delta_bands[b],
+                                        placement,
+                                        channel_mode,
+                                        &mut yl,
+                                        &mut yr,
+                                    );
+                                }
+                            }
+                        }
+                        (yl, yr)
                     }
                 }
             };
@@ -822,6 +947,9 @@ impl UnifiedDspNode for ProQ4Processor {
                 tilt,
                 freeze,
             ) {
+                self.spectrogram_history[self.spectrogram_cursor] =
+                    self.spectrum_analyzer.latest_frame.post_db;
+                self.spectrogram_cursor = (self.spectrogram_cursor + 1) % 20;
                 self.collision_bus.publish_track_spectrum(
                     self.instance_id,
                     &self.spectrum_analyzer.latest_frame.post_db,
@@ -960,6 +1088,87 @@ mod tests {
         assert!(
             (peak_hz - 65.0).abs() <= 5.0,
             "Collision peak must land within 65 Hz ± 5 Hz, got {peak_hz:.2} Hz (bin {peak_bin})"
+        );
+    }
+
+    #[test]
+    fn test_proq4_linear_phase_mid_only_cut_leaves_pure_side_untouched_and_log_bins_match() {
+        assert!((ProQ4CollisionBus::bin_to_freq_hz(0) - 10.0).abs() < 1e-3);
+        assert!((ProQ4CollisionBus::bin_to_freq_hz(1023) - 30_000.0).abs() < 1.0);
+
+        let sr = 48_000.0;
+        let mut eq = ProQ4Processor::new();
+        eq.prepare(sr, 512);
+        eq.params.global.processing_mode = ProcessingMode::LinearPhase;
+        eq.params.global.processing_resolution = LinearPhaseResolution::Low;
+        eq.params.global.channel_mode = ChannelMode::MidSide;
+        eq.params.global.auto_gain = false;
+
+        let mut mid_cut = EqBandParams::default();
+        mid_cut.used = true;
+        mid_cut.enabled = true;
+        mid_cut.shape = FilterShape::Bell;
+        mid_cut.placement = StereoPlacement::Mid;
+        mid_cut.freq_hz = 1_000.0;
+        mid_cut.gain_db = -18.0;
+        mid_cut.q_ui = 1.2;
+        eq.set_band_params(0, mid_cut);
+
+        let ctx = ProcessContext {
+            sample_rate: sr,
+            slice_frames: 512,
+            ..ProcessContext::default()
+        };
+
+        // 1. Pure Side 1 kHz signal (L = +s, R = -s -> Mid = 0): must remain untouched (~0 dB)!
+        let mut side_rms_sq = 0.0f64;
+        let mut in_rms_sq = 0.0f64;
+        for blk in 0..24 {
+            let mut buf = [[0.0f32; 2]; 512];
+            for i in 0..512 {
+                let t = ((blk * 512 + i) as f64) / sr;
+                let s = (0.4 * (std::f64::consts::TAU * 1_000.0 * t).sin()) as f32;
+                buf[i] = [s, -s];
+                if blk >= 12 {
+                    in_rms_sq += (s as f64) * (s as f64);
+                }
+            }
+            eq.process_slice(&ctx, &mut buf, None, &mut []);
+            if blk >= 12 {
+                for f in &buf {
+                    let side_out = 0.5 * (f[0] - f[1]) as f64;
+                    side_rms_sq += side_out * side_out;
+                }
+            }
+        }
+        let side_delta_db = (10.0 * (side_rms_sq / in_rms_sq).log10()).abs();
+        assert!(
+            side_delta_db < 0.25,
+            "LinearPhase Mid-only -18 dB bell must leave pure Side signal untouched (< 0.25 dB), got {side_delta_db:.3} dB"
+        );
+
+        // 2. Pure Mid 1 kHz signal (L = +s, R = +s -> Side = 0): must be attenuated strongly (> 14 dB)!
+        eq.reset_state();
+        let mut mid_rms_sq = 0.0f64;
+        for blk in 0..24 {
+            let mut buf = [[0.0f32; 2]; 512];
+            for i in 0..512 {
+                let t = ((blk * 512 + i) as f64) / sr;
+                let s = (0.4 * (std::f64::consts::TAU * 1_000.0 * t).sin()) as f32;
+                buf[i] = [s, s];
+            }
+            eq.process_slice(&ctx, &mut buf, None, &mut []);
+            if blk >= 12 {
+                for f in &buf {
+                    let mid_out = 0.5 * (f[0] + f[1]) as f64;
+                    mid_rms_sq += mid_out * mid_out;
+                }
+            }
+        }
+        let mid_atten_db = 10.0 * (in_rms_sq / mid_rms_sq.max(1e-18)).log10();
+        assert!(
+            mid_atten_db > 14.0,
+            "LinearPhase Mid-only -18 dB bell must attenuate pure Mid signal by > 14 dB, got {mid_atten_db:.2} dB"
         );
     }
 }

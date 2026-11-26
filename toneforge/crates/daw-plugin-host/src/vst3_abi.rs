@@ -466,12 +466,12 @@ pub struct NoteOffEvent {
     pub tuning: f32,
 }
 
-#[repr(C)]
+#[repr(C, align(8))]
 #[derive(Clone, Copy)]
 pub union Vst3EventPayload {
     pub noteOn: NoteOnEvent,
     pub noteOff: NoteOffEvent,
-    pub raw_bytes: [u8; 32],
+    pub raw_bytes: [u8; 24],
 }
 
 #[repr(C)]
@@ -485,6 +485,12 @@ pub struct Vst3Event {
     pub payload: Vst3EventPayload,
 }
 
+const _: () = assert!(
+    core::mem::size_of::<Vst3Event>() == 48
+        && core::mem::offset_of!(Vst3Event, payload) == 24
+        && core::mem::align_of::<Vst3Event>() == 8
+);
+
 impl Default for Vst3Event {
     fn default() -> Self {
         Self {
@@ -493,7 +499,7 @@ impl Default for Vst3Event {
             ppqPosition: 0.0,
             flags: 1,
             type_: K_NOTE_ON_EVENT,
-            payload: Vst3EventPayload { raw_bytes: [0; 32] },
+            payload: Vst3EventPayload { raw_bytes: [0; 24] },
         }
     }
 }
@@ -523,4 +529,44 @@ pub struct IPlugFrameVtbl {
         view: *mut c_void,
         newSize: *mut ViewRect,
     ) -> tresult,
+}
+
+#[cfg(test)]
+mod abi_layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn test_vst3_event_abi_size_48_offset_24_and_note_union_layout() {
+        assert_eq!(size_of::<Vst3Event>(), 48);
+        assert_eq!(align_of::<Vst3Event>(), 8);
+        assert_eq!(offset_of!(Vst3Event, busIndex), 0);
+        assert_eq!(offset_of!(Vst3Event, sampleOffset), 4);
+        assert_eq!(offset_of!(Vst3Event, ppqPosition), 8);
+        assert_eq!(offset_of!(Vst3Event, flags), 16);
+        assert_eq!(offset_of!(Vst3Event, type_), 18);
+        assert_eq!(offset_of!(Vst3Event, payload), 24);
+        assert_eq!(size_of::<Vst3EventPayload>(), 24);
+        assert_eq!(align_of::<Vst3EventPayload>(), 8);
+
+        let mut ev = Vst3Event::default();
+        ev.type_ = K_NOTE_ON_EVENT;
+        ev.payload = Vst3EventPayload {
+            noteOn: NoteOnEvent {
+                channel: 2,
+                pitch: 69,
+                tuning: 12.5,
+                velocity: 0.875,
+                length: 480,
+                noteId: 42,
+            },
+        };
+        let note_on = unsafe { ev.payload.noteOn };
+        assert_eq!(note_on.channel, 2);
+        assert_eq!(note_on.pitch, 69);
+        assert!((note_on.tuning - 12.5).abs() < 1e-6);
+        assert!((note_on.velocity - 0.875).abs() < 1e-6);
+        assert_eq!(note_on.length, 480);
+        assert_eq!(note_on.noteId, 42);
+    }
 }

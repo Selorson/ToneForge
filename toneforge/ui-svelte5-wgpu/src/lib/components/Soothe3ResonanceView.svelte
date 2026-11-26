@@ -12,7 +12,13 @@
     if (!sootheCanvas) return;
     const r = new WebGpu120FpsRenderer(sootheCanvas, 'soothe3');
     renderer = r;
-    r.initialize();
+    void r.initialize();
+    return () => {
+      r.destroy();
+      if (renderer === r) {
+        renderer = null;
+      }
+    };
   });
 
   $effect(() => {
@@ -212,7 +218,7 @@
   </div>
 
   <div class="sc-bands-strip">
-    {#each telemetry.soothe3ScBands.slice(0, 6) as sc (sc.bandIdx)}
+    {#each telemetry.soothe3ScBands as sc (sc.bandIdx)}
       <div class="sc-card {sc.enabled ? '' : 'disabled'}">
         <div class="sc-card-head">
           <strong>SC Band {sc.bandIdx + 1}</strong>
@@ -298,7 +304,7 @@
   .ext-sc-banner strong { color: var(--ok); }
   .soothe3-canvas { width: 100%; height: 220px; background: var(--sub-surface); border-radius: var(--radius); border: 1px solid var(--border); display: block; }
   .soothe-controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.76rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--sub-surface-2); border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius); }
-  .sc-bands-strip { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 8px; }
+  .sc-bands-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
   .sc-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 0.70rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 3px; }
   .sc-card.disabled { opacity: 0.55; }
   .sc-card-head { display: flex; justify-content: space-between; align-items: center; }

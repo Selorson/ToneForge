@@ -240,20 +240,52 @@ fn decode_via_symphonia(path: &Path) -> Result<(Vec<StereoFrame>, u32, usize), S
                     let interleaved = sb.samples();
                     let pkt_frames = interleaved.len() / ch_count;
                     frames.reserve(pkt_frames);
+                    let san = |x: f32| if x.is_finite() { x } else { 0.0 };
                     if ch_count == 1 {
                         for &m in &interleaved[..pkt_frames] {
-                            let s = if m.is_finite() { m } else { 0.0 };
+                            let s = san(m);
                             frames.push([s, s]);
                         }
+                    } else if ch_count == 2 {
+                        for f in 0..pkt_frames {
+                            let base = f * 2;
+                            frames.push([san(interleaved[base]), san(interleaved[base + 1])]);
+                        }
                     } else {
+                        // ITU-R BS.775 downmix preserving Center (`ch[2]`) and Surround (`ch[4..]`)
+                        const M3DB: f32 = 0.707_106_77;
                         for f in 0..pkt_frames {
                             let base = f * ch_count;
-                            let l = interleaved[base];
-                            let r = interleaved[base + 1];
-                            frames.push([
-                                if l.is_finite() { l } else { 0.0 },
-                                if r.is_finite() { r } else { 0.0 },
-                            ]);
+                            let fl = san(interleaved[base]);
+                            let fr = san(interleaved[base + 1]);
+                            let (l, r) = if ch_count == 3 {
+                                let c = M3DB * san(interleaved[base + 2]);
+                                (fl + c, fr + c)
+                            } else if ch_count == 4 {
+                                (
+                                    fl + M3DB * san(interleaved[base + 2]),
+                                    fr + M3DB * san(interleaved[base + 3]),
+                                )
+                            } else {
+                                let c = M3DB * san(interleaved[base + 2]);
+                                let sl = M3DB * san(interleaved[base + 4])
+                                    + if ch_count >= 7 {
+                                        M3DB * san(interleaved[base + 6])
+                                    } else {
+                                        0.0
+                                    };
+                                let sr = if ch_count >= 6 {
+                                    M3DB * san(interleaved[base + 5])
+                                } else {
+                                    0.0
+                                } + if ch_count >= 8 {
+                                    M3DB * san(interleaved[base + 7])
+                                } else {
+                                    0.0
+                                };
+                                (fl + c + sl, fr + c + sr)
+                            };
+                            frames.push([l, r]);
                         }
                     }
                 }

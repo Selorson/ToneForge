@@ -117,7 +117,12 @@ pub fn probe_single_binary_in_process(path: &Path) -> Result<Vec<ScannedPluginDe
     }
 }
 
-/// Locates `toneforge-plugin-scanner.exe` next to the current executable or in workspace `target/` dirs.
+fn normalize_blacklist_key(path: &str) -> String {
+    path.trim().replace('/', "\\").to_ascii_lowercase()
+}
+
+/// Locates `toneforge-plugin-scanner.exe` next to the current executable or in workspace `target/` dirs,
+/// falling back to spawning `current_exe()` (`ToneForge_Studio.exe --probe`) out-of-process if needed.
 pub fn locate_scanner_executable() -> Option<PathBuf> {
     if let Ok(cur_exe) = std::env::current_exe() {
         if let Some(parent) = cur_exe.parent() {
@@ -142,6 +147,14 @@ pub fn locate_scanner_executable() -> Option<PathBuf> {
                 .join("toneforge-plugin-scanner.exe");
             if candidate.is_file() {
                 return Some(candidate);
+            }
+        }
+    }
+    if let Ok(cur_exe) = std::env::current_exe() {
+        if let Some(stem) = cur_exe.file_stem().and_then(|s| s.to_str()) {
+            let low = stem.to_ascii_lowercase();
+            if low.contains("toneforge") {
+                return Some(cur_exe);
             }
         }
     }
@@ -212,8 +225,8 @@ pub fn default_plugin_scan_directories() -> Vec<PathBuf> {
     dirs
 }
 
-/// Probes a single plugin path inside an isolated child process (`toneforge-plugin-scanner.exe`)
-/// with `timeout`. If `scanner_exe` is `None`, falls back to in-process probing.
+/// Probes a single plugin path inside an isolated child process (`toneforge-plugin-scanner.exe`
+/// or `ToneForge_Studio.exe --probe`) with `timeout`. Never loads untrusted DLLs into the host process.
 pub fn probe_plugin_isolated(
     scanner_exe: Option<&Path>,
     target_path: &Path,
@@ -221,13 +234,17 @@ pub fn probe_plugin_isolated(
     extra_args: &[&str],
 ) -> Result<Vec<ScannedPluginDescriptor>, PluginQuarantineEntry> {
     let path_str = target_path.to_string_lossy().into_owned();
-    let Some(exe) = scanner_exe else {
-        return probe_single_binary_in_process(target_path).map_err(|reason| {
-            PluginQuarantineEntry {
-                path: path_str,
-                reason,
-                exit_code: None,
-            }
+    let owned_fallback = if scanner_exe.is_none() {
+        locate_scanner_executable()
+    } else {
+        None
+    };
+    let Some(exe) = scanner_exe.or(owned_fallback.as_deref()) else {
+        return Err(PluginQuarantineEntry {
+            path: path_str,
+            reason: "Isolated plugin scanner binary not found; refusing unsafe in-process DLL load"
+                .to_string(),
+            exit_code: None,
         });
     };
 
@@ -244,6 +261,25 @@ pub fn probe_plugin_isolated(
         exit_code: None,
     })?;
 
+    // Drain stdout and stderr concurrently on dedicated threads so large multi-plugin bundles
+    // (Waves, Melda, Kontakt) can never fill the OS pipe buffer and deadlock `WriteFile`.
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut out) = stdout_pipe {
+            let _ = out.read_to_string(&mut buf);
+        }
+        buf
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut err) = stderr_pipe {
+            let _ = err.read_to_string(&mut buf);
+        }
+        buf
+    });
+
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -252,6 +288,8 @@ pub fn probe_plugin_isolated(
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
                     return Err(PluginQuarantineEntry {
                         path: path_str,
                         reason: format!(
@@ -265,6 +303,9 @@ pub fn probe_plugin_isolated(
             }
             Err(e) => {
                 let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 return Err(PluginQuarantineEntry {
                     path: path_str,
                     reason: format!("Scanner wait error: {e}"),
@@ -274,14 +315,8 @@ pub fn probe_plugin_isolated(
         }
     };
 
-    let mut stdout_buf = String::new();
-    let mut stderr_buf = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout_buf);
-    }
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr_buf);
-    }
+    let stdout_buf = stdout_reader.join().unwrap_or_default();
+    let stderr_buf = stderr_reader.join().unwrap_or_default();
 
     if !status.success() {
         let code = status.code();
@@ -319,7 +354,7 @@ pub fn scan_plugin_directories_isolated(
         if let Ok(txt) = std::fs::read_to_string(qpath) {
             if let Ok(existing) = serde_json::from_str::<Vec<PluginQuarantineEntry>>(&txt) {
                 for item in existing {
-                    blacklisted_paths.insert(item.path.clone());
+                    blacklisted_paths.insert(normalize_blacklist_key(&item.path));
                     report.quarantined.push(item);
                 }
             }
@@ -330,7 +365,7 @@ pub fn scan_plugin_directories_isolated(
     let mut candidates = Vec::new();
     for r in roots {
         for c in collect_candidate_plugin_paths(r, 4) {
-            let key = c.to_string_lossy().to_ascii_lowercase();
+            let key = normalize_blacklist_key(&c.to_string_lossy());
             if seen_candidates.insert(key) {
                 candidates.push(c);
             }
@@ -339,14 +374,14 @@ pub fn scan_plugin_directories_isolated(
 
     for candidate in candidates {
         let c_str = candidate.to_string_lossy().into_owned();
-        if blacklisted_paths.contains(&c_str) {
+        if blacklisted_paths.contains(&normalize_blacklist_key(&c_str)) {
             continue;
         }
         report.scanned_binaries += 1;
         match probe_plugin_isolated(scanner_exe.as_deref(), &candidate, per_plugin_timeout, &[]) {
             Ok(mut list) => report.plugins.append(&mut list),
             Err(qentry) => {
-                blacklisted_paths.insert(qentry.path.clone());
+                blacklisted_paths.insert(normalize_blacklist_key(&qentry.path));
                 report.quarantined.push(qentry);
             }
         }

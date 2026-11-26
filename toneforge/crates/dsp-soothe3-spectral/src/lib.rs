@@ -50,6 +50,8 @@ pub struct Soothe3Processor {
     params_dirty: bool,
     resampler: BaseRateResampler,
     pipeline: Soothe3SpectralPipeline,
+    spectrogram_history: Box<[[f32; 1024]]>,
+    spectrogram_cursor: usize,
 }
 
 impl Default for Soothe3Processor {
@@ -81,6 +83,8 @@ impl Soothe3Processor {
             params_dirty: false,
             resampler,
             pipeline,
+            spectrogram_history: vec![[-120.0; 1024]; 20].into_boxed_slice(),
+            spectrogram_cursor: 0,
         }
     }
 
@@ -170,6 +174,9 @@ impl UnifiedDspNode for Soothe3Processor {
     }
 
     fn latency_samples(&self) -> usize {
+        if self.params.global.bypass {
+            return 0;
+        }
         self.resampler.total_latency_samples(
             self.params.global.linear_phase,
             self.params.global.low_latency,
@@ -184,6 +191,8 @@ impl UnifiedDspNode for Soothe3Processor {
     fn reset_state(&mut self) {
         self.resampler.reset();
         self.pipeline.reset();
+        self.spectrogram_history.fill([-120.0; 1024]);
+        self.spectrogram_cursor = 0;
     }
 
     fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
@@ -206,8 +215,13 @@ impl UnifiedDspNode for Soothe3Processor {
                 .sc_db
                 .copy_from_slice(&self.pipeline.latest_sc_spec_db);
         }
-        let row = (frame.header.frame_seq as usize) % 20;
-        frame.spectrogram_ring[row] = frame.soothe3_reduction.input_spec_db;
+        let head_dst = (frame.header.frame_seq as usize) % 20;
+        let latest_src = (self.spectrogram_cursor + 19) % 20;
+        for age in 0..20 {
+            let dst_row = (head_dst + 20 - age) % 20;
+            let src_row = (latest_src + 20 - age) % 20;
+            frame.spectrogram_ring[dst_row] = self.spectrogram_history[src_row];
+        }
     }
 
     fn process_slice(
@@ -304,6 +318,10 @@ impl UnifiedDspNode for Soothe3Processor {
             frame[0] = out_l;
             frame[1] = out_r;
         }
+        let mut snap = Soothe3ReductionFrame::default();
+        self.pipeline.export_telemetry(&mut snap);
+        self.spectrogram_history[self.spectrogram_cursor] = snap.input_spec_db;
+        self.spectrogram_cursor = (self.spectrogram_cursor + 1) % 20;
     }
 }
 
@@ -434,6 +452,25 @@ mod tests {
         assert!(
             red_frame.input_spec_db[bin_200] > sc_spec[bin_200] + 25.0,
             "Main spectrum must preserve 200 Hz Pad energy independently of Sidechain"
+        );
+    }
+
+    #[test]
+    fn test_soothe3_bypass_zero_latency_and_spectrogram_ring_initialized_minus_120db() {
+        let mut proc = Soothe3Processor::new(48_000.0);
+        assert!(proc.latency_samples() > 0);
+        proc.params_mut().global.bypass = true;
+        assert_eq!(proc.latency_samples(), 0);
+
+        let mut frame: Box<VisualTelemetryFrame> = Box::new(unsafe { core::mem::zeroed() });
+        proc.export_visual_telemetry(&mut frame);
+        assert!(
+            frame
+                .spectrogram_ring
+                .iter()
+                .flat_map(|row| row.iter())
+                .all(|&db| (db - (-120.0)).abs() < 1e-4),
+            "All 20 spectrogram_ring rows must export initialized -120 dB floor with zero 0 dB tears"
         );
     }
 }

@@ -186,39 +186,171 @@ fn build_ieee_float32_stereo_wav_header(sample_rate_hz: u32, num_frames: usize) 
     h
 }
 
-/// Reads back a 32-bit IEEE Float Stereo `.wav` file written by [`DiskTrackRecorder`].
+/// Reads back a RIFF/WAVE `.wav` file (chunk-walked so `JUNK`, `bext`, `LIST`, `fact`, and
+/// `WAVEFORMATEXTENSIBLE` chunks never corrupt sample framing) into stereo `f32` frames.
 pub fn read_wav_f32_stereo(path: &Path) -> Result<(u32, Vec<StereoFrame>), String> {
     let mut file =
         File::open(path).map_err(|e| format!("Failed to open WAV {}: {e}", path.display()))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|e| format!("Failed to read WAV {}: {e}", path.display()))?;
-    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err(format!("Invalid RIFF/WAVE header in {}", path.display()));
     }
-    let fmt_tag = u16::from_le_bytes([bytes[20], bytes[21]]);
-    let channels = u16::from_le_bytes([bytes[22], bytes[23]]) as usize;
-    let sample_rate = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
-    if fmt_tag != 3 || channels == 0 {
-        return Err(format!(
-            "Expected IEEE Float32 WAV (tag=3), got tag={fmt_tag}, ch={channels}"
-        ));
+
+    let mut fmt_tag = 0u16;
+    let mut channels = 0usize;
+    let mut sample_rate = 0u32;
+    let mut bits_per_sample = 0u16;
+    let mut is_ieee_float = false;
+    let mut data_range: Option<(usize, usize)> = None;
+
+    let mut cursor = 12usize;
+    while cursor + 8 <= bytes.len() {
+        let chunk_id = &bytes[cursor..cursor + 4];
+        let chunk_size = u32::from_le_bytes([
+            bytes[cursor + 4],
+            bytes[cursor + 5],
+            bytes[cursor + 6],
+            bytes[cursor + 7],
+        ]) as usize;
+        let body_start = cursor + 8;
+        let body_end = body_start.saturating_add(chunk_size).min(bytes.len());
+
+        if chunk_id == b"fmt " && body_end >= body_start + 16 {
+            let f = &bytes[body_start..body_end];
+            fmt_tag = u16::from_le_bytes([f[0], f[1]]);
+            channels = u16::from_le_bytes([f[2], f[3]]) as usize;
+            sample_rate = u32::from_le_bytes([f[4], f[5], f[6], f[7]]);
+            bits_per_sample = u16::from_le_bytes([f[14], f[15]]);
+            if fmt_tag == 3 {
+                is_ieee_float = true;
+            } else if fmt_tag == 0xFFFE && f.len() >= 40 {
+                let sub_tag = u16::from_le_bytes([f[24], f[25]]);
+                is_ieee_float = sub_tag == 3;
+                if sub_tag == 1 {
+                    fmt_tag = 1;
+                }
+            }
+        } else if chunk_id == b"data" {
+            data_range = Some((body_start, body_end));
+            break;
+        }
+
+        let padded = chunk_size.saturating_add(chunk_size & 1);
+        let next = body_start.saturating_add(padded);
+        if next <= cursor {
+            break;
+        }
+        cursor = next;
     }
-    let data_len = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize;
-    let payload = &bytes[44..bytes.len().min(44 + data_len)];
-    let stride = channels * 4;
+
+    let Some((d_start, d_end)) = data_range else {
+        return Err(format!("Missing `data` chunk in WAV {}", path.display()));
+    };
+    if channels == 0 || sample_rate == 0 {
+        return Err(format!("Missing or invalid `fmt ` chunk in WAV {}", path.display()));
+    }
+
+    let payload = &bytes[d_start..d_end];
+    let downmix_frame = |ch_vals: &[f32]| -> StereoFrame {
+        let san = |x: f32| if x.is_finite() { x } else { 0.0 };
+        match ch_vals.len() {
+            0 => [0.0, 0.0],
+            1 => {
+                let m = san(ch_vals[0]);
+                [m, m]
+            }
+            2 => [san(ch_vals[0]), san(ch_vals[1])],
+            3 => {
+                let c = 0.707_106_77 * san(ch_vals[2]);
+                [san(ch_vals[0]) + c, san(ch_vals[1]) + c]
+            }
+            4 => [
+                san(ch_vals[0]) + 0.707_106_77 * san(ch_vals[2]),
+                san(ch_vals[1]) + 0.707_106_77 * san(ch_vals[3]),
+            ],
+            _ => {
+                let c = 0.707_106_77 * san(ch_vals[2]);
+                let sl = 0.707_106_77 * san(ch_vals[4])
+                    + if ch_vals.len() >= 7 {
+                        0.707_106_77 * san(ch_vals[6])
+                    } else {
+                        0.0
+                    };
+                let sr = if ch_vals.len() >= 6 {
+                    0.707_106_77 * san(ch_vals[5])
+                } else {
+                    0.0
+                } + if ch_vals.len() >= 8 {
+                    0.707_106_77 * san(ch_vals[7])
+                } else {
+                    0.0
+                };
+                [san(ch_vals[0]) + c + sl, san(ch_vals[1]) + c + sr]
+            }
+        }
+    };
+
+    let bytes_per_sample = (bits_per_sample as usize) / 8;
+    if bytes_per_sample == 0 {
+        return Err(format!("Unsupported WAV bits_per_sample={bits_per_sample}"));
+    }
+    let stride = channels * bytes_per_sample;
     let n_frames = payload.len() / stride;
     let mut out = Vec::with_capacity(n_frames);
-    for i in 0..n_frames {
-        let base = i * stride;
-        let l = f32::from_le_bytes(payload[base..base + 4].try_into().unwrap());
-        let r = if channels >= 2 {
-            f32::from_le_bytes(payload[base + 4..base + 8].try_into().unwrap())
-        } else {
-            l
-        };
-        out.push([l, r]);
+    let mut ch_scratch = vec![0.0f32; channels.min(16)];
+
+    if is_ieee_float && bits_per_sample == 32 {
+        for i in 0..n_frames {
+            let base = i * stride;
+            let use_ch = ch_scratch.len();
+            for c in 0..use_ch {
+                let off = base + c * 4;
+                ch_scratch[c] = f32::from_le_bytes([
+                    payload[off],
+                    payload[off + 1],
+                    payload[off + 2],
+                    payload[off + 3],
+                ]);
+            }
+            out.push(downmix_frame(&ch_scratch));
+        }
+    } else if (fmt_tag == 1 || fmt_tag == 0xFFFE) && matches!(bits_per_sample, 8 | 16 | 24 | 32) {
+        for i in 0..n_frames {
+            let base = i * stride;
+            let use_ch = ch_scratch.len();
+            for c in 0..use_ch {
+                let off = base + c * bytes_per_sample;
+                ch_scratch[c] = match bits_per_sample {
+                    8 => ((payload[off] as f32) - 128.0) / 128.0,
+                    16 => (i16::from_le_bytes([payload[off], payload[off + 1]]) as f32) / 32_768.0,
+                    24 => {
+                        let v = (payload[off] as i32)
+                            | ((payload[off + 1] as i32) << 8)
+                            | (((payload[off + 2] as i8) as i32) << 16);
+                        ((v as f64) / 8_388_608.0) as f32
+                    }
+                    32 => {
+                        let v = i32::from_le_bytes([
+                            payload[off],
+                            payload[off + 1],
+                            payload[off + 2],
+                            payload[off + 3],
+                        ]);
+                        ((v as f64) / 2_147_483_648.0) as f32
+                    }
+                    _ => 0.0,
+                };
+            }
+            out.push(downmix_frame(&ch_scratch));
+        }
+    } else {
+        return Err(format!(
+            "Unsupported WAV format (tag={fmt_tag}, bits={bits_per_sample}, ch={channels})"
+        ));
     }
+
     Ok((sample_rate, out))
 }
 
@@ -374,5 +506,70 @@ impl Drop for DiskTrackRecorder {
         if let Some(w) = self.worker.take() {
             let _ = w.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod wav_chunk_tests {
+    use super::*;
+
+    #[test]
+    fn test_read_wav_f32_stereo_skips_junk_and_list_chunks_and_downmixes_surround() {
+        let path = std::env::temp_dir().join("toneforge_test_riff_junk_5_1.wav");
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // patched below
+        bytes.extend_from_slice(b"WAVE");
+
+        // Odd-sized JUNK chunk (5 bytes + 1 pad byte) BEFORE `fmt `
+        bytes.extend_from_slice(b"JUNK");
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00]);
+
+        // 6-channel IEEE float32 `fmt ` chunk @ 48 kHz
+        let channels = 6u16;
+        let sr = 48_000u32;
+        let bits = 32u16;
+        let block_align = channels * (bits / 8);
+        let byte_rate = sr * (block_align as u32);
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sr.to_le_bytes());
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&block_align.to_le_bytes());
+        bytes.extend_from_slice(&bits.to_le_bytes());
+
+        // `bext` metadata chunk BEFORE `data`
+        bytes.extend_from_slice(b"bext");
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // `data` chunk: 2 frames of 5.1 [FL, FR, FC, LFE, SL, SR]
+        let frame0: [f32; 6] = [0.25, -0.25, 0.50, 0.90, 0.0, 0.0];
+        let frame1: [f32; 6] = [0.0, 0.0, 0.0, 0.0, 0.40, -0.40];
+        let data_bytes_len = (2 * 6 * 4) as u32;
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_bytes_len.to_le_bytes());
+        for s in frame0.iter().chain(frame1.iter()) {
+            bytes.extend_from_slice(&s.to_le_bytes());
+        }
+
+        let riff_size = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (decoded_sr, frames) = read_wav_f32_stereo(&path).expect("parse chunked 5.1 WAV");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(decoded_sr, 48_000);
+        assert_eq!(frames.len(), 2);
+        let c_mix = 0.50 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!((frames[0][0] - (0.25 + c_mix)).abs() < 1e-5);
+        assert!((frames[0][1] - (-0.25 + c_mix)).abs() < 1e-5);
+        let s_mix = 0.40 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!((frames[1][0] - s_mix).abs() < 1e-5);
+        assert!((frames[1][1] + s_mix).abs() < 1e-5);
     }
 }

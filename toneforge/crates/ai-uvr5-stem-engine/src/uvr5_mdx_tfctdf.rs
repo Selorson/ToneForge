@@ -233,26 +233,36 @@ impl Mdx23cSeparator {
         }
     }
 
-    /// Separates an arbitrary-length stereo buffer into `(primary_stem, residual_complement_stem)`
-    /// using real `Kim_Vocal_2.onnx` neural inference (`CUDA -> DirectML -> CPU`), or real
-    /// `vocals-small_sanitized.npz` GRU-512 inference if ONNX Runtime is unavailable.
-    pub fn separate_offline(&self, audio_in: &[StereoFrame]) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
+    /// Separates an arbitrary-length stereo buffer at `source_sr` Hz into
+    /// `(primary_stem, residual_complement_stem)` using real `Kim_Vocal_2.onnx` neural inference
+    /// (`CUDA -> DirectML -> CPU`), or real `vocals-small_sanitized.npz` GRU-512 inference if ONNX Runtime is unavailable.
+    pub fn separate_offline(
+        &self,
+        audio_in: &[StereoFrame],
+        source_sr: u32,
+    ) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
         let total_len = audio_in.len();
         if total_len == 0 {
             return (Vec::new(), Vec::new());
         }
+        let sr = source_sr.clamp(8_000, 384_000);
 
         // 1. Primary path: Real `Kim_Vocal_2.onnx` TFC-TDF v3 ONNX inference
-        if let Some(Ok((primary, complement))) = GLOBAL_MDX23C_KIM_VOCAL.with(
-            || Uvr5MdxOnnxSeparator::from_kim_vocal_2().ok(),
-            |sep| sep.separate_vocal_instrumental(audio_in, 48_000, self.enable_denoise_2pass),
+        if let Some(Ok((primary, complement))) = GLOBAL_MDX23C_KIM_VOCAL.with_fallible(
+            || {
+                crate::idle_release::classify_onnx_load(
+                    crate::onnx_gpu_runtime::resolve_uvr5_kim_vocal2_onnx_path(),
+                    Uvr5MdxOnnxSeparator::from_kim_vocal_2_path,
+                )
+            },
+            |sep| sep.separate_vocal_instrumental(audio_in, sr, self.enable_denoise_2pass),
         ) {
             return (primary, complement);
         }
 
         // 2. Pure-Rust real-weight fallback: `vocals-small_sanitized.npz` GRU-512 stem separator
         if let Some(mut gru) = GruThreeStemSeparator::from_global_cache() {
-            let primary = gru.vocals.separate_single_stem(audio_in, 48_000);
+            let primary = gru.vocals.separate_single_stem(audio_in, sr);
             let mut complement = vec![[0.0f32; 2]; total_len];
             for i in 0..total_len {
                 complement[i] = [

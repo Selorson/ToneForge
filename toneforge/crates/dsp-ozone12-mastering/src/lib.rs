@@ -142,6 +142,7 @@ impl Ozone12MasterChain {
         chain.unlimiter.enabled = false;
         chain.low_end_focus.enabled = false;
         chain.spectral_shaper.enabled = false;
+        chain.bass_control.enabled = false;
         chain.maximizer.set_ceiling_dbtp(-1.0);
         chain.maximizer.prevent_intersample_clipping = true;
         chain
@@ -255,6 +256,8 @@ impl UnifiedDspNode for Ozone12MasterChain {
             55..=64 => self.clarity.set_parameter_normalized(param_id - 55, norm_val),
             65 => self.maximizer.set_parameter_normalized(12, norm_val),
             66 => self.maximizer.set_parameter_normalized(13, norm_val),
+            67 => self.bass_control.enabled = norm_val >= 0.5,
+            68 => self.bass_control.set_parameter_normalized(3, norm_val),
             69 => self.low_end_focus.set_parameter_normalized(5, norm_val),
             70..=74 => self
                 .low_end_focus
@@ -268,6 +271,9 @@ impl UnifiedDspNode for Ozone12MasterChain {
             85..=89 => self
                 .codec_preview
                 .set_parameter_normalized(param_id - 85, norm_val),
+            90..=93 => self
+                .bass_control
+                .set_parameter_normalized(param_id - 90, norm_val),
             _ => {}
         }
     }
@@ -300,7 +306,7 @@ impl UnifiedDspNode for Ozone12MasterChain {
             .process_slice(ctx, main_io, sidechain_in, aux_sends_out);
 
         for frame in main_io.iter_mut() {
-            let out = self.maximizer.step_frame(*frame);
+            let out = self.maximizer.step_frame_unmetered(*frame);
             *frame = out;
         }
         if self.codec_preview.enabled {
@@ -483,5 +489,35 @@ mod v3_ozone_parity_tests {
             sep_db >= 6.0,
             "MP3 128 kbps quantization artifact RMS ({rms_128_db:.2} dBFS) must exceed MP3 320 kbps ({rms_320_db:.2} dBFS) by >= 6.0 dB (got {sep_db:.2} dB)"
         );
+    }
+
+    #[test]
+    fn test_ozone12_bass_control_default_off_lef_id_70_no_solo_and_softclip_31_sample_latency() {
+        let sr = 48_000.0;
+        let mut chain = Ozone12MasterChain::new(sr);
+        assert!(
+            !chain.bass_control.enabled,
+            "BassControlModule harmonic saturation must default to disabled on Ozone12MasterChain"
+        );
+
+        chain.maximizer.enable_soft_clip = false;
+        chain.maximizer.soft_clip_mix = 0.0;
+        let lat_no_sc = chain.latency_samples();
+        chain.maximizer.enable_soft_clip = true;
+        chain.maximizer.soft_clip_mix = 0.5;
+        chain.maximizer.soft_clip_oversample_4x = true;
+        let lat_with_sc = chain.latency_samples();
+        assert_eq!(
+            lat_with_sc,
+            lat_no_sc + 31,
+            "4x FIR soft clipper must report its exact 31-sample linear-phase latency"
+        );
+
+        // Param ID 70 enables Low End Focus without turning on solo_low_band (ID 69)
+        chain.set_parameter_normalized(70, 1.0);
+        assert!(chain.low_end_focus.enabled);
+        assert!(!chain.low_end_focus.solo_low_band);
+        chain.set_parameter_normalized(69, 1.0);
+        assert!(chain.low_end_focus.solo_low_band);
     }
 }

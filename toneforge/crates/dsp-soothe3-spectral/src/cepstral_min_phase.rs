@@ -691,8 +691,8 @@ impl Soothe3SpectralPipeline {
             telemetry_bin_map: vec![0; 1024],
             telemetry_bin_frac: vec![0.0; 1024],
             latest_reduction_norm: vec![0.0; 1024],
-            latest_input_spec_db: vec![-100.0; 1024],
-            latest_sc_spec_db: vec![-100.0; 1024],
+            latest_input_spec_db: vec![-120.0; 1024],
+            latest_sc_spec_db: vec![-120.0; 1024],
         };
         pipe.update_sample_rate(base_sample_rate);
         pipe
@@ -734,6 +734,9 @@ impl Soothe3SpectralPipeline {
         self.short_term_out_sq = 0.0;
         self.auto_gain_smoothed = 1.0;
         self.peak_gr_db = 0.0;
+        self.latest_reduction_norm.fill(0.0);
+        self.latest_input_spec_db.fill(-120.0);
+        self.latest_sc_spec_db.fill(-120.0);
     }
 
     /// Reconstructs a `4,096`-tap minimum-phase impulse response from `gains_lin` (`apply_filtfilt` +
@@ -864,7 +867,7 @@ impl Soothe3SpectralPipeline {
 
         self.audio_history_write = (hw + 1) & hist_mask;
 
-        let (mut wet_lr, dry_lr) = if g.mid_side_mode {
+        let (mut wet_lr, mut dry_lr) = if g.mid_side_mode {
             let wl = wet_ch[0] + wet_ch[1];
             let wr = wet_ch[0] - wet_ch[1];
             let dl = dry_ch[0] + dry_ch[1];
@@ -874,11 +877,26 @@ impl Soothe3SpectralPipeline {
             (wet_ch, dry_ch)
         };
 
-        let in_pow = 0.5 * (dry_lr[0] * dry_lr[0] + dry_lr[1] * dry_lr[1]);
-        let out_pow = 0.5 * (wet_lr[0] * wet_lr[0] + wet_lr[1] * wet_lr[1]);
+        for c in 0..2 {
+            if !wet_lr[c].is_finite() {
+                wet_lr[c] = 0.0;
+            }
+            if !dry_lr[c].is_finite() {
+                dry_lr[c] = 0.0;
+            }
+        }
+
+        let in_pow_raw = 0.5 * (dry_lr[0] * dry_lr[0] + dry_lr[1] * dry_lr[1]);
+        let out_pow_raw = 0.5 * (wet_lr[0] * wet_lr[0] + wet_lr[1] * wet_lr[1]);
+        let in_pow = if in_pow_raw.is_finite() { in_pow_raw } else { 0.0 };
+        let out_pow = if out_pow_raw.is_finite() { out_pow_raw } else { 0.0 };
         let rms_alpha = 0.9995f32;
         self.short_term_in_sq = rms_alpha * self.short_term_in_sq + (1.0 - rms_alpha) * in_pow;
         self.short_term_out_sq = rms_alpha * self.short_term_out_sq + (1.0 - rms_alpha) * out_pow;
+        if !self.short_term_in_sq.is_finite() || !self.short_term_out_sq.is_finite() {
+            self.short_term_in_sq = 0.0;
+            self.short_term_out_sq = 0.0;
+        }
 
         if g.auto_gain && !g.delta_solo && !g.inverse && !g.sidechain_listen {
             let target_ag = if self.short_term_out_sq > 1e-8 && self.short_term_in_sq > 1e-8 {
@@ -889,6 +907,9 @@ impl Soothe3SpectralPipeline {
                 1.0
             };
             self.auto_gain_smoothed = 0.999 * self.auto_gain_smoothed + 0.001 * target_ag;
+            if !self.auto_gain_smoothed.is_finite() {
+                self.auto_gain_smoothed = 1.0;
+            }
             wet_lr[0] *= self.auto_gain_smoothed;
             wet_lr[1] *= self.auto_gain_smoothed;
         } else {

@@ -268,7 +268,7 @@ fn test_uvr5_offline_architectures_mdx_tfctdf_htdemucs4_vr_aspp_and_assets() {
     // 2. Test MDX-Net / MDX23C TFC-TDF v3 with Hann window chunk anti-aliasing & 2-pass denoise
     let mut mdx = Mdx23cSeparator::new(512, 128, 1024, 0.5);
     mdx.enable_denoise_2pass = true;
-    let (mdx_primary, mdx_comp) = mdx.separate_offline(&mix);
+    let (mdx_primary, mdx_comp) = mdx.separate_offline(&mix, 48_000);
     assert_eq!(mdx_primary.len(), mix.len());
     for i in 0..mix.len() {
         assert!((mdx_primary[i][0] + mdx_comp[i][0] - mix[i][0]).abs() < 1e-5);
@@ -277,7 +277,7 @@ fn test_uvr5_offline_architectures_mdx_tfctdf_htdemucs4_vr_aspp_and_assets() {
 
     // 3. Test Hybrid Transformer Demucs v4 (HTDemucs4) with CrossTransformerEncoder
     let htdemucs = HTDemucs4::new(512, 128, 16, 4, 2);
-    let stems4 = htdemucs.separate_4stems(&mix);
+    let stems4 = htdemucs.separate_4stems(&mix, 48_000);
     for s in 0..4 {
         assert_eq!(stems4[s].len(), mix.len());
         let e: f32 = stems4[s].iter().map(|f| f[0] * f[0] + f[1] * f[1]).sum();
@@ -287,7 +287,7 @@ fn test_uvr5_offline_architectures_mdx_tfctdf_htdemucs4_vr_aspp_and_assets() {
     // 4. Test VR Architecture CascadedASPPNet with dilations [1, 2, 4, 8, 16]
     assert_eq!(VR_ASPP_DILATIONS, [1, 2, 4, 8, 16]);
     let vr_net = CascadedASPPNet::new(512, 128, 0.25);
-    let (vr_vocals, vr_inst) = vr_net.separate_vocal_instrumental(&mix);
+    let (vr_vocals, vr_inst) = vr_net.separate_vocal_instrumental(&mix, 48_000);
     assert_eq!(vr_vocals.len(), mix.len());
     for i in 0..mix.len() {
         assert!((vr_vocals[i][0] + vr_inst[i][0] - mix[i][0]).abs() < 1e-5);
@@ -412,15 +412,15 @@ fn test_uvr5_edge_cases_empty_inputs_and_corrupt_binaries() {
     assert!(ensembler.ensemble_waveforms(&[], None).is_empty());
 
     let mdx = Mdx23cSeparator::default();
-    let (p, c) = mdx.separate_offline(&[]);
+    let (p, c) = mdx.separate_offline(&[], 48_000);
     assert!(p.is_empty() && c.is_empty());
 
     let htdemucs = HTDemucs4::default();
-    let stems = htdemucs.separate_4stems(&[]);
+    let stems = htdemucs.separate_4stems(&[], 48_000);
     assert!(stems.iter().all(|s| s.is_empty()));
 
     let vr = CascadedASPPNet::default();
-    let (v, i) = vr.separate_vocal_instrumental(&[]);
+    let (v, i) = vr.separate_vocal_instrumental(&[], 48_000);
     assert!(v.is_empty() && i.is_empty());
 }
 

@@ -570,8 +570,7 @@ fn gate7_workflow_and_100_percent_plugin_parity() {
             peak_bin = b;
         }
     }
-    let collision_peak_hz =
-        20.0 * (20_000.0_f64 / 20.0).powf((peak_bin as f64) / ((SPECTRUM_FRAME_BINS - 1) as f64));
+    let collision_peak_hz = ProQ4CollisionBus::bin_to_freq_hz(peak_bin) as f64;
     assert!(
         peak_collision > 0.35 && (collision_peak_hz - 65.0).abs() <= 5.0,
         "Gate 7.2 Collision peak must occur at 65 Hz ± 5 Hz, got {collision_peak_hz:.2} Hz (mask={peak_collision:.3})"

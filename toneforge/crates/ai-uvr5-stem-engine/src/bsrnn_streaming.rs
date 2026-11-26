@@ -45,17 +45,17 @@ pub const BSRNN_HIDDEN_STATE_LEN: usize = 2 * 2 * 2 * 1 * 13 * 128; // 13,312 fl
 /// Candidate paths for `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` (`7,230,143` bytes).
 pub const DEFAULT_BSRNN_ONNX_PATHS: [&str; 4] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
-    r"f:\FL studio\toneforge\assets\models\ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
     r"assets/ozone12/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
-    r"assets/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
+    r"../assets/ozone12/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
+    r"../../assets/ozone12/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
 ];
 
 /// Candidate paths for `delimit_exp009_ep080_fixed2.onnx` (`5,580,442` bytes).
 pub const DEFAULT_DELIMIT_ONNX_PATHS: [&str; 4] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\delimit_exp009_ep080_fixed2.onnx",
-    r"f:\FL studio\toneforge\assets\models\delimit_exp009_ep080_fixed2.onnx",
     r"assets/ozone12/models/delimit_exp009_ep080_fixed2.onnx",
-    r"assets/models/delimit_exp009_ep080_fixed2.onnx",
+    r"../assets/ozone12/models/delimit_exp009_ep080_fixed2.onnx",
+    r"../../assets/ozone12/models/delimit_exp009_ep080_fixed2.onnx",
 ];
 
 /// Stem index identifier for Ozone 12 4-Stem separation.
@@ -399,6 +399,15 @@ impl RealTimeBsrnnStemNode {
         Ok(node)
     }
 
+    /// Constructs a `RealTimeBsrnnStemNode` whose background ONNX GPU worker starts in `0 MB` VRAM
+    /// lazy-standby mode until stem gains/solo/mute leave unity bypass, and releases the ONNX
+    /// session back to `0 MB` VRAM after `15 s` (`IDLE_RELEASE`) of inactivity.
+    pub fn new_with_onnx_gpu_lazy(sample_rate: f64) -> Result<Self, String> {
+        let mut node = Self::new(sample_rate);
+        node.enable_onnx_gpu_worker_lazy()?;
+        Ok(node)
+    }
+
     /// Constructs a node that runs the real `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` separator
     /// synchronously inside `process_slice` (offline render and deterministic verification only).
     pub fn new_with_onnx_lockstep(sample_rate: f64) -> Result<Self, String> {
@@ -446,12 +455,46 @@ impl RealTimeBsrnnStemNode {
     pub fn enable_onnx_gpu_worker(
         &mut self,
     ) -> Result<crate::onnx_gpu_runtime::GpuExecutionTier, String> {
+        self.enable_onnx_gpu_worker_inner(true)
+    }
+
+    /// Spawns the lock-free ONNX GPU worker in lazy standby (`0 MB` startup VRAM until stem
+    /// rebalance leaves unity `0 dB` bypass, releasing the session after `IDLE_RELEASE`).
+    pub fn enable_onnx_gpu_worker_lazy(
+        &mut self,
+    ) -> Result<crate::onnx_gpu_runtime::GpuExecutionTier, String> {
+        self.enable_onnx_gpu_worker_inner(!self.is_unity_bypass())
+    }
+
+    fn enable_onnx_gpu_worker_inner(
+        &mut self,
+        eager_prewarm: bool,
+    ) -> Result<crate::onnx_gpu_runtime::GpuExecutionTier, String> {
         if let Some(existing) = &self.async_gpu_worker {
             return Ok(existing.tier);
         }
 
-        let mut onnx_sep = crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator::from_default_assets()?;
-        let tier = onnx_sep.active_tier();
+        let model_path = crate::onnx_gpu_runtime::resolve_ozone_bsrnn_onnx_path().ok_or_else(|| {
+            "Could not locate ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx in assets/ozone12/models"
+                .to_string()
+        })?;
+        let _ = OnnxModelDescriptor::from_onnx_file(&model_path)?;
+        let rt = crate::onnx_gpu_runtime::GpuRuntimeManager::global();
+        if rt.environment().is_none() {
+            return Err(rt
+                .init_error()
+                .unwrap_or("ONNX Runtime environment unavailable")
+                .to_string());
+        }
+        let mut initial_sep = if eager_prewarm {
+            Some(crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator::from_model_path(&model_path)?)
+        } else {
+            None
+        };
+        let tier = initial_sep
+            .as_ref()
+            .map(|s| s.active_tier())
+            .unwrap_or_else(|| rt.tier());
 
         let mut in_rx = self
             .in_rx
@@ -484,7 +527,7 @@ impl RealTimeBsrnnStemNode {
         self.avail_hold_samples = 0;
 
         // Update stem alignment delay to account for 2-hop ONNX lookahead + async cushion:
-        // Total pre-stem delay = 2048 (STFT) + 1024 (2-hop lookahead) + 1024 (2-hop cushion) = 4,096 samples.
+        // Total pre-stem delay = 2048 (STFT) + 1024 (2-hop lookahead) + 2048 (4-hop cushion) = 5,120 samples.
         let pre_delay = BSRNN_N_FFT
             + crate::bsrnn_onnx_gpu::OZONE_BSRNN_LOOKAHEAD_SAMPLES
             + ASYNC_GPU_CUSHION_HOPS * BSRNN_HOP_SIZE;
@@ -507,12 +550,15 @@ impl RealTimeBsrnnStemNode {
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 let mut out_hop = BsrnnOutputHop::default();
-                // Pre-warm thread-local CUDA context & cuDNN handles on this OS worker thread
-                // outside real-time playback so hop #0 never suffers a cold-start kernel stall.
-                let warm_in = BsrnnInputHop::default();
-                let _ = onnx_sep.process_hop(&warm_in, &mut out_hop);
-                onnx_sep.reset();
-                out_hop = BsrnnOutputHop::default();
+                let mut onnx_sep = initial_sep.take();
+                if let Some(sep) = onnx_sep.as_mut() {
+                    let warm_in = BsrnnInputHop::default();
+                    for _ in 0..4 {
+                        let _ = sep.process_hop(&warm_in, &mut out_hop);
+                    }
+                    sep.reset();
+                    out_hop = BsrnnOutputHop::default();
+                }
                 ready_clone.wait();
 
                 let mut local_epoch = initial_epoch;
@@ -522,7 +568,9 @@ impl RealTimeBsrnnStemNode {
                 while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     let target_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
                     if target_epoch != local_epoch {
-                        onnx_sep.reset();
+                        if let Some(sep) = onnx_sep.as_mut() {
+                            sep.reset();
+                        }
                         local_epoch = target_epoch;
                     }
                     if let Ok(in_hop) = in_rx.pop() {
@@ -532,13 +580,27 @@ impl RealTimeBsrnnStemNode {
                         // Discard stale input hops queued prior to the latest `reset_state()` epoch
                         let latest_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
                         if latest_epoch != local_epoch {
-                            onnx_sep.reset();
+                            if let Some(sep) = onnx_sep.as_mut() {
+                                sep.reset();
+                            }
                             local_epoch = latest_epoch;
                         }
                         if in_hop.epoch != local_epoch {
                             continue;
                         }
-                        if onnx_sep.process_hop(&in_hop, &mut out_hop).is_ok() {
+                        if onnx_sep.is_none() {
+                            if let Ok(mut sep) =
+                                crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator::from_model_path(
+                                    &model_path,
+                                )
+                            {
+                                sep.reset();
+                                onnx_sep = Some(sep);
+                            }
+                        }
+                        if let Some(sep) = onnx_sep.as_mut()
+                            && sep.process_hop(&in_hop, &mut out_hop).is_ok()
+                        {
                             out_hop.epoch = in_hop.epoch;
                             out_hop.seq = in_hop.seq;
                             let _ = out_tx.push(out_hop);
@@ -554,10 +616,16 @@ impl RealTimeBsrnnStemNode {
                             std::hint::spin_loop();
                         } else {
                             // Progressive idle backoff: the RT side submits no hops while idle-gated,
-                            // so after ~100 ms without work poll at up to 2 ms (resume needs a hop
-                            // within the 4-hop / 42.7 ms cushion, so 2 ms is still ample).
+                            // so after ~100 ms without work poll at up to 2 ms; after IDLE_RELEASE
+                            // (15 s) release the ONNX session & GPU arena back to 0 MB VRAM.
                             let since = *idle_since.get_or_insert_with(std::time::Instant::now);
-                            if since.elapsed() >= WORKER_IDLE_BACKOFF_AFTER {
+                            let elapsed = since.elapsed();
+                            if onnx_sep.is_some() && elapsed >= crate::idle_release::IDLE_RELEASE {
+                                if let Some(mut sep) = onnx_sep.take() {
+                                    sep.shrink_gpu_arena();
+                                }
+                            }
+                            if elapsed >= WORKER_IDLE_BACKOFF_AFTER {
                                 idle_sleep_us = (idle_sleep_us * 2).min(WORKER_MAX_IDLE_SLEEP_US);
                             }
                             std::thread::sleep(std::time::Duration::from_micros(idle_sleep_us));

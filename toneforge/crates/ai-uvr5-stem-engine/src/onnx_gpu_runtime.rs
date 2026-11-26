@@ -185,36 +185,35 @@ pub fn resolve_asset_file(relative_under_toneforge: &[&str]) -> Option<PathBuf> 
     None
 }
 
-/// Resolves `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` prioritizing `current_exe()` parent first.
+/// Resolves `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` prioritizing `current_exe()` parent first
+/// from the canonical `assets/ozone12/models/` directory.
 pub fn resolve_ozone_bsrnn_onnx_path() -> Option<PathBuf> {
     resolve_asset_file(&[
         "assets/ozone12/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
-        "assets/models/bsrnn_realtime/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
-        "assets/models/ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx",
     ])
 }
 
-/// Resolves `delimit_exp009_ep080_fixed2.onnx` prioritizing `current_exe()` parent first.
+/// Resolves `delimit_exp009_ep080_fixed2.onnx` prioritizing `current_exe()` parent first
+/// from the canonical `assets/ozone12/models/` directory.
 pub fn resolve_ozone_delimit_onnx_path() -> Option<PathBuf> {
     resolve_asset_file(&[
         "assets/ozone12/models/delimit_exp009_ep080_fixed2.onnx",
-        "assets/models/delimit_exp009_ep080_fixed2.onnx",
     ])
 }
 
-/// Resolves `Kim_Vocal_2.onnx` prioritizing `current_exe()` parent first.
+/// Resolves `Kim_Vocal_2.onnx` prioritizing `current_exe()` parent first
+/// from the canonical `assets/uvr5/models/MDX_Net_Models/` directory.
 pub fn resolve_uvr5_kim_vocal2_onnx_path() -> Option<PathBuf> {
     resolve_asset_file(&[
         "assets/uvr5/models/MDX_Net_Models/Kim_Vocal_2.onnx",
-        "assets/models/Kim_Vocal_2.onnx",
     ])
 }
 
-/// Resolves `UVR-MDX-NET-Inst_HQ_3.onnx` prioritizing `current_exe()` parent first.
+/// Resolves `UVR-MDX-NET-Inst_HQ_3.onnx` prioritizing `current_exe()` parent first
+/// from the canonical `assets/uvr5/models/MDX_Net_Models/` directory.
 pub fn resolve_uvr5_inst_hq3_onnx_path() -> Option<PathBuf> {
     resolve_asset_file(&[
         "assets/uvr5/models/MDX_Net_Models/UVR-MDX-NET-Inst_HQ_3.onnx",
-        "assets/models/UVR-MDX-NET-Inst_HQ_3.onnx",
     ])
 }
 
@@ -575,10 +574,26 @@ impl GpuRuntimeManager {
         self.environment.as_ref()
     }
 
+    pub fn init_error(&self) -> Option<&str> {
+        if self.environment.is_none() {
+            Some(self.status.diagnostic_note.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// Builds `ort::session::RunOptions` configured with `memory.enable_memory_arena_shrinkage = "gpu:0"`
+    /// so ONNX Runtime CUDA `BFCArena` releases peak workspace memory back to GPU 0 VRAM.
+    pub fn gpu_arena_shrink_run_options() -> Option<ort::session::RunOptions> {
+        let mut opts = ort::session::RunOptions::new().ok()?;
+        let _ = opts.set("memory.enable_memory_arena_shrinkage", "gpu:0");
+        Some(opts)
+    }
+
     /// Builds the optimal CUDA Execution Provider dispatch for NVIDIA Ada Lovelace (`RTX 4080`):
     /// - `TF32 = true` (4th-gen Tensor Core acceleration for FP32 MatMul/Conv/LSTM)
     /// - `ConvAlgorithmSearch::Heuristic` (instant startup, no 10-second exhaustive stall)
-    /// - `ArenaExtendStrategy::NextPowerOfTwo`
+    /// - `ArenaExtendStrategy::SameAsRequested`
     pub fn cuda_ep_dispatch(error_on_failure: bool) -> ExecutionProviderDispatch {
         let dispatch = ep::CUDA::default()
             .with_device_id(0)

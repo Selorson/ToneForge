@@ -167,8 +167,8 @@ impl ProQ4SpectrumAnalyzer {
             *w = h * 2.0 * inv_n;
         }
 
-        let min_oct = 20.0f32.log2();
-        let max_oct = 20000.0f32.log2();
+        let min_oct = 10.0f32.log2();
+        let max_oct = 30000.0f32.log2();
         let step = (max_oct - min_oct) / ((SPECTRUM_FRAME_BINS - 1) as f32);
         let mut log_bin_freq_hz = [0.0f32; SPECTRUM_FRAME_BINS];
         for (i, f) in log_bin_freq_hz.iter_mut().enumerate() {

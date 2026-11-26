@@ -272,6 +272,7 @@ pub fn cmd_update_proq4_band(
             target_sample_pos: None,
         })?;
     }
+    state.push_command(EngineCommand::RefreshApdc)?;
     Ok(())
 }
 
@@ -294,6 +295,7 @@ pub fn cmd_load_proq4_preset(
             target_sample_pos: None,
         })?;
     }
+    state.push_command(EngineCommand::RefreshApdc)?;
     Ok(())
 }
 
@@ -337,6 +339,7 @@ pub fn cmd_update_soothe3_params(
             target_sample_pos: None,
         })?;
     }
+    state.push_command(EngineCommand::RefreshApdc)?;
     Ok(())
 }
 
@@ -385,6 +388,36 @@ pub fn cmd_update_proq4_global(
     ps.global.auto_gain = dto.auto_gain;
     ps.global.show_collisions = dto.show_collisions;
     ps.sync_mirror_from_structured();
+
+    // Pre-allocate larger APDC delay lines off-RT when LinearPhase resolution can exceed 16,384 samples
+    // (`High` @ >=96 kHz, `VeryHigh` = 32,768, `Maximum` = 65,536..131,072) so the RT thread swaps them
+    // with 0 heap allocations before `RefreshApdc` computes the new latency!
+    if !ps.global.bypass
+        && ps.global.processing_mode == ProcessingMode::LinearPhase
+        && matches!(
+            ps.global.processing_resolution,
+            LinearPhaseResolution::High
+                | LinearPhaseResolution::VeryHigh
+                | LinearPhaseResolution::Maximum
+        )
+        && state.has_rt_mutations()
+    {
+        let required_samples = match ps.global.processing_resolution {
+            LinearPhaseResolution::High => 32_768,
+            LinearPhaseResolution::VeryHigh => 65_536,
+            LinearPhaseResolution::Maximum => 131_072,
+            _ => 16_384,
+        };
+        let pool_len = 32usize;
+        let fresh_pool: Vec<daw_core_graph::ApdcDelayLine> = (0..pool_len)
+            .map(|_| daw_core_graph::ApdcDelayLine::with_capacity(required_samples))
+            .collect();
+        let _ = state.push_rt_mutation(daw_core_graph::RtGraphMutation::UpgradeApdcCapacity {
+            required_samples,
+            fresh_pool: Box::new(fresh_pool),
+            retired_pool: Box::new(Vec::with_capacity(pool_len)),
+        });
+    }
 
     for param_id in PROQ4_BAND_PARAMS_TOTAL..PROQ4_TOTAL_PARAMS {
         state.push_command(EngineCommand::SetPluginParamNormalized {
@@ -454,6 +487,7 @@ pub fn cmd_load_soothe3_preset_json(
             target_sample_pos: None,
         })?;
     }
+    state.push_command(EngineCommand::RefreshApdc)?;
     Ok(count)
 }
 
@@ -483,7 +517,7 @@ pub fn cmd_update_ozone12_master(
             9,
             ((cfg.maximizer_transient_shaping + 1.0) * 0.5).clamp(0.0, 1.0),
         ),
-        (65, (cfg.maximizer_irc_mode.min(8) as f32) / 8.0),
+        (65, (cfg.maximizer_irc_mode.min(5) as f32) / 5.0),
         (66, if cfg.maximizer_true_peak { 1.0 } else { 0.0 }),
         (10, if cfg.exciter_bypass { 1.0 } else { 0.0 }),
         (33, if cfg.imager_stereoizer_enabled { 1.0 } else { 0.0 }),
@@ -720,13 +754,14 @@ pub fn cmd_route_mixer_track_on_engine(
     Ok(())
 }
 
-/// Adjusts a Mixer Track's post-fader linear gain and validates non-self-loop routing via the lock-free command queue.
+/// Routes `src_track -> dst_track` (with `gain` and `is_sidechain`) via lock-free
+/// `RtGraphMutation::AddOrUpdateSendRoute` without overwriting `src_track`'s post-fader gain.
 pub fn cmd_route_mixer_track(
     state: &DawAppState,
     src_track: u16,
     dst_track: u16,
     gain: f32,
-    _is_sidechain: bool,
+    is_sidechain: bool,
 ) -> Result<(), String> {
     if (src_track as usize) >= MAX_MIXER_TRACKS || (dst_track as usize) >= MAX_MIXER_TRACKS {
         return Err("Mixer track index out of range (0..502)".to_string());
@@ -734,9 +769,14 @@ pub fn cmd_route_mixer_track(
     if src_track == dst_track {
         return Err("Self-loop routing is prohibited".to_string());
     }
-    state.push_command(EngineCommand::SetTrackGain {
-        track_index: src_track,
-        gain_linear: gain.clamp(0.0, 4.0),
+    let clamped_gain = gain.clamp(0.0, 4.0);
+    let route = daw_core_graph::MixerSendRoute::new(dst_track as usize, clamped_gain, is_sidechain);
+    state.push_rt_mutation(daw_core_graph::RtGraphMutation::AddOrUpdateSendRoute {
+        src_track,
+        dest_track: dst_track,
+        gain: clamped_gain,
+        is_sidechain_only: is_sidechain,
+        route_carrier: Box::new(Some(route)),
     })
 }
 
@@ -1018,18 +1058,19 @@ pub fn execute_uvr5_separation_dsp(
                     // Tier 3B deterministic fallback when neither ONNX nor NPZ assets are present
                     let mut mdx = ai_uvr5_stem_engine::Mdx23cSeparator::new(512, 128, 1024, 0.5);
                     mdx.enable_denoise_2pass = req.enable_denoise_2pass;
-                    let (mdx_vocals, _mdx_inst) = mdx.separate_offline(&source_mix);
+                    let (mdx_vocals, _mdx_inst) = mdx.separate_offline(&source_mix, effective_sr);
 
                     let demucs = ai_uvr5_stem_engine::HTDemucs4::new(512, 128, 16, 4, 2);
                     let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
-                        demucs.separate_4stems(&source_mix);
+                        demucs.separate_4stems(&source_mix, effective_sr);
 
                     let vr = ai_uvr5_stem_engine::CascadedASPPNet::new(
                         512,
                         128,
                         req.vr_aggressiveness.clamp(-1.0, 1.0),
                     );
-                    let (vr_vocals, _vr_inst) = vr.separate_vocal_instrumental(&source_mix);
+                    let (vr_vocals, _vr_inst) =
+                        vr.separate_vocal_instrumental(&source_mix, effective_sr);
 
                     let mut ensembler = ai_uvr5_stem_engine::SpectralEnsembler::new(512, 128, mode);
                     ensembler.phase_denoise_strength = req.phase_denoise_strength.clamp(0.0, 1.0);
@@ -1545,7 +1586,7 @@ pub fn cmd_update_patcher_graph(
         return Err(format!("Insert slot index {} out of range (0..10)", slot));
     }
 
-    let sr = engine.slicer.sample_rate.max(8_000.0);
+    let sr = engine.slicer.sample_rate().max(8_000.0);
     let blk = daw_core_graph::MAX_BLOCK_SIZE;
     let (patcher, total_patcher_latency, host_in_enabled, host_out_enabled) =
         build_canvas_patcher(dto, sr)?;
@@ -2286,7 +2327,7 @@ pub fn cmd_load_external_plugin_slot_rt(
 
         Ok(LoadedExternalPluginInfoDto {
             track_idx,
-            slot_idx,
+            slot_idx: live_key_slot,
             is_clap: true,
             is_instrument: as_channel_instrument,
             name,
@@ -2360,7 +2401,7 @@ pub fn cmd_load_external_plugin_slot_rt(
 
         Ok(LoadedExternalPluginInfoDto {
             track_idx,
-            slot_idx,
+            slot_idx: live_key_slot,
             is_clap: false,
             is_instrument: as_channel_instrument,
             name,
@@ -2473,6 +2514,43 @@ pub fn cmd_set_external_plugin_param_rt(
 pub enum LivePluginEditor {
     Vst3(daw_plugin_host::Vst3LiveEditor),
     Clap(daw_plugin_host::ClapLiveEditor),
+}
+
+impl LivePluginEditor {
+    #[inline]
+    fn instance_id(&self) -> u64 {
+        match self {
+            Self::Vst3(e) => e.instance_id(),
+            Self::Clap(e) => e.instance_id(),
+        }
+    }
+}
+
+fn collect_retired_instance_ids(retired: &daw_core_graph::RetiredRtResource, out: &mut Vec<u64>) {
+    match retired {
+        daw_core_graph::RetiredRtResource::PluginSlot(slot_box) => {
+            if let Some(slot) = slot_box.as_ref() {
+                if let Some(id) = slot.plugin.hosted_instance_id() {
+                    out.push(id);
+                }
+            }
+        }
+        daw_core_graph::RetiredRtResource::Channel(ch_box) => {
+            if let Some(ch) = ch_box.as_ref() {
+                if let Some(id) = ch.generator.hosted_instance_id() {
+                    out.push(id);
+                }
+            }
+        }
+        daw_core_graph::RetiredRtResource::ChannelBatch(batch) => {
+            for ch in batch.iter() {
+                if let Some(id) = ch.generator.hosted_instance_id() {
+                    out.push(id);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 enum GuiWorkerMsg {
@@ -2722,7 +2800,33 @@ impl ExternalPluginGuiWorker {
                                     }
                                 }
                             }
-                            GuiWorkerMsg::Dispose(retired) => drop(retired),
+                            GuiWorkerMsg::Dispose(retired) => {
+                                // Close and drop any live `IPlugView` / `clap_plugin_gui` attached to
+                                // this exact instance on the STA GUI thread BEFORE dropping `retired`
+                                // (`IEditController::terminate` / `clap_plugin::destroy`).
+                                let mut dying_ids = Vec::new();
+                                collect_retired_instance_ids(&retired, &mut dying_ids);
+                                if !dying_ids.is_empty() {
+                                    let keys_in_map: Vec<(u16, u8)> = map
+                                        .iter()
+                                        .filter_map(|(&k, inst)| match inst {
+                                            HostedGuiNode::Live { editor, .. }
+                                                if dying_ids.contains(&editor.instance_id()) =>
+                                            {
+                                                Some(k)
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect();
+                                    for k in keys_in_map {
+                                        if let Some(mut inst) = map.remove(&k) {
+                                            inst.close();
+                                        }
+                                    }
+                                    live.retain(|_, ed| !dying_ids.contains(&ed.instance_id()));
+                                }
+                                drop(retired);
+                            }
                             GuiWorkerMsg::Shutdown => {
                                 for (_, mut inst) in map.drain() {
                                     inst.close();

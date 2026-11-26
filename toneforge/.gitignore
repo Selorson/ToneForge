@@ -19,4 +19,3 @@
 
 # Keep compact Ozone 12 ONNX models (< 7 MB) tracked
 !/assets/ozone12/models/*.onnx
-!/assets/models/bsrnn_realtime/*.onnx

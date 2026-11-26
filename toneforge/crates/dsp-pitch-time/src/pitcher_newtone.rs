@@ -162,7 +162,9 @@ impl AutoPitchCorrectorNode {
         let shifter_r = FormantPitchShifter::new_low_latency_rt(sr);
         let hop = (shifter_l.latency_samples() / 4).max(64);
         let detector = PyinPitchDetector::with_range(sr, 55.0, 1200.0, hop);
-        let delay_cap = (shifter_l.latency_samples() * 4).next_power_of_two();
+        let delay_cap = (shifter_l.latency_samples() * 4)
+            .next_power_of_two()
+            .max(8192);
 
         Self {
             sample_rate: sr,

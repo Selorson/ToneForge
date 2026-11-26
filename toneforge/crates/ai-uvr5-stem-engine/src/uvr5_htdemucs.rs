@@ -279,27 +279,46 @@ impl HTDemucs4 {
         }
     }
 
-    /// Separates a stereo waveform into 4 stems in `DemucsStem` order (`[Drums, Bass, Other, Vocals]`)
-    /// by ensembling the real GPU/ORT `OzoneBsrnnOnnxSeparator` (`ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx`,
-    /// weighted by `spectral_branch_weight`) with the real 3-model `.npz` `GruThreeStemSeparator`
-    /// (`vocals/drums/bass-small_sanitized.npz`, weighted by `time_branch_weight`), falling back cleanly
-    /// to `GruThreeStemSeparator` when ONNX Runtime is unavailable.
-    pub fn separate_4stems(&self, mix: &[StereoFrame]) -> [Vec<StereoFrame>; 4] {
+    /// Separates a stereo waveform at `source_sr` Hz into 4 stems in `DemucsStem` order
+    /// (`[Drums, Bass, Other, Vocals]`) by ensembling the real GPU/ORT `OzoneBsrnnOnnxSeparator`
+    /// (`ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx`, weighted by `spectral_branch_weight`) with the
+    /// real 3-model `.npz` `GruThreeStemSeparator` (`vocals/drums/bass-small_sanitized.npz`, weighted
+    /// by `time_branch_weight`), falling back cleanly to `GruThreeStemSeparator` when ONNX Runtime is unavailable.
+    pub fn separate_4stems(&self, mix: &[StereoFrame], source_sr: u32) -> [Vec<StereoFrame>; 4] {
         let len = mix.len();
         if len == 0 {
             return [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         }
+        let sr = source_sr.clamp(8_000, 384_000);
 
         let bsrnn_out: Option<[Vec<StereoFrame>; 4]> = GLOBAL_HTDEMUCS_BSRNN
-            .with(
-                || OzoneBsrnnOnnxSeparator::from_default_assets().ok(),
-                |sep| sep.separate_4stems_offline(mix),
+            .with_fallible(
+                || {
+                    crate::idle_release::classify_onnx_load(
+                        crate::onnx_gpu_runtime::resolve_ozone_bsrnn_onnx_path(),
+                        OzoneBsrnnOnnxSeparator::from_model_path,
+                    )
+                },
+                |sep| {
+                    let mix_48k = crate::mdx_onnx_gpu::resample_stereo_frames(mix, sr, 48_000);
+                    let [v48, d48, b48, _o48] = sep.separate_4stems_offline(&mix_48k)?;
+                    let vocals = crate::mdx_onnx_gpu::resample_stereo_frames(&v48, 48_000, sr);
+                    let drums = crate::mdx_onnx_gpu::resample_stereo_frames(&d48, 48_000, sr);
+                    let bass = crate::mdx_onnx_gpu::resample_stereo_frames(&b48, 48_000, sr);
+                    let mut other = vec![[0.0f32; 2]; len];
+                    for i in 0..len {
+                        other[i] = [
+                            mix[i][0] - (vocals[i][0] + drums[i][0] + bass[i][0]),
+                            mix[i][1] - (vocals[i][1] + drums[i][1] + bass[i][1]),
+                        ];
+                    }
+                    Ok::<[Vec<StereoFrame>; 4], String>([drums, bass, other, vocals])
+                },
             )
-            .and_then(Result::ok)
-            .map(|[vocals, drums, bass, other]| [drums, bass, other, vocals]);
+            .and_then(Result::ok);
 
         let gru_out = GruThreeStemSeparator::from_global_cache().map(|mut gru| {
-            let [vocals, drums, bass, other] = gru.separate_4stems(mix, 48_000);
+            let [vocals, drums, bass, other] = gru.separate_4stems(mix, sr);
             [drums, bass, other, vocals]
         });
 

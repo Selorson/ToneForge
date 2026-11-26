@@ -8,7 +8,8 @@
 //! Vì sao chỉ 15 s: đo cùng file 30 s — tách lần đầu 21,5 s, tách ngay khi còn nạp sẵn 20,8 s, tách lại sau
 //! khi đã nhả 21,3 s. Nạp lại chỉ tốn ~0,5 s, nên giữ VRAM lâu hơn không đáng.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,21 +22,45 @@ pub trait Release: Sync {
 }
 
 static LAST_USED: Mutex<Option<Instant>> = Mutex::new(None);
+static ACTIVE_BORROWS: AtomicUsize = AtomicUsize::new(0);
 static WATCHER: OnceLock<()> = OnceLock::new();
 static SLOTS: Mutex<Vec<&'static dyn Release>> = Mutex::new(Vec::new());
+
+struct ActiveBorrowGuard;
+
+impl ActiveBorrowGuard {
+    fn enter() -> Self {
+        ACTIVE_BORROWS.fetch_add(1, Ordering::AcqRel);
+        touch();
+        Self
+    }
+}
+
+impl Drop for ActiveBorrowGuard {
+    fn drop(&mut self) {
+        ACTIVE_BORROWS.fetch_sub(1, Ordering::AcqRel);
+        touch();
+    }
+}
 
 pub fn register(slot: &'static dyn Release) {
     SLOTS.lock().unwrap_or_else(|e| e.into_inner()).push(slot);
 }
 
-/// Đánh dấu vừa dùng xong một bộ tách; lần đầu gọi thì bật luồng canh.
+/// Đánh dấu vừa dùng một bộ tách; lần đầu gọi thì bật luồng canh.
 pub fn touch() {
     *LAST_USED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     WATCHER.get_or_init(|| {
         let _ = std::thread::Builder::new().name("stem-idle-release".into()).spawn(|| loop {
             std::thread::sleep(CHECK_EVERY);
+            if ACTIVE_BORROWS.load(Ordering::Acquire) > 0 {
+                continue;
+            }
             let mut last = LAST_USED.lock().unwrap_or_else(|e| e.into_inner());
-            if should_release(*last, Instant::now(), IDLE_RELEASE) && release_all() {
+            if ACTIVE_BORROWS.load(Ordering::Acquire) == 0
+                && should_release(*last, Instant::now(), IDLE_RELEASE)
+                && release_all()
+            {
                 *last = None;
             }
         });
@@ -51,6 +76,35 @@ fn release_all() -> bool {
     slots.iter().fold(true, |all, s| s.release() && all)
 }
 
+/// Phân loại lỗi nạp phiên ONNX:
+/// - `Permanent`: thiếu file `.onnx` trên đĩa hoặc máy không có DLL ONNX Runtime -> nhớ trạng thái `Failed`.
+/// - `Transient`: thiếu VRAM tạm thời (CUDA OOM khi ComfyUI/Akunarch đang chạy) -> trả về `Empty` để lần sau nạp lại.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdleLoadError {
+    Permanent,
+    Transient,
+}
+
+/// Tiện ích nạp model ONNX phân biệt lỗi thiếu file/DLL (`Permanent`) và lỗi tạo phiên/OOM tạm thời (`Transient`).
+pub fn classify_onnx_load<T>(
+    model_path_opt: Option<PathBuf>,
+    loader: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, IdleLoadError> {
+    let Some(path) = model_path_opt else {
+        return Err(IdleLoadError::Permanent);
+    };
+    if !path.is_file() {
+        return Err(IdleLoadError::Permanent);
+    }
+    if crate::onnx_gpu_runtime::GpuRuntimeManager::global()
+        .environment()
+        .is_none()
+    {
+        return Err(IdleLoadError::Permanent);
+    }
+    loader(&path).map_err(|_| IdleLoadError::Transient)
+}
+
 enum SlotState<T> {
     Empty,
     Loaded(T),
@@ -58,7 +112,7 @@ enum SlotState<T> {
 }
 
 /// Ô chứa một bộ tách: nạp lười, nhả được khi rảnh, tự nạp lại lần dùng sau.
-/// Nạp hỏng (thiếu DLL/model) thì nhớ là hỏng như hành vi cũ, không thử lại mỗi lần.
+/// Nạp hỏng vĩnh viễn (thiếu DLL/model) thì nhớ là hỏng, còn lỗi CUDA/OOM tạm thời thì giữ `Empty` để thử lại.
 pub struct IdleSlot<T: Send + 'static> {
     state: Mutex<SlotState<T>>,
     registered: AtomicBool,
@@ -69,26 +123,36 @@ impl<T: Send + 'static> IdleSlot<T> {
         Self { state: Mutex::new(SlotState::Empty), registered: AtomicBool::new(false) }
     }
 
-    /// Chạy `f` trên bộ tách, nạp bằng `load` nếu ô đang trống. `None` nếu nạp hỏng.
+    /// Chạy `f` trên bộ tách, nạp bằng `load` nếu ô đang trống (`None` = lỗi vĩnh viễn).
     pub fn with<R>(&'static self, load: impl FnOnce() -> Option<T>, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        self.with_fallible(
+            || load().ok_or(IdleLoadError::Permanent),
+            f,
+        )
+    }
+
+    /// Chạy `f` trên bộ tách với phân loại lỗi `Permanent` (khóa `Failed`) vs `Transient` (về `Empty` thử lại sau).
+    pub fn with_fallible<R>(
+        &'static self,
+        load: impl FnOnce() -> Result<T, IdleLoadError>,
+        f: impl FnOnce(&mut T) -> R,
+    ) -> Option<R> {
         if !self.registered.swap(true, Ordering::AcqRel) {
             register(self);
         }
-        let out = {
-            let mut st = self.state.lock().ok()?;
-            if matches!(*st, SlotState::Empty) {
-                *st = match load() {
-                    Some(t) => SlotState::Loaded(t),
-                    None => SlotState::Failed,
-                };
-            }
-            match &mut *st {
-                SlotState::Loaded(t) => Some(f(t)),
-                _ => None,
-            }
-        };
-        touch();
-        out
+        let _borrow_guard = ActiveBorrowGuard::enter();
+        let mut st = self.state.lock().ok()?;
+        if matches!(*st, SlotState::Empty) {
+            *st = match load() {
+                Ok(t) => SlotState::Loaded(t),
+                Err(IdleLoadError::Permanent) => SlotState::Failed,
+                Err(IdleLoadError::Transient) => SlotState::Empty,
+            };
+        }
+        match &mut *st {
+            SlotState::Loaded(t) => Some(f(t)),
+            _ => None,
+        }
     }
 }
 

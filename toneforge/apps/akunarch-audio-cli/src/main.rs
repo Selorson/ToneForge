@@ -48,13 +48,14 @@ struct MasterReport {
 
 fn print_usage() {
     println!(
-        "akunarch-audio-cli 0.1.0 (ToneForge DSP: Pro-Q 4 + Soothe3 + Ozone 12 IRC V)\n\
+        "akunarch-audio-cli {} (ToneForge DSP: Pro-Q 4 + Soothe3 + Ozone 12 IRC V)\n\
          Usage:\n\
            akunarch-audio-cli --version\n\
            akunarch-audio-cli analyze --in <audio_file> [--json]\n\
            akunarch-audio-cli master --in <voice_or_mix> --out <master.wav> [--bgm <bgm_file>] \
          [--bgm-gain-db -11.0] [--duck-db -5.5] [--target-lufs -14.0] [--ceiling-dbtp -1.0] \
-         [--duration-sec <sec>] [--json]"
+         [--duration-sec <sec>] [--json]",
+        env!("CARGO_PKG_VERSION")
     );
 }
 
@@ -123,16 +124,45 @@ fn decode_audio_to_stereo_48k(path: &Path) -> Result<Vec<StereoFrame>, String> {
         let samples = sbuf.samples();
         for f in 0..frames {
             let base = f * ch_count;
-            let l = samples.get(base).copied().unwrap_or(0.0);
-            let r = if ch_count >= 2 {
-                samples.get(base + 1).copied().unwrap_or(l)
-            } else {
-                l
+            let at_ch = |c: usize| -> f32 {
+                let v = samples.get(base + c).copied().unwrap_or(0.0);
+                if v.is_finite() { v } else { 0.0 }
             };
-            raw_stereo.push([
-                if l.is_finite() { l } else { 0.0 },
-                if r.is_finite() { r } else { 0.0 },
-            ]);
+            // ITU-R BS.775-3 stereo downmix preserving Center dialogue (`0.7071 * C`) and surrounds
+            let (l, r) = match ch_count {
+                1 => {
+                    let m = at_ch(0);
+                    (m, m)
+                }
+                2 => (at_ch(0), at_ch(1)),
+                3 => {
+                    let c = 0.707_106_77 * at_ch(2);
+                    (at_ch(0) + c, at_ch(1) + c)
+                }
+                4 => (
+                    at_ch(0) + 0.707_106_77 * at_ch(2),
+                    at_ch(1) + 0.707_106_77 * at_ch(3),
+                ),
+                5 => {
+                    let c = 0.707_106_77 * at_ch(2);
+                    (
+                        at_ch(0) + c + 0.707_106_77 * at_ch(3),
+                        at_ch(1) + c + 0.707_106_77 * at_ch(4),
+                    )
+                }
+                _ => {
+                    // 5.1 / 7.1 (`L, R, C, LFE, Ls, Rs, [Lrs, Rrs]`)
+                    let c = 0.707_106_77 * at_ch(2);
+                    let mut dl = at_ch(0) + c + 0.707_106_77 * at_ch(4);
+                    let mut dr = at_ch(1) + c + 0.707_106_77 * at_ch(5);
+                    if ch_count >= 8 {
+                        dl += 0.5 * at_ch(6);
+                        dr += 0.5 * at_ch(7);
+                    }
+                    (dl, dr)
+                }
+            };
+            raw_stereo.push([l, r]);
         }
     }
 
@@ -144,45 +174,89 @@ fn decode_audio_to_stereo_48k(path: &Path) -> Result<Vec<StereoFrame>, String> {
         return Ok(raw_stereo);
     }
 
-    // Hermite 4-point cubic resampling to 48,000 Hz
-    let ratio = (src_sr as f64) / (TARGET_SR as f64);
-    let out_len = (((raw_stereo.len() as f64) / ratio).round() as usize).max(1);
-    let mut resampled = Vec::with_capacity(out_len);
-    let max_idx = (raw_stereo.len() - 1) as isize;
+    Ok(resample_stereo_kaiser_sinc(&raw_stereo, src_sr, TARGET_SR))
+}
 
+/// Anti-aliased Kaiser-windowed (`beta = 8.0`, ~80 dB stopband) sinc resampler preventing
+/// ultrasonic fold-back aliasing when downsampling (`96/192 kHz -> 48 kHz`) as well as imaging
+/// when upsampling (`22.05/44.1 kHz -> 48 kHz`).
+fn resample_stereo_kaiser_sinc(
+    input: &[StereoFrame],
+    src_sr: u32,
+    dst_sr: u32,
+) -> Vec<StereoFrame> {
+    if input.is_empty() || src_sr == 0 || dst_sr == 0 {
+        return Vec::new();
+    }
+    if src_sr == dst_sr {
+        return input.to_vec();
+    }
+    let ratio = (src_sr as f64) / (dst_sr as f64);
+    let out_len = (((input.len() as f64) / ratio).round() as usize).max(1);
+    let max_idx = (input.len() - 1) as isize;
+
+    // Normalized cutoff relative to input Nyquist (scaled down when downsampling: ratio > 1.0)
+    let cutoff = if ratio > 1.0 {
+        0.94 / ratio
+    } else {
+        0.94
+    };
+    let half_zeros = 24usize;
+    let half_width = (half_zeros as f64) / cutoff;
+    let tap_radius = half_width.ceil() as isize;
+    let beta = 8.0_f64;
+    let inv_i0_beta = 1.0 / dsp_proq4_eq::bessel_i0(beta);
+
+    let mut resampled = Vec::with_capacity(out_len);
     for i in 0..out_len {
         let src_pos = (i as f64) * ratio;
-        let idx = src_pos.floor() as isize;
-        let frac = (src_pos - (idx as f64)) as f32;
-        let at = |k: isize| -> StereoFrame {
-            raw_stereo[k.clamp(0, max_idx) as usize]
-        };
-        let p0 = at(idx - 1);
-        let p1 = at(idx);
-        let p2 = at(idx + 1);
-        let p3 = at(idx + 2);
-        let mut frame = [0.0f32; 2];
-        for c in 0..2 {
-            let c0 = p1[c];
-            let c1 = 0.5 * (p2[c] - p0[c]);
-            let c2 = p0[c] - 2.5 * p1[c] + 2.0 * p2[c] - 0.5 * p3[c];
-            let c3 = 0.5 * (p3[c] - p0[c]) + 1.5 * (p1[c] - p2[c]);
-            frame[c] = ((c3 * frac + c2) * frac + c1) * frac + c0;
+        let center = src_pos.floor() as isize;
+        let mut acc_l = 0.0_f64;
+        let mut acc_r = 0.0_f64;
+        let mut w_sum = 0.0_f64;
+
+        for k in (center - tap_radius)..=(center + tap_radius) {
+            let d = src_pos - (k as f64);
+            let u = d / half_width;
+            if u.abs() >= 1.0 {
+                continue;
+            }
+            let x_pi = std::f64::consts::PI * d * cutoff;
+            let sinc = if x_pi.abs() < 1e-9 {
+                cutoff
+            } else {
+                cutoff * (x_pi.sin() / (std::f64::consts::PI * d))
+            };
+            let kaiser = dsp_proq4_eq::bessel_i0(beta * (1.0 - u * u).max(0.0).sqrt()) * inv_i0_beta;
+            let w = sinc * kaiser;
+            let frame = input[k.clamp(0, max_idx) as usize];
+            acc_l += (frame[0] as f64) * w;
+            acc_r += (frame[1] as f64) * w;
+            w_sum += w;
         }
-        resampled.push(frame);
+        let inv_w = if w_sum.abs() > 1e-12 { 1.0 / w_sum } else { 1.0 };
+        resampled.push([(acc_l * inv_w) as f32, (acc_r * inv_w) as f32]);
     }
 
-    Ok(resampled)
+    resampled
 }
 
 fn measure_lufs_and_tp(frames: &[StereoFrame], sr: f64) -> (f32, f32, f32) {
     let mut meter = LufsTruePeakMeter::new(sr);
     meter.push_block(frames, 0.0);
-    (
-        meter.lufs_integrated,
-        meter.lufs_short_term,
-        meter.max_true_peak_dbtp(),
-    )
+    // For short clips (< 400 ms BS.1770 gating window), fall back to ungated K-weighted mean-square LUFS
+    // so mechanical chimes / short SFX still calibrate accurately to `-14.0 LUFS`.
+    let integrated = if meter.integrated_is_defined() {
+        meter.lufs_integrated
+    } else {
+        meter.ungated_programme_lufs()
+    };
+    let short_term = if meter.lufs_short_term <= -69.5 && !frames.is_empty() {
+        integrated
+    } else {
+        meter.lufs_short_term
+    };
+    (integrated, short_term, meter.max_true_peak_dbtp())
 }
 
 fn run_proq4_and_soothe3(frames: &mut [StereoFrame], sr: f64) {
@@ -293,8 +367,29 @@ fn mix_bgm_with_ducking(
         let voice_active = ((env - 0.015) / 0.085).clamp(0.0, 1.0);
         let duck_mul = 1.0 - voice_active * (1.0 - max_duck_lin);
 
-        // Seamless crossfaded loop of BGM
-        let bgm_sample = bgm_frames[i % bgm_frames.len()];
+        // Seamless equal-power crossfaded loop of BGM
+        let bgm_len = bgm_frames.len();
+        let loop_xfade = ((0.050 * (TARGET_SR as f64)) as usize).min(bgm_len / 4);
+        let bgm_sample = if loop_xfade > 0 && bgm_len > loop_xfade * 2 {
+            let period = bgm_len - loop_xfade;
+            let loop_idx = i / period;
+            let pos = i % period;
+            if loop_idx > 0 && pos < loop_xfade {
+                let phase = (pos as f32) / (loop_xfade as f32) * std::f32::consts::FRAC_PI_2;
+                let w_in = phase.sin();
+                let w_out = phase.cos();
+                let s_head = bgm_frames[pos];
+                let s_tail = bgm_frames[period + pos];
+                [
+                    s_head[0] * w_in + s_tail[0] * w_out,
+                    s_head[1] * w_in + s_tail[1] * w_out,
+                ]
+            } else {
+                bgm_frames[pos]
+            }
+        } else {
+            bgm_frames[i % bgm_len]
+        };
         let edge_fade = if fade_samples > 0 && i < fade_samples {
             (i as f32) / (fade_samples as f32)
         } else if fade_samples > 0 && i + fade_samples >= total {
@@ -321,6 +416,7 @@ fn run_irc_v_limiter_pass(
     maximizer.prevent_intersample_clipping = true;
     maximizer.enable_soft_clip = true;
     maximizer.soft_clip_mix = 0.22;
+    maximizer.sync_core_parameters();
     maximizer.prepare(sr, BLOCK_SIZE);
 
     let latency = UnifiedDspNode::latency_samples(&maximizer);
@@ -407,7 +503,10 @@ fn main() {
         return;
     }
     if matches!(args[0].as_str(), "-V" | "--version" | "version") {
-        println!("akunarch-audio-cli 0.1.0 (ToneForge DSP: Pro-Q 4 + Soothe3 + Ozone 12 IRC V)");
+        println!(
+            "akunarch-audio-cli {} (ToneForge DSP: Pro-Q 4 + Soothe3 + Ozone 12 IRC V)",
+            env!("CARGO_PKG_VERSION")
+        );
         return;
     }
 

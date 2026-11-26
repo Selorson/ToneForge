@@ -104,7 +104,7 @@ impl TempoMap {
 /// Hybrid PPQ Tick / Sample Slicer (`sub_d0ece0` at `0x00d0ece0` in `FLEngine_x64.dll`).
 #[derive(Clone, Debug)]
 pub struct HybridPpqSlicer {
-    pub sample_rate: f64,
+    sample_rate: f64,
     pub bpm: f64,
     pub ppq: u32,
     pub current_sample_pos: i64,    // `.bss` `0x15e0b78` (`CurrentSamplePos`)
@@ -160,6 +160,12 @@ impl HybridPpqSlicer {
         self.ppq = ppq.clamp(MIN_PPQ, MAX_PPQ);
         self.samples_per_tick_f64 =
             Self::compute_samples_per_tick(self.sample_rate, self.bpm, self.ppq);
+    }
+
+    /// Current sample rate in Hz.
+    #[inline]
+    pub fn sample_rate(&self) -> f64 {
+        self.sample_rate
     }
 
     /// Updates sample rate and recalculates `samples_per_tick_f64`.

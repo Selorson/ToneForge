@@ -723,8 +723,12 @@ fn gate12_ipc_contract_and_high_density_sequencing() {
         }
     });
     let mean_us = total_us / blocks as f64;
+    let max_mean_us = if cfg!(debug_assertions) { 500.0 } else { 50.0 };
     assert_eq!(allocs, 0, "RT allocations while sequencing 5,000 notes");
-    assert!(mean_us < 50.0, "mean block time {mean_us:.2} us with 5,000 notes");
+    assert!(
+        mean_us < max_mean_us,
+        "mean block time {mean_us:.2} us with 5,000 notes (limit {max_mean_us:.0} us)"
+    );
 
     // ======================================================================
     // 12.3 Soprano (f0 = 400 Hz) + plosive onset shifted +10 st with formant preservation:

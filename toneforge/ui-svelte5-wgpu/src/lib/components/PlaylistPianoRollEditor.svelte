@@ -9,7 +9,11 @@
   let { telemetry }: { telemetry: DawTelemetryView } = $props();
 
   const PPQ_OPTIONS = [96, 144, 192, 384, 480, 960] as const;
-  const TIMELINE_TICKS = 384;
+  let timelineTicks = $derived(telemetry.ppqResolution * 4);
+  let step16thTicks = $derived(Math.max(1, Math.round(telemetry.ppqResolution / 4)));
+  let step32ndTicks = $derived(Math.max(1, Math.round(telemetry.ppqResolution / 8)));
+  let defaultNoteTicks = $derived(Math.max(2, Math.round(telemetry.ppqResolution / 2)));
+  let strumTicks = $derived(Math.max(1, Math.round(telemetry.ppqResolution / 12)));
   const PIANO_KEYS = [
     { key: 75, label: 'D#5' },
     { key: 74, label: 'D5' },
@@ -78,7 +82,7 @@
   let viewStartTick = $state(0);
   const MAX_GHOST_NOTES_RENDERED = 2_000;
   function inView(startTick: number, durationTicks: number): boolean {
-    return startTick < viewStartTick + TIMELINE_TICKS && startTick + durationTicks > viewStartTick;
+    return startTick < viewStartTick + timelineTicks && startTick + durationTicks > viewStartTick;
   }
   let visibleNotesByKey = $derived.by(() => {
     const m = new Map<number, PianoRollNoteUiState[]>();
@@ -105,7 +109,7 @@
   });
   let visibleNotes = $derived((activePattern?.notes ?? []).filter((n) => inView(n.startTick, n.durationTicks)));
   function scrollView(deltaTicks: number) {
-    const maxStart = Math.max(0, (activePattern?.lengthTicks ?? TIMELINE_TICKS) - TIMELINE_TICKS);
+    const maxStart = Math.max(0, (activePattern?.lengthTicks ?? timelineTicks) - timelineTicks);
     viewStartTick = Math.max(0, Math.min(maxStart, viewStartTick + deltaTicks));
   }
 
@@ -116,9 +120,9 @@
     const samples = 96;
     const coords: string[] = [];
     for (let i = 0; i <= samples; i++) {
-      const tick = (i / samples) * TIMELINE_TICKS;
+      const tick = (i / samples) * timelineTicks;
       const normY = telemetry.evaluateTensionSplineAt(tick);
-      const xPct = (tick / TIMELINE_TICKS) * 100;
+      const xPct = (tick / timelineTicks) * 100;
       const yPct = (1.0 - Math.max(0, Math.min(1, normY))) * 100;
       coords.push(`${i === 0 ? 'M' : 'L'} ${xPct.toFixed(2)} ${yPct.toFixed(2)}`);
     }
@@ -134,7 +138,7 @@
         telemetry.pianoRollPatterns[0];
     }
     if (!targetPattern) return;
-    const startTick = viewStartTick + tickStep * 24;
+    const startTick = viewStartTick + tickStep * step16thTicks;
     const existing = targetPattern.notes.find(
       (n) => n.key === key && startTick >= n.startTick && startTick < n.startTick + n.durationTicks
     );
@@ -145,7 +149,7 @@
     }
     await telemetry.addPianoRollNote(targetPattern.patternId, {
       startTick,
-      durationTicks: 48,
+      durationTicks: defaultNoteTicks,
       key,
       velocity: 0.88,
       pan: 0.0,
@@ -153,6 +157,24 @@
       isSlide: telemetry.pianoRollSlideTool,
       colorGroup: telemetry.pianoRollColorGroup,
     });
+  }
+
+  let pendingNoteSyncPatternId: number | null = null;
+  let noteDragRafId: number | null = null;
+  let splineDragRafId: number | null = null;
+
+  function scheduleNotePatternSync(patternId: number): void {
+    pendingNoteSyncPatternId = patternId;
+    if (noteDragRafId === null && typeof requestAnimationFrame !== 'undefined') {
+      noteDragRafId = requestAnimationFrame(() => {
+        noteDragRafId = null;
+        if (pendingNoteSyncPatternId !== null) {
+          const pid = pendingNoteSyncPatternId;
+          pendingNoteSyncPatternId = null;
+          void telemetry.syncPianoRollPattern(pid);
+        }
+      });
+    }
   }
 
   function startNoteDrag(
@@ -173,23 +195,38 @@
   function handlePianoRollMouseMove(e: MouseEvent) {
     if (draggingNoteId === null || !activePattern || !dragMode) return;
     const deltaPx = e.clientX - dragStartX;
-    const deltaTicks = Math.round(deltaPx / 12) * 12;
-    if (dragMode === 'move') {
-      const patLen = Math.max(TIMELINE_TICKS, activePattern.lengthTicks || TIMELINE_TICKS);
-      const nextStart = Math.max(0, Math.min(patLen - 12, dragOrigStartTick + deltaTicks));
-      telemetry.updatePianoRollNote(activePattern.patternId, draggingNoteId, {
-        startTick: nextStart,
-      });
-    } else {
-      const patLen = Math.max(TIMELINE_TICKS, activePattern.lengthTicks || TIMELINE_TICKS);
-      const nextDur = Math.max(12, Math.min(patLen, dragOrigDuration + deltaTicks));
-      telemetry.updatePianoRollNote(activePattern.patternId, draggingNoteId, {
-        durationTicks: nextDur,
-      });
-    }
+    const deltaTicks = Math.round(deltaPx / 12) * step32ndTicks;
+    const patLen = Math.max(timelineTicks, activePattern.lengthTicks || timelineTicks);
+    const patch: Partial<PianoRollNoteUiState> =
+      dragMode === 'move'
+        ? {
+            startTick: Math.max(
+              0,
+              Math.min(patLen - step32ndTicks, dragOrigStartTick + deltaTicks)
+            ),
+          }
+        : {
+            durationTicks: Math.max(
+              step32ndTicks,
+              Math.min(patLen, dragOrigDuration + deltaTicks)
+            ),
+          };
+    activePattern.notes = activePattern.notes
+      .map((n) => (n.id === draggingNoteId ? { ...n, ...patch } : n))
+      .sort((a, b) => a.startTick - b.startTick || a.id - b.id);
+    scheduleNotePatternSync(activePattern.patternId);
   }
 
   function stopNoteDrag() {
+    if (noteDragRafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(noteDragRafId);
+      noteDragRafId = null;
+    }
+    if (pendingNoteSyncPatternId !== null) {
+      const pid = pendingNoteSyncPatternId;
+      pendingNoteSyncPatternId = null;
+      void telemetry.syncPianoRollPattern(pid);
+    }
     draggingNoteId = null;
     dragMode = null;
   }
@@ -200,7 +237,7 @@
     if (rect.width <= 0 || rect.height <= 0) return;
     const relX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const relY = Math.max(0, Math.min(1, 1.0 - (e.clientY - rect.top) / rect.height));
-    telemetry.addTensionSplinePoint(Math.round(relX * TIMELINE_TICKS), Number(relY.toFixed(3)), 0.0);
+    telemetry.addTensionSplinePoint(Math.round(relX * timelineTicks), Number(relY.toFixed(3)), 0.0);
   }
 
   function handleSplineMouseMove(e: MouseEvent) {
@@ -210,10 +247,35 @@
     if (rect.width <= 0 || rect.height <= 0) return;
     const relX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const relY = Math.max(0, Math.min(1, 1.0 - (e.clientY - rect.top) / rect.height));
-    telemetry.updateTensionSplinePoint(draggingSplineIdx, {
-      x: Math.round(relX * TIMELINE_TICKS),
-      y: Number(relY.toFixed(3)),
-    });
+    const x = Math.round(relX * timelineTicks);
+    const y = Number(relY.toFixed(3));
+    const idx = draggingSplineIdx;
+    if (idx >= 0 && idx < telemetry.tensionSplinePoints.length) {
+      const updated = { ...telemetry.tensionSplinePoints[idx], x, y };
+      const nextPts = telemetry.tensionSplinePoints
+        .map((pt, i) => (i === idx ? updated : pt))
+        .sort((a, b) => a.x - b.x);
+      const nextIdx = nextPts.indexOf(updated);
+      if (nextIdx >= 0) {
+        draggingSplineIdx = nextIdx;
+      }
+      telemetry.tensionSplinePoints = nextPts;
+      if (splineDragRafId === null && typeof requestAnimationFrame !== 'undefined') {
+        splineDragRafId = requestAnimationFrame(() => {
+          splineDragRafId = null;
+          void telemetry.syncTensionSplineToEngine();
+        });
+      }
+    }
+  }
+
+  function stopSplineDrag() {
+    if (splineDragRafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(splineDragRafId);
+      splineDragRafId = null;
+      void telemetry.syncTensionSplineToEngine();
+    }
+    draggingSplineIdx = null;
   }
 </script>
 
@@ -374,12 +436,12 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="clip-block kind-{clip.kind.toLowerCase()} {telemetry.selectedClipId === clip.clipId ? 'selected-clip' : ''}"
-                style="left: {(clip.startTick / TIMELINE_TICKS) * 100}%; width: {(clip.durationTicks / TIMELINE_TICKS) * 100}%;"
+                style="left: {(clip.startTick / timelineTicks) * 100}%; width: {(clip.durationTicks / timelineTicks) * 100}%;"
                 onclick={(e) => {
                   telemetry.selectedClipId = clip.clipId;
                   if (telemetry.playlistTool === 'razor') {
                     const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                    const clickTick = Math.round(((e.clientX - rect.left) / Math.max(1, rect.width)) * TIMELINE_TICKS);
+                    const clickTick = Math.round(((e.clientX - rect.left) / Math.max(1, rect.width)) * timelineTicks);
                     telemetry.sliceOrEditPlaylistClip(clip.clipId, 'slice', { splitTick: clickTick });
                   }
                 }}
@@ -515,13 +577,13 @@
           class="spline-svg"
           ondblclick={handleSplineSvgDblClick}
           onmousemove={handleSplineMouseMove}
-          onmouseup={() => (draggingSplineIdx = null)}
-          onmouseleave={() => (draggingSplineIdx = null)}
+          onmouseup={stopSplineDrag}
+          onmouseleave={stopSplineDrag}
         >
           <path d={splineSvgPath} fill="none" stroke="#76D2DB" stroke-width="1.6" />
           {#each telemetry.tensionSplinePoints as pt, idx}
             <circle
-              cx={(pt.x / TIMELINE_TICKS) * 100}
+              cx={(pt.x / timelineTicks) * 100}
               cy={(1.0 - pt.y) * 100}
               r="2.4"
               fill={draggingSplineIdx === idx ? '#fbbf24' : '#4ade80'}
@@ -597,7 +659,7 @@
               onclick={() =>
                 telemetry.transformPianoRollNotes(activePattern.patternId, 'quantize', {
                   noteIds: telemetry.selectedNoteIds.length > 0 ? telemetry.selectedNoteIds : undefined,
-                  gridTicks: 24,
+                  gridTicks: step16thTicks,
                   strength: 1.0,
                 })}
               title="Căn chỉnh nốt vào đúng vạch nhịp 1/16 (Quantize)"
@@ -608,7 +670,7 @@
               onclick={() =>
                 telemetry.transformPianoRollNotes(activePattern.patternId, 'strum', {
                   noteIds: telemetry.selectedNoteIds.length > 0 ? telemetry.selectedNoteIds : undefined,
-                  strumOffsetTicks: 8,
+                  strumOffsetTicks: strumTicks,
                 })}
               title="Rải hợp âm tự nhiên như gảy đàn Guitar/Harp (Strum)"
             >
@@ -618,7 +680,7 @@
               onclick={() =>
                 telemetry.transformPianoRollNotes(activePattern.patternId, 'arpeggiate', {
                   noteIds: telemetry.selectedNoteIds.length > 0 ? telemetry.selectedNoteIds : undefined,
-                  gridTicks: 24,
+                  gridTicks: step16thTicks,
                 })}
               title="Băm hợp âm thành chuỗi nốt chạy Arpeggio"
             >
@@ -673,8 +735,8 @@
         }}
         onmouseup={() => {
           if (lassoStart && lassoCurrent && activePattern) {
-            const minTick = viewStartTick + (Math.min(lassoStart.xPct, lassoCurrent.xPct) / 100) * TIMELINE_TICKS;
-            const maxTick = viewStartTick + (Math.max(lassoStart.xPct, lassoCurrent.xPct) / 100) * TIMELINE_TICKS;
+            const minTick = viewStartTick + (Math.min(lassoStart.xPct, lassoCurrent.xPct) / 100) * timelineTicks;
+            const maxTick = viewStartTick + (Math.max(lassoStart.xPct, lassoCurrent.xPct) / 100) * timelineTicks;
             const minKey = Math.min(lassoStart.key, lassoCurrent.key);
             const maxKey = Math.max(lassoStart.key, lassoCurrent.key);
             const picked = activePattern.notes
@@ -702,9 +764,9 @@
         }}
       >
         <div class="pr-view-nav">
-          <button onclick={() => scrollView(-TIMELINE_TICKS / 2)} title="Cuộn trái">◀</button>
-          <span>{viewStartTick}–{viewStartTick + TIMELINE_TICKS} tick · {visibleNotes.length}/{activePattern?.notes.length ?? 0} nốt hiển thị</span>
-          <button onclick={() => scrollView(TIMELINE_TICKS / 2)} title="Cuộn phải">▶</button>
+          <button onclick={() => scrollView(-timelineTicks / 2)} title="Cuộn trái">◀</button>
+          <span>{viewStartTick}–{viewStartTick + timelineTicks} tick · {visibleNotes.length}/{activePattern?.notes.length ?? 0} nốt hiển thị</span>
+          <button onclick={() => scrollView(timelineTicks / 2)} title="Cuộn phải">▶</button>
         </div>
         {#each PIANO_KEYS as row}
           <div class="pr-row">
@@ -727,8 +789,8 @@
                 <div
                   class="pr-ghost-note"
                   style="
-                    left: {((gNote.startTick - viewStartTick) / TIMELINE_TICKS) * 100}%;
-                    width: {(gNote.durationTicks / TIMELINE_TICKS) * 100}%;
+                    left: {((gNote.startTick - viewStartTick) / timelineTicks) * 100}%;
+                    width: {(gNote.durationTicks / timelineTicks) * 100}%;
                   "
                 ></div>
               {/each}
@@ -738,8 +800,8 @@
                   <div
                     class="pr-note {telemetry.selectedNoteId === note.id || telemetry.selectedNoteIds.includes(note.id) ? 'selected' : ''} {note.isSlide ? 'slide-note' : ''}"
                     style="
-                      left: {((note.startTick - viewStartTick) / TIMELINE_TICKS) * 100}%;
-                      width: {(note.durationTicks / TIMELINE_TICKS) * 100}%;
+                      left: {((note.startTick - viewStartTick) / timelineTicks) * 100}%;
+                      width: {(note.durationTicks / timelineTicks) * 100}%;
                       background: {COLOR_GROUP_PALETTE[note.colorGroup % COLOR_GROUP_PALETTE.length]};
                     "
                     onmousedown={(e) => {
@@ -796,7 +858,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="expr-stalk {telemetry.selectedNoteId === note.id ? 'selected' : ''}"
-                style="left: {((note.startTick - viewStartTick) / TIMELINE_TICKS) * 100}%; height: {Math.max(8, normVal * 100)}%;"
+                style="left: {((note.startTick - viewStartTick) / timelineTicks) * 100}%; height: {Math.max(8, normVal * 100)}%;"
                 title="Note #{note.id}: {telemetry.expressionLaneTarget} = {normVal.toFixed(2)}"
                 onclick={() => (telemetry.selectedNoteId = note.id)}
               ></div>

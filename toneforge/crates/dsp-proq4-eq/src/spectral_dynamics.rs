@@ -142,7 +142,7 @@ impl SpectralDynamicsCore {
 
         let fs = sample_rate.max(8000.0) as f32;
         let bin_hz = fs / (SPECTRAL_BASE_FFT_SIZE as f32);
-        let mut avg_density = 50.0f32;
+        let mut avg_density = 0.0f32;
         let mut active_count = 0usize;
 
         for b in bands {
@@ -192,7 +192,7 @@ impl SpectralDynamicsCore {
         }
 
         if active_count > 0 {
-            let density_norm = ((avg_density / (active_count as f32 + 1.0)) * 0.01).clamp(0.0, 1.0);
+            let density_norm = ((avg_density / (active_count as f32)) * 0.01).clamp(0.0, 1.0);
             // Low Spectral Density -> wide smoothing kernel; High Spectral Density -> sharp per-bin action
             self.smoothing_radius_bins = ((1.0 - density_norm) * 14.0).round() as usize + 1;
         }

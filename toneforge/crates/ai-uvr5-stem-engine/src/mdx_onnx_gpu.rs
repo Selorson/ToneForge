@@ -194,6 +194,7 @@ fn reflect_index(idx: isize, len: usize) -> usize {
 /// - Raised-Hann overlap-add chunking + `* compensate`.
 pub struct Uvr5MdxOnnxSeparator {
     session: Session,
+    shrink_run_opts: Option<ort::session::RunOptions>,
     model_path: PathBuf,
     config: MdxOnnxModelConfig,
     active_tier: GpuExecutionTier,
@@ -211,6 +212,10 @@ impl Uvr5MdxOnnxSeparator {
         let path = resolve_uvr5_kim_vocal2_onnx_path().ok_or_else(|| {
             "Kim_Vocal_2.onnx not found in assets/uvr5/models/MDX_Net_Models (run scripts/setup_gpu_and_models.ps1)".to_string()
         })?;
+        Self::from_kim_vocal_2_path(&path)
+    }
+
+    pub fn from_kim_vocal_2_path(path: &Path) -> Result<Self, String> {
         Self::from_model_path(path, MdxOnnxModelConfig::kim_vocal_2())
     }
 
@@ -218,6 +223,10 @@ impl Uvr5MdxOnnxSeparator {
         let path = resolve_uvr5_inst_hq3_onnx_path().ok_or_else(|| {
             "UVR-MDX-NET-Inst_HQ_3.onnx not found in assets/uvr5/models/MDX_Net_Models (run scripts/setup_gpu_and_models.ps1)".to_string()
         })?;
+        Self::from_inst_hq_3_path(&path)
+    }
+
+    pub fn from_inst_hq_3_path(path: &Path) -> Result<Self, String> {
         Self::from_model_path(path, MdxOnnxModelConfig::inst_hq_3())
     }
 
@@ -228,6 +237,11 @@ impl Uvr5MdxOnnxSeparator {
         let model_path = path.as_ref().to_path_buf();
         let mgr = GpuRuntimeManager::global();
         let (session, active_tier) = mgr.create_session(&model_path)?;
+        let shrink_run_opts = if active_tier == GpuExecutionTier::CudaTensorCore {
+            GpuRuntimeManager::gpu_arena_shrink_run_options()
+        } else {
+            None
+        };
 
         let n_fft = config.n_fft;
         let mut planner = RealFftPlanner::<f32>::new();
@@ -245,6 +259,7 @@ impl Uvr5MdxOnnxSeparator {
         let single_elems = 4 * config.dim_f * config.dim_t;
         Ok(Self {
             session,
+            shrink_run_opts,
             model_path,
             config,
             active_tier,
@@ -279,6 +294,7 @@ impl Uvr5MdxOnnxSeparator {
         chunk_l: &[f32],
         chunk_r: &[f32],
         enable_denoise_2pass: bool,
+        shrink_arena: bool,
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) -> Result<(), String> {
@@ -347,10 +363,13 @@ impl Uvr5MdxOnnxSeparator {
             ))
             .map_err(|e| e.to_string())?;
 
-            let outputs = self
-                .session
-                .run(ort::inputs!["input" => t_in])
-                .map_err(|e| format!("{} ONNX batch=2 run failed: {}", self.config.model_name, e))?;
+            let inputs = ort::inputs!["input" => t_in];
+            let outputs = if shrink_arena && let Some(ref opts) = self.shrink_run_opts {
+                self.session.run_with_options(inputs, opts)
+            } else {
+                self.session.run(inputs)
+            }
+            .map_err(|e| format!("{} ONNX batch=2 run failed: {}", self.config.model_name, e))?;
 
             let (_, out_slice) = outputs["output"]
                 .try_extract_tensor::<f32>()
@@ -367,10 +386,13 @@ impl Uvr5MdxOnnxSeparator {
             ))
             .map_err(|e| e.to_string())?;
 
-            let outputs = self
-                .session
-                .run(ort::inputs!["input" => t_in])
-                .map_err(|e| format!("{} ONNX batch=1 run failed: {}", self.config.model_name, e))?;
+            let inputs = ort::inputs!["input" => t_in];
+            let outputs = if shrink_arena && let Some(ref opts) = self.shrink_run_opts {
+                self.session.run_with_options(inputs, opts)
+            } else {
+                self.session.run(inputs)
+            }
+            .map_err(|e| format!("{} ONNX batch=1 run failed: {}", self.config.model_name, e))?;
 
             let (_, out_slice) = outputs["output"]
                 .try_extract_tensor::<f32>()
@@ -488,10 +510,12 @@ impl Uvr5MdxOnnxSeparator {
             chunk_in_l[..actual].copy_from_slice(&mix_l[start..end]);
             chunk_in_r[..actual].copy_from_slice(&mix_r[start..end]);
 
+            let is_last_chunk = start + step >= mix_padded_len;
             self.infer_single_chunk(
                 &chunk_in_l,
                 &chunk_in_r,
                 enable_denoise_2pass,
+                is_last_chunk,
                 &mut chunk_out_l,
                 &mut chunk_out_r,
             )?;
@@ -664,6 +688,8 @@ fn project_instrumental_substems(
     let mut planner = RealFftPlanner::<f32>::new();
     let fft_fwd = planner.plan_fft_forward(n_fft);
     let fft_inv = planner.plan_fft_inverse(n_fft);
+    let mut scratch_fwd = fft_fwd.make_scratch_vec();
+    let mut scratch_inv = fft_inv.make_scratch_vec();
 
     let mut hann = vec![0.0f32; n_fft];
     for i in 0..n_fft {
@@ -694,7 +720,8 @@ fn project_instrumental_substems(
         for ch in 0..2 {
             let fill_and_fft = |src: &[StereoFrame],
                                 tb: &mut [f32],
-                                dst: &mut [Complex32]| {
+                                dst: &mut [Complex32],
+                                scratch: &mut [Complex32]| {
                 for i in 0..n_fft {
                     let idx = start + i;
                     let s = if idx >= pad && (idx - pad) < src.len() {
@@ -704,13 +731,13 @@ fn project_instrumental_substems(
                     };
                     tb[i] = s * hann[i];
                 }
-                let _ = fft_fwd.process(tb, dst);
+                let _ = fft_fwd.process_with_scratch(tb, dst, scratch);
             };
 
-            fill_and_fft(inst_master, &mut time_buf, &mut spec_inst);
-            fill_and_fft(bsrnn_drums, &mut time_buf, &mut spec_d);
-            fill_and_fft(bsrnn_bass, &mut time_buf, &mut spec_b);
-            fill_and_fft(bsrnn_other, &mut time_buf, &mut spec_o);
+            fill_and_fft(inst_master, &mut time_buf, &mut spec_inst, &mut scratch_fwd);
+            fill_and_fft(bsrnn_drums, &mut time_buf, &mut spec_d, &mut scratch_fwd);
+            fill_and_fft(bsrnn_bass, &mut time_buf, &mut spec_b, &mut scratch_fwd);
+            fill_and_fft(bsrnn_other, &mut time_buf, &mut spec_o, &mut scratch_fwd);
 
             for k in 0..f_bins {
                 let md = spec_d[k].norm();
@@ -732,7 +759,7 @@ fn project_instrumental_substems(
             out_b[0].im = 0.0;
             out_b[f_bins - 1].im = 0.0;
 
-            let _ = fft_inv.process(&mut out_d, &mut time_buf);
+            let _ = fft_inv.process_with_scratch(&mut out_d, &mut time_buf, &mut scratch_inv);
             let dst_d = if ch == 0 {
                 &mut drm_ola_l
             } else {
@@ -742,7 +769,7 @@ fn project_instrumental_substems(
                 dst_d[start + i] += time_buf[i] * inv_n * hann[i];
             }
 
-            let _ = fft_inv.process(&mut out_b, &mut time_buf);
+            let _ = fft_inv.process_with_scratch(&mut out_b, &mut time_buf, &mut scratch_inv);
             let dst_b = if ch == 0 {
                 &mut bas_ola_l
             } else {
@@ -796,6 +823,8 @@ fn apply_spectral_phase_denoise_vs_mix(
     let mut planner = RealFftPlanner::<f32>::new();
     let fft_fwd = planner.plan_fft_forward(n_fft);
     let fft_inv = planner.plan_fft_inverse(n_fft);
+    let mut scratch_fwd = fft_fwd.make_scratch_vec();
+    let mut scratch_inv = fft_inv.make_scratch_vec();
 
     let mut hann = vec![0.0f32; n_fft];
     for i in 0..n_fft {
@@ -825,7 +854,7 @@ fn apply_spectral_phase_denoise_vs_mix(
                 };
                 tb[i] = v * hann[i];
             }
-            let _ = fft_fwd.process(&mut tb, &mut sv);
+            let _ = fft_fwd.process_with_scratch(&mut tb, &mut sv, &mut scratch_fwd);
 
             for i in 0..n_fft {
                 let idx = start + i;
@@ -836,7 +865,7 @@ fn apply_spectral_phase_denoise_vs_mix(
                 };
                 tb[i] = m * hann[i];
             }
-            let _ = fft_fwd.process(&mut tb, &mut sm);
+            let _ = fft_fwd.process_with_scratch(&mut tb, &mut sm, &mut scratch_fwd);
 
             for k in 0..f_bins {
                 let mv = sv[k].norm();
@@ -853,7 +882,7 @@ fn apply_spectral_phase_denoise_vs_mix(
             sv[0].im = 0.0;
             sv[f_bins - 1].im = 0.0;
 
-            let _ = fft_inv.process(&mut sv, &mut tb);
+            let _ = fft_inv.process_with_scratch(&mut sv, &mut tb, &mut scratch_inv);
             let dst = if ch == 0 { &mut ola_l } else { &mut ola_r };
             for i in 0..n_fft {
                 dst[start + i] += tb[i] * inv_n * hann[i];
@@ -874,25 +903,65 @@ fn apply_spectral_phase_denoise_vs_mix(
 /// 1. `Kim_Vocal_2.onnx` (UVR5 TFC-TDF v3 Vocal flagship)
 /// 2. `UVR-MDX-NET-Inst_HQ_3.onnx` (UVR5 TFC-TDF v3 Instrumental flagship)
 /// 3. `ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx` (Ozone 12 BSRNN 4-Stem separator)
+///
+/// Sub-models are loaded lazily on demand per `GpuStemModelSelection` so single-model modes
+/// (`OzoneBsrnnOnly`, `KimVocal2Only`, `InstHq3Only`) never waste VRAM on unused `.onnx` sessions
+/// and missing optional `.gitignore`'d UVR5 `.onnx` files do not force a CPU `.npz` fallback!
 pub struct GpuStemEnsembleEngine {
-    kim_vocal: Uvr5MdxOnnxSeparator,
-    inst_hq3: Uvr5MdxOnnxSeparator,
-    ozone_bsrnn: OzoneBsrnnOnnxSeparator,
+    kim_vocal: Option<Uvr5MdxOnnxSeparator>,
+    inst_hq3: Option<Uvr5MdxOnnxSeparator>,
+    ozone_bsrnn: Option<OzoneBsrnnOnnxSeparator>,
     active_tier: GpuExecutionTier,
 }
 
 impl GpuStemEnsembleEngine {
     pub fn new() -> Result<Self, String> {
-        let kim_vocal = Uvr5MdxOnnxSeparator::from_kim_vocal_2()?;
-        let inst_hq3 = Uvr5MdxOnnxSeparator::from_inst_hq_3()?;
-        let ozone_bsrnn = OzoneBsrnnOnnxSeparator::from_default_assets()?;
-        let active_tier = kim_vocal.active_tier();
+        let mgr = GpuRuntimeManager::global();
+        if mgr.environment().is_none() {
+            return Err(mgr
+                .init_error()
+                .unwrap_or("ONNX Runtime environment unavailable")
+                .to_string());
+        }
+        let has_any_model = crate::onnx_gpu_runtime::resolve_ozone_bsrnn_onnx_path().is_some()
+            || resolve_uvr5_kim_vocal2_onnx_path().is_some()
+            || resolve_uvr5_inst_hq3_onnx_path().is_some();
+        if !has_any_model {
+            return Err("No ONNX stem separation models found under assets/".to_string());
+        }
         Ok(Self {
-            kim_vocal,
-            inst_hq3,
-            ozone_bsrnn,
-            active_tier,
+            kim_vocal: None,
+            inst_hq3: None,
+            ozone_bsrnn: None,
+            active_tier: mgr.tier(),
         })
+    }
+
+    fn ensure_ozone_bsrnn(&mut self) -> Result<&mut OzoneBsrnnOnnxSeparator, String> {
+        if self.ozone_bsrnn.is_none() {
+            let sep = OzoneBsrnnOnnxSeparator::from_default_assets()?;
+            self.active_tier = sep.active_tier();
+            self.ozone_bsrnn = Some(sep);
+        }
+        Ok(self.ozone_bsrnn.as_mut().expect("ozone_bsrnn initialized"))
+    }
+
+    fn ensure_kim_vocal(&mut self) -> Result<&mut Uvr5MdxOnnxSeparator, String> {
+        if self.kim_vocal.is_none() {
+            let sep = Uvr5MdxOnnxSeparator::from_kim_vocal_2()?;
+            self.active_tier = sep.active_tier();
+            self.kim_vocal = Some(sep);
+        }
+        Ok(self.kim_vocal.as_mut().expect("kim_vocal initialized"))
+    }
+
+    fn ensure_inst_hq3(&mut self) -> Result<&mut Uvr5MdxOnnxSeparator, String> {
+        if self.inst_hq3.is_none() {
+            let sep = Uvr5MdxOnnxSeparator::from_inst_hq_3()?;
+            self.active_tier = sep.active_tier();
+            self.inst_hq3 = Some(sep);
+        }
+        Ok(self.inst_hq3.as_mut().expect("inst_hq3 initialized"))
     }
 
     #[inline]
@@ -922,60 +991,96 @@ impl GpuStemEnsembleEngine {
 
         let sr = sample_rate_hz.max(8_000);
 
-        // Always run Ozone 12 BSRNN (at its native 48 kHz) so we have genuine neural
-        // 4-stem sub-components (`Vocals, Drums, Bass, Other`)!
-        let mix_48k = resample_stereo_frames(mix_frames, sr, 48_000);
-        let [bsrnn_v_48k, bsrnn_d_48k, bsrnn_b_48k, bsrnn_o_48k] =
-            self.ozone_bsrnn.separate_4stems_offline(&mix_48k)?;
-        let bsrnn_vocals = resample_stereo_frames(&bsrnn_v_48k, 48_000, sr);
-        let bsrnn_drums = resample_stereo_frames(&bsrnn_d_48k, 48_000, sr);
-        let bsrnn_bass = resample_stereo_frames(&bsrnn_b_48k, 48_000, sr);
-        let bsrnn_other = resample_stereo_frames(&bsrnn_o_48k, 48_000, sr);
+        // Run Ozone 12 BSRNN (at its native 48 kHz) when available for 4-stem sub-components;
+        // if absent on disk, fall back to `.npz` GRU sub-stem priors for Drums/Bass/Other.
+        let (bsrnn_vocals_opt, bsrnn_drums, bsrnn_bass, bsrnn_other) =
+            if let Ok(bsrnn) = self.ensure_ozone_bsrnn() {
+                let mix_48k = resample_stereo_frames(mix_frames, sr, 48_000);
+                let [bsrnn_v_48k, bsrnn_d_48k, bsrnn_b_48k, bsrnn_o_48k] =
+                    bsrnn.separate_4stems_offline(&mix_48k)?;
+                (
+                    Some(resample_stereo_frames(&bsrnn_v_48k, 48_000, sr)),
+                    resample_stereo_frames(&bsrnn_d_48k, 48_000, sr),
+                    resample_stereo_frames(&bsrnn_b_48k, 48_000, sr),
+                    resample_stereo_frames(&bsrnn_o_48k, 48_000, sr),
+                )
+            } else if let Some(mut gru) =
+                crate::npz_gru_legacy::GruThreeStemSeparator::from_global_cache()
+            {
+                let [_, d, b, o] = gru.separate_4stems(mix_frames, sr);
+                (None, d, b, o)
+            } else {
+                let zeros = vec![[0.0f32; 2]; len];
+                (None, zeros.clone(), zeros, mix_frames.to_vec())
+            };
 
         let raw_vocals = match cfg.model_selection {
             GpuStemModelSelection::Ensemble3Model => {
-                let (kim_vocals, _) = self.kim_vocal.separate_vocal_instrumental(
-                    mix_frames,
-                    sr,
-                    cfg.enable_denoise_2pass,
-                )?;
-                let (inst_hq3_vocals, _) = self.inst_hq3.separate_vocal_instrumental(
-                    mix_frames,
-                    sr,
-                    cfg.enable_denoise_2pass,
-                )?;
-
-                let n_fft_ens = if len >= 4096 { 2048 } else { 512 };
-                let hop_ens = n_fft_ens / 4;
-                let mut ensembler =
-                    SpectralEnsembler::new(n_fft_ens, hop_ens, cfg.ensemble_mode);
-                ensembler.phase_denoise_strength = cfg.phase_denoise_strength.clamp(0.0, 1.0);
-                let combined = ensembler.ensemble_waveforms(
-                    &[&kim_vocals, &inst_hq3_vocals, &bsrnn_vocals],
-                    Some(&cfg.weights),
-                );
-
-                // For modes where `SpectralEnsembler` doesn't gate (`MaxSpec`, `MinSpec`, `Median`),
-                // apply explicit spectral phase-coherence gating when requested.
-                if cfg.phase_denoise_strength > 0.0
-                    && matches!(
-                        cfg.ensemble_mode,
-                        SpectralEnsembleMode::MaxSpec
-                            | SpectralEnsembleMode::MinSpec
-                            | SpectralEnsembleMode::Median
+                let mut candidates: Vec<Vec<StereoFrame>> = Vec::with_capacity(3);
+                let mut weights_vec: Vec<f32> = Vec::with_capacity(3);
+                if let Ok(kim) = self.ensure_kim_vocal()
+                    && let Ok((kv, _)) =
+                        kim.separate_vocal_instrumental(mix_frames, sr, cfg.enable_denoise_2pass)
+                {
+                    candidates.push(kv);
+                    weights_vec.push(cfg.weights[0]);
+                }
+                if let Ok(inst_sep) = self.ensure_inst_hq3()
+                    && let Ok((iv, _)) = inst_sep.separate_vocal_instrumental(
+                        mix_frames,
+                        sr,
+                        cfg.enable_denoise_2pass,
                     )
                 {
+                    candidates.push(iv);
+                    weights_vec.push(cfg.weights[1]);
+                }
+                if let Some(bv) = bsrnn_vocals_opt {
+                    candidates.push(bv);
+                    weights_vec.push(cfg.weights[2]);
+                }
+                if candidates.is_empty() {
+                    return Err(
+                        "No ONNX stem models could be executed in Ensemble3Model".to_string()
+                    );
+                }
+                if candidates.len() == 1 {
                     apply_spectral_phase_denoise_vs_mix(
-                        &combined,
+                        &candidates[0],
                         mix_frames,
                         cfg.phase_denoise_strength,
                     )
                 } else {
-                    combined
+                    let refs: Vec<&[StereoFrame]> =
+                        candidates.iter().map(|v| v.as_slice()).collect();
+                    let n_fft_ens = if len >= 4096 { 2048 } else { 512 };
+                    let hop_ens = n_fft_ens / 4;
+                    let mut ensembler =
+                        SpectralEnsembler::new(n_fft_ens, hop_ens, cfg.ensemble_mode);
+                    ensembler.phase_denoise_strength = cfg.phase_denoise_strength.clamp(0.0, 1.0);
+                    let combined = ensembler.ensemble_waveforms(&refs, Some(&weights_vec));
+
+                    if cfg.phase_denoise_strength > 0.0
+                        && matches!(
+                            cfg.ensemble_mode,
+                            SpectralEnsembleMode::MaxSpec
+                                | SpectralEnsembleMode::MinSpec
+                                | SpectralEnsembleMode::Median
+                        )
+                    {
+                        apply_spectral_phase_denoise_vs_mix(
+                            &combined,
+                            mix_frames,
+                            cfg.phase_denoise_strength,
+                        )
+                    } else {
+                        combined
+                    }
                 }
             }
             GpuStemModelSelection::KimVocal2Only => {
-                let (v, _) = self.kim_vocal.separate_vocal_instrumental(
+                self.inst_hq3 = None;
+                let (v, _) = self.ensure_kim_vocal()?.separate_vocal_instrumental(
                     mix_frames,
                     sr,
                     cfg.enable_denoise_2pass,
@@ -983,18 +1088,41 @@ impl GpuStemEnsembleEngine {
                 apply_spectral_phase_denoise_vs_mix(&v, mix_frames, cfg.phase_denoise_strength)
             }
             GpuStemModelSelection::InstHq3Only => {
-                let (v, _) = self.inst_hq3.separate_vocal_instrumental(
+                self.kim_vocal = None;
+                let (v, _) = self.ensure_inst_hq3()?.separate_vocal_instrumental(
                     mix_frames,
                     sr,
                     cfg.enable_denoise_2pass,
                 )?;
                 apply_spectral_phase_denoise_vs_mix(&v, mix_frames, cfg.phase_denoise_strength)
             }
-            GpuStemModelSelection::OzoneBsrnnOnly => apply_spectral_phase_denoise_vs_mix(
-                &bsrnn_vocals,
+            GpuStemModelSelection::OzoneBsrnnOnly => {
+                // Never retain 1.5+ GB UVR5 MDX sessions when running OzoneBsrnnOnly!
+                self.kim_vocal = None;
+                self.inst_hq3 = None;
+                let bv = bsrnn_vocals_opt.ok_or_else(|| {
+                    "ozone12_mss4stem_bsrnn_xs_120ms_ep147.onnx unavailable for OzoneBsrnnOnly"
+                        .to_string()
+                })?;
+                apply_spectral_phase_denoise_vs_mix(&bv, mix_frames, cfg.phase_denoise_strength)
+            }
+        };
+
+        // Apply UVR5 VR `vr_aggressiveness` Wiener mask sharpening when non-zero
+        let raw_vocals = if cfg.vr_aggressiveness.abs() > 1e-4 {
+            let pre_inst = SpectralEnsembler::invert_audio_waveform(mix_frames, &raw_vocals);
+            let n_fft_agg = if len >= 4096 { 2048 } else { 512 };
+            let (sharp_v, _) = crate::uvr5_vr_aspp::sharpen_vocal_mask_aggressiveness(
                 mix_frames,
-                cfg.phase_denoise_strength,
-            ),
+                &raw_vocals,
+                &pre_inst,
+                n_fft_agg,
+                n_fft_agg / 4,
+                cfg.vr_aggressiveness.clamp(-1.0, 1.0),
+            );
+            sharp_v
+        } else {
+            raw_vocals
         };
 
         // Exact phase-inverted full instrumental: `inv_instrumental = mix - vocals`
@@ -1031,7 +1159,11 @@ impl crate::idle_release::Release for EnsembleRelease {
         match GLOBAL_GPU_ENSEMBLE_ENGINE.get().map(|m| m.try_lock()) {
             None => true,
             Some(Ok(mut guard)) => {
-                *guard = None;
+                if let Some(mut eng) = guard.take() {
+                    if let Some(mut bsrnn) = eng.ozone_bsrnn.take() {
+                        bsrnn.shrink_gpu_arena();
+                    }
+                }
                 true
             }
             Some(Err(_)) => false,
@@ -1052,6 +1184,7 @@ pub fn run_global_gpu_stem_ensemble(
         crate::idle_release::register(&EnsembleRelease);
         Mutex::new(None)
     });
+    crate::idle_release::touch();
     let mut guard = mutex
         .lock()
         .map_err(|_| "Global GpuStemEnsembleEngine mutex poisoned".to_string())?;
@@ -1061,36 +1194,10 @@ pub fn run_global_gpu_stem_ensemble(
                 *guard = Some(engine);
             }
             Err(onnx_err) => {
-                let t0 = Instant::now();
-                if let Some(mut gru) = crate::npz_gru_legacy::GruThreeStemSeparator::from_global_cache()
-                {
-                    let sr = sample_rate_hz.max(8_000);
-                    let [raw_vocals, drums_raw, bass_raw, other_raw] =
-                        gru.separate_4stems(mix_frames, sr);
-                    let vocals = apply_spectral_phase_denoise_vs_mix(
-                        &raw_vocals,
-                        mix_frames,
-                        cfg.phase_denoise_strength,
-                    );
-                    let inv_instrumental =
-                        SpectralEnsembler::invert_audio_waveform(mix_frames, &vocals);
-                    let (drums, bass, other) = project_instrumental_substems(
-                        &inv_instrumental,
-                        &drums_raw,
-                        &bass_raw,
-                        &other_raw,
-                    );
-                    return Ok(GpuStemEnsembleOutput {
-                        vocals,
-                        drums,
-                        bass,
-                        other,
-                        inv_instrumental,
-                        active_tier: GpuExecutionTier::PureRustFallback,
-                        elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
-                    });
-                }
-                return Err(onnx_err);
+                drop(guard);
+                let fallback = run_npz_gru_ensemble_fallback(mix_frames, sample_rate_hz, cfg);
+                crate::idle_release::touch();
+                return fallback.ok_or(onnx_err);
             }
         }
     }
@@ -1100,5 +1207,54 @@ pub fn run_global_gpu_stem_ensemble(
         .separate_ensemble(mix_frames, sample_rate_hz, cfg);
     drop(guard);
     crate::idle_release::touch();
-    out
+    match out {
+        Ok(ok) => Ok(ok),
+        Err(onnx_err) => {
+            if let Some(fallback) = run_npz_gru_ensemble_fallback(mix_frames, sample_rate_hz, cfg) {
+                Ok(fallback)
+            } else {
+                Err(onnx_err)
+            }
+        }
+    }
+}
+
+fn run_npz_gru_ensemble_fallback(
+    mix_frames: &[StereoFrame],
+    sample_rate_hz: u32,
+    cfg: &GpuStemEnsembleConfig,
+) -> Option<GpuStemEnsembleOutput> {
+    let t0 = Instant::now();
+    let mut gru = crate::npz_gru_legacy::GruThreeStemSeparator::from_global_cache()?;
+    let sr = sample_rate_hz.max(8_000);
+    let [raw_vocals, drums_raw, bass_raw, other_raw] = gru.separate_4stems(mix_frames, sr);
+    let vocals =
+        apply_spectral_phase_denoise_vs_mix(&raw_vocals, mix_frames, cfg.phase_denoise_strength);
+    let vocals = if cfg.vr_aggressiveness.abs() > 1e-4 {
+        let pre_inst = SpectralEnsembler::invert_audio_waveform(mix_frames, &vocals);
+        let n_fft_agg = if mix_frames.len() >= 4096 { 2048 } else { 512 };
+        let (sharp_v, _) = crate::uvr5_vr_aspp::sharpen_vocal_mask_aggressiveness(
+            mix_frames,
+            &vocals,
+            &pre_inst,
+            n_fft_agg,
+            n_fft_agg / 4,
+            cfg.vr_aggressiveness.clamp(-1.0, 1.0),
+        );
+        sharp_v
+    } else {
+        vocals
+    };
+    let inv_instrumental = SpectralEnsembler::invert_audio_waveform(mix_frames, &vocals);
+    let (drums, bass, other) =
+        project_instrumental_substems(&inv_instrumental, &drums_raw, &bass_raw, &other_raw);
+    Some(GpuStemEnsembleOutput {
+        vocals,
+        drums,
+        bass,
+        other,
+        inv_instrumental,
+        active_tier: GpuExecutionTier::PureRustFallback,
+        elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
+    })
 }

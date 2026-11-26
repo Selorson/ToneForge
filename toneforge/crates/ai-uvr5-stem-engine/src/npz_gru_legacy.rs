@@ -18,53 +18,33 @@ use std::sync::{Arc, OnceLock};
 use zip::ZipArchive;
 
 /// Candidate paths for `gparamsBN8.0.npz` (`6,522,880` bytes).
-pub const DEFAULT_GPARAMS_NPZ_PATHS: [&str; 6] = [
+pub const DEFAULT_GPARAMS_NPZ_PATHS: [&str; 2] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\gparamsBN8.0.npz",
-    r"f:\FL studio\toneforge\assets\models\assistant_cnn\gparamsBN8.0.npz",
-    r"f:\FL studio\toneforge\assets\models\gparamsBN8.0.npz",
     r"assets/ozone12/models/gparamsBN8.0.npz",
-    r"assets/models/assistant_cnn/gparamsBN8.0.npz",
-    r"assets/models/gparamsBN8.0.npz",
 ];
 
 /// Candidate paths for `instrument_classifier_params.npz` (`19,853,709` bytes).
-pub const DEFAULT_INSTRUMENT_NPZ_PATHS: [&str; 6] = [
+pub const DEFAULT_INSTRUMENT_NPZ_PATHS: [&str; 2] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\instrument_classifier_params.npz",
-    r"f:\FL studio\toneforge\assets\models\assistant_cnn\instrument_classifier_params.npz",
-    r"f:\FL studio\toneforge\assets\models\instrument_classifier_params.npz",
     r"assets/ozone12/models/instrument_classifier_params.npz",
-    r"assets/models/assistant_cnn/instrument_classifier_params.npz",
-    r"assets/models/instrument_classifier_params.npz",
 ];
 
 /// Candidate paths for `vocals-small_sanitized.npz` (`26,261,516` bytes).
-pub const DEFAULT_VOCALS_GRU_NPZ_PATHS: [&str; 6] = [
+pub const DEFAULT_VOCALS_GRU_NPZ_PATHS: [&str; 2] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\vocals-small_sanitized.npz",
-    r"f:\FL studio\toneforge\assets\models\npz_gru_stems\vocals-small_sanitized.npz",
-    r"f:\FL studio\extracted_targets\ozone12\requiredFiles_component\ssepnpz\vocals-small_sanitized.npz",
     r"assets/ozone12/models/vocals-small_sanitized.npz",
-    r"assets/models/npz_gru_stems/vocals-small_sanitized.npz",
-    r"assets/models/vocals-small_sanitized.npz",
 ];
 
 /// Candidate paths for `drums-small_sanitized.npz` (`26,261,516` bytes).
-pub const DEFAULT_DRUMS_GRU_NPZ_PATHS: [&str; 6] = [
+pub const DEFAULT_DRUMS_GRU_NPZ_PATHS: [&str; 2] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\drums-small_sanitized.npz",
-    r"f:\FL studio\toneforge\assets\models\npz_gru_stems\drums-small_sanitized.npz",
-    r"f:\FL studio\extracted_targets\ozone12\requiredFiles_component\ssepnpz\drums-small_sanitized.npz",
     r"assets/ozone12/models/drums-small_sanitized.npz",
-    r"assets/models/npz_gru_stems/drums-small_sanitized.npz",
-    r"assets/models/drums-small_sanitized.npz",
 ];
 
 /// Candidate paths for `bass-small_sanitized.npz` (`26,261,516` bytes).
-pub const DEFAULT_BASS_GRU_NPZ_PATHS: [&str; 6] = [
+pub const DEFAULT_BASS_GRU_NPZ_PATHS: [&str; 2] = [
     r"f:\FL studio\toneforge\assets\ozone12\models\bass-small_sanitized.npz",
-    r"f:\FL studio\toneforge\assets\models\npz_gru_stems\bass-small_sanitized.npz",
-    r"f:\FL studio\extracted_targets\ozone12\requiredFiles_component\ssepnpz\bass-small_sanitized.npz",
     r"assets/ozone12/models/bass-small_sanitized.npz",
-    r"assets/models/npz_gru_stems/bass-small_sanitized.npz",
-    r"assets/models/bass-small_sanitized.npz",
 ];
 
 /// Exact 10 Genre labels from `iZOzone12Core.dll` (`re_q1_ozone12.md` Section 2.3).
@@ -806,8 +786,6 @@ impl GenreCnnClassifier {
     pub fn load_default() -> Option<Self> {
         if let Some(p) = crate::onnx_gpu_runtime::resolve_asset_file(&[
             "assets/ozone12/models/gparamsBN8.0.npz",
-            "assets/models/assistant_cnn/gparamsBN8.0.npz",
-            "assets/models/gparamsBN8.0.npz",
         ]) {
             if let Ok(c) = Self::from_npz_file(&p) {
                 return Some(c);
@@ -1097,8 +1075,6 @@ impl InstrumentCnnClassifier {
     pub fn load_default() -> Option<Self> {
         if let Some(p) = crate::onnx_gpu_runtime::resolve_asset_file(&[
             "assets/ozone12/models/instrument_classifier_params.npz",
-            "assets/models/assistant_cnn/instrument_classifier_params.npz",
-            "assets/models/instrument_classifier_params.npz",
         ]) {
             if let Ok(c) = Self::from_npz_file(&p) {
                 return Some(c);
@@ -1558,33 +1534,21 @@ impl OzoneNpzGruEngine {
 
     pub fn load_default_vocals() -> Option<Self> {
         Self::load_from_candidates(
-            &[
-                "assets/ozone12/models/vocals-small_sanitized.npz",
-                "assets/models/npz_gru_stems/vocals-small_sanitized.npz",
-                "assets/models/vocals-small_sanitized.npz",
-            ],
+            &["assets/ozone12/models/vocals-small_sanitized.npz"],
             &DEFAULT_VOCALS_GRU_NPZ_PATHS,
         )
     }
 
     pub fn load_default_drums() -> Option<Self> {
         Self::load_from_candidates(
-            &[
-                "assets/ozone12/models/drums-small_sanitized.npz",
-                "assets/models/npz_gru_stems/drums-small_sanitized.npz",
-                "assets/models/drums-small_sanitized.npz",
-            ],
+            &["assets/ozone12/models/drums-small_sanitized.npz"],
             &DEFAULT_DRUMS_GRU_NPZ_PATHS,
         )
     }
 
     pub fn load_default_bass() -> Option<Self> {
         Self::load_from_candidates(
-            &[
-                "assets/ozone12/models/bass-small_sanitized.npz",
-                "assets/models/npz_gru_stems/bass-small_sanitized.npz",
-                "assets/models/bass-small_sanitized.npz",
-            ],
+            &["assets/ozone12/models/bass-small_sanitized.npz"],
             &DEFAULT_BASS_GRU_NPZ_PATHS,
         )
     }

@@ -45,9 +45,27 @@
 
   const activeBand = $derived(telemetry.proq4Bands[telemetry.proq4SelectedBand]);
 
+  let pendingDragBand: (typeof telemetry.proq4Bands)[number] | null = null;
+  let dragRafId: number | null = null;
+
   function updateActiveProQ4Band(band: (typeof telemetry.proq4Bands)[number]): Promise<void> {
     const target = telemetry.resolvePluginSlotTarget('ProQ4', 1, 0);
     return telemetry.updateProQ4Band(target.trackIdx, target.slotIdx, band);
+  }
+
+  function scheduleCoalescedBandUpdate(band: (typeof telemetry.proq4Bands)[number]): void {
+    telemetry.proq4Bands[band.bandIdx] = { ...band, used: true };
+    pendingDragBand = { ...band, used: true };
+    if (dragRafId === null && typeof requestAnimationFrame !== 'undefined') {
+      dragRafId = requestAnimationFrame(() => {
+        dragRafId = null;
+        if (pendingDragBand) {
+          const toSend = pendingDragBand;
+          pendingDragBand = null;
+          void updateActiveProQ4Band(toSend);
+        }
+      });
+    }
   }
 
   function freqToXNorm(freqHz: number): number {
@@ -68,6 +86,7 @@
 
   function handleCanvasPointerDown(e: PointerEvent) {
     if (!telemetry.proq4SketchMode || !eqCanvas) return;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     const rect = eqCanvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -90,6 +109,7 @@
     }
     if (draggingBandIdx === null || !eqCanvas) return;
     const rect = eqCanvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     const nx = (e.clientX - rect.left) / rect.width;
     const ny = (e.clientY - rect.top) / rect.height;
     const b = { ...telemetry.proq4Bands[draggingBandIdx] };
@@ -97,10 +117,24 @@
     b.enabled = true;
     b.freqHz = Math.round(xNormToFreq(nx));
     b.gainDb = parseFloat(yNormToGain(ny).toFixed(2));
-    updateActiveProQ4Band(b);
+    scheduleCoalescedBandUpdate(b);
   }
 
-  async function finishPointerGesture() {
+  async function finishPointerGesture(e?: PointerEvent) {
+    if (e) {
+      try {
+        (e.currentTarget as HTMLElement)?.releasePointerCapture?.(e.pointerId);
+      } catch {}
+    }
+    if (dragRafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(dragRafId);
+      dragRafId = null;
+    }
+    if (pendingDragBand) {
+      const finalBand = pendingDragBand;
+      pendingDragBand = null;
+      await updateActiveProQ4Band(finalBand);
+    }
     draggingBandIdx = null;
     if (isDrawingSketch) {
       isDrawingSketch = false;
@@ -151,7 +185,17 @@
     if (!eqCanvas) return;
     const r = new WebGpu120FpsRenderer(eqCanvas, 'proq4');
     renderer = r;
-    r.initialize();
+    void r.initialize();
+    return () => {
+      if (dragRafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(dragRafId);
+        dragRafId = null;
+      }
+      r.destroy();
+      if (renderer === r) {
+        renderer = null;
+      }
+    };
   });
 
   $effect(() => {
@@ -252,7 +296,7 @@
     onpointerdown={handleCanvasPointerDown}
     onpointermove={handlePointerMove}
     onpointerup={finishPointerGesture}
-    onpointerleave={finishPointerGesture}
+    onpointercancel={finishPointerGesture}
   >
     <canvas bind:this={eqCanvas} width={920} height={260} class="proq4-canvas"></canvas>
 
@@ -280,6 +324,7 @@
           onpointerdown={(e) => {
             if (telemetry.proq4SketchMode) return;
             e.stopPropagation();
+            (e.currentTarget as HTMLElement).parentElement?.setPointerCapture?.(e.pointerId);
             telemetry.proq4SelectedBand = band.bandIdx;
             draggingBandIdx = band.bandIdx;
           }}

@@ -1604,12 +1604,12 @@ struct NoteOffEvent {
     tuning: f32,
 }
 
-#[repr(C)]
+#[repr(C, align(8))]
 #[derive(Clone, Copy)]
 union Vst3EventPayload {
     noteOn: NoteOnEvent,
     noteOff: NoteOffEvent,
-    raw_bytes: [u8; 32],
+    raw_bytes: [u8; 24],
 }
 
 #[repr(C)]
@@ -1622,6 +1622,12 @@ struct Vst3Event {
     type_: u16,
     payload: Vst3EventPayload,
 }
+
+const _: () = assert!(
+    core::mem::size_of::<Vst3Event>() == 48
+        && core::mem::offset_of!(Vst3Event, payload) == 24
+        && core::mem::align_of::<Vst3Event>() == 8
+);
 
 #[repr(C)]
 struct IEventListVtbl {

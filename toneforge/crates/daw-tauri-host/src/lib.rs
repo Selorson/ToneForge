@@ -139,16 +139,19 @@ pub struct ToneForgeHostRuntime {
     pub app_state: DawAppState,
     pub telemetry_server: ShmTelemetryServer,
     pub mixer_engine: Box<MixerEngine>,
+    _rt_gc: daw_core_graph::RtGarbageCollector,
 }
 
 impl ToneForgeHostRuntime {
     pub fn new(sample_rate: f64, _max_block_size: usize) -> Self {
-        let (engine, cmd_prod, telem_out) = MixerEngine::new(sample_rate, 128.0, 0);
+        let (engine, cmd_prod, mut_prod, rt_gc, telem_out) =
+            MixerEngine::new_with_rt_gc(sample_rate, 128.0, 0);
 
         Self {
-            app_state: DawAppState::new(cmd_prod),
+            app_state: DawAppState::new_with_rt_mutations(cmd_prod, mut_prod),
             telemetry_server: ShmTelemetryServer::new(telem_out),
             mixer_engine: Box::new(engine),
+            _rt_gc: rt_gc,
         }
     }
 }
@@ -499,13 +502,13 @@ mod tests {
             .expect("Empty audio preview slice should fall back to reference stem");
         assert!(!ai_empty.detected_genre.is_empty());
 
-        // 2. Verify all 5 UI racks have interactive preset selectors in both UI directories
+        // 2. Verify all 5 UI racks have interactive preset selectors in official UI directory
         let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(|p| p.parent())
             .expect("workspace root")
             .to_path_buf();
-        for ui_dir in ["ui-svelte-webgpu", "ui-svelte5-wgpu"] {
+        for ui_dir in ["ui-svelte5-wgpu"] {
             let comp_dir = ws.join(ui_dir).join("src").join("lib").join("components");
             let pr = std::fs::read_to_string(comp_dir.join("PlaylistPianoRollEditor.svelte"))
                 .expect("PlaylistPianoRollEditor.svelte");

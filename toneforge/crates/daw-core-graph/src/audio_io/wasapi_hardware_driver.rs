@@ -47,6 +47,7 @@ pub enum WasapiSampleFormat {
     Int24In32,
     Int24Packed,
     Int16,
+    UInt8,
 }
 
 impl WasapiSampleFormat {
@@ -56,6 +57,7 @@ impl WasapiSampleFormat {
             Self::Float32 | Self::Int32 | Self::Int24In32 => 4,
             Self::Int24Packed => 3,
             Self::Int16 => 2,
+            Self::UInt8 => 1,
         }
     }
 
@@ -67,6 +69,7 @@ impl WasapiSampleFormat {
             Self::Int24In32 => "PCM24-in-32",
             Self::Int24Packed => "PCM24",
             Self::Int16 => "PCM16",
+            Self::UInt8 => "PCM8",
         }
     }
 }
@@ -260,7 +263,7 @@ impl WasapiHardwareStream {
         initial_device_id: Option<String>,
         exclusive_mode: bool,
     ) -> Self {
-        let engine_sr = engine.slicer.sample_rate.round().max(8_000.0) as u32;
+        let engine_sr = engine.slicer.sample_rate().round().max(8_000.0) as u32;
         let control = Arc::new(WasapiSharedControl::new(
             engine_sr,
             initial_device_id,
@@ -729,6 +732,27 @@ pub unsafe fn pack_stereo_frames_to_hardware_buffer(
                 }
             }
         }
+        WasapiSampleFormat::UInt8 => {
+            let out = unsafe {
+                std::slice::from_raw_parts_mut(dst_bytes, frames.len() * channels)
+            };
+            let to_u8 = |x: f32| -> u8 {
+                let s = if x.is_finite() { x.clamp(-1.0, 1.0) } else { 0.0 };
+                ((s * 127.0 + 128.0).round() as i32).clamp(0, 255) as u8
+            };
+            for (i, f) in frames.iter().enumerate() {
+                let base = i * channels;
+                if channels == 1 {
+                    out[base] = to_u8(0.5 * (f[0] + f[1]));
+                } else {
+                    out[base] = to_u8(f[0]);
+                    out[base + 1] = to_u8(f[1]);
+                    for c in 2..channels {
+                        out[base + c] = 128;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1130,6 +1154,7 @@ mod win32_wasapi {
         }
         if tag == WAVE_FORMAT_PCM_TAG {
             return match bits {
+                8 => Some((sr, ch, WasapiSampleFormat::UInt8)),
                 16 => Some((sr, ch, WasapiSampleFormat::Int16)),
                 24 => Some((sr, ch, WasapiSampleFormat::Int24Packed)),
                 32 => Some((sr, ch, WasapiSampleFormat::Int32)),
@@ -1149,6 +1174,7 @@ mod win32_wasapi {
                     (32, _) => Some((sr, ch, WasapiSampleFormat::Int32)),
                     (24, _) => Some((sr, ch, WasapiSampleFormat::Int24Packed)),
                     (16, _) => Some((sr, ch, WasapiSampleFormat::Int16)),
+                    (8, _) => Some((sr, ch, WasapiSampleFormat::UInt8)),
                     _ => None,
                 };
             }
@@ -1167,6 +1193,7 @@ mod win32_wasapi {
             WasapiSampleFormat::Int24In32 => (32u16, 24u16, KSDATAFORMAT_SUBTYPE_PCM_GUID),
             WasapiSampleFormat::Int24Packed => (24u16, 24u16, KSDATAFORMAT_SUBTYPE_PCM_GUID),
             WasapiSampleFormat::Int16 => (16u16, 16u16, KSDATAFORMAT_SUBTYPE_PCM_GUID),
+            WasapiSampleFormat::UInt8 => (8u16, 8u16, KSDATAFORMAT_SUBTYPE_PCM_GUID),
         };
         let block_align = channels * (bits_per_sample / 8);
         let avg_bytes_per_sec = sample_rate * (block_align as u32);
@@ -1836,7 +1863,7 @@ mod win32_wasapi {
             .mmcss_elevated
             .store(pro_audio_guard.is_elevated(), Ordering::Relaxed);
 
-        let engine_sr = engine.slicer.sample_rate.round().max(8_000.0) as u32;
+        let engine_sr = engine.slicer.sample_rate().round().max(8_000.0) as u32;
         control.engine_sample_rate_hz.store(engine_sr, Ordering::Relaxed);
 
         // Pre-allocate packet scratch buffer (up to 16,384 stereo frames = 85 ms @ 192 kHz) and streaming resampler ONCE
@@ -2081,7 +2108,7 @@ fn run_wasapi_rt_thread(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let sr = engine.slicer.sample_rate.max(8_000.0);
+        let sr = engine.slicer.sample_rate().max(8_000.0);
         let quantum_dur = Duration::from_secs_f64((WASAPI_ENGINE_RENDER_QUANTUM as f64) / sr);
         let mut scratch = vec![[0.0f32; 2]; WASAPI_ENGINE_RENDER_QUANTUM];
         control.stream_running.store(true, Ordering::Relaxed);

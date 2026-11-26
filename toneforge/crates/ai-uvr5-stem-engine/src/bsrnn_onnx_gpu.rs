@@ -87,6 +87,7 @@ impl BsrnnHeapBuffers {
 pub struct OzoneBsrnnOnnxSeparator {
     session: Session,
     active_tier: GpuExecutionTier,
+    shrink_run_opts: Option<ort::session::RunOptions>,
 
     fft_forward: Arc<dyn RealToComplex<f32>>,
     fft_inverse: Arc<dyn ComplexToReal<f32>>,
@@ -124,9 +125,16 @@ impl OzoneBsrnnOnnxSeparator {
         let fft_scratch_fwd = fft_forward.make_scratch_vec();
         let fft_scratch_inv = fft_inverse.make_scratch_vec();
 
+        let shrink_run_opts = if active_tier == GpuExecutionTier::CudaTensorCore {
+            GpuRuntimeManager::gpu_arena_shrink_run_options()
+        } else {
+            None
+        };
+
         Ok(Self {
             session,
             active_tier,
+            shrink_run_opts,
             fft_forward,
             fft_inverse,
             fft_scratch_fwd,
@@ -184,16 +192,17 @@ impl OzoneBsrnnOnnxSeparator {
         out_stems_r: &mut [[Complex32; BSRNN_FREQ_BINS]; BSRNN_STEM_COUNT],
     ) -> Result<(), String> {
         // Pack [2, 1, 1025, 3, 2]
+        let in_spec = self.input_spec_buf.as_mut_slice();
         for k in 0..BSRNN_FREQ_BINS {
             let base_l = (k * 3) * 2;
             let base_r = ((BSRNN_FREQ_BINS + k) * 3) * 2;
             for f in 0..3 {
                 let cl = frames_l[f][k];
                 let cr = frames_r[f][k];
-                self.input_spec_buf[base_l + f * 2] = cl.re;
-                self.input_spec_buf[base_l + f * 2 + 1] = cl.im;
-                self.input_spec_buf[base_r + f * 2] = cr.re;
-                self.input_spec_buf[base_r + f * 2 + 1] = cr.im;
+                in_spec[base_l + f * 2] = cl.re;
+                in_spec[base_l + f * 2 + 1] = cl.im;
+                in_spec[base_r + f * 2] = cr.re;
+                in_spec[base_r + f * 2 + 1] = cr.im;
             }
         }
 
@@ -336,16 +345,27 @@ impl OzoneBsrnnOnnxSeparator {
         self.ws.spec_frames_r[2] = self.ws.new_spec_r;
 
         // Pack & run ONNX inference directly from `self.ws.spec_frames_l/r` into `self.ws.stems_l/r`
-        for k in 0..BSRNN_FREQ_BINS {
-            let base_l = (k * 3) * 2;
-            let base_r = ((BSRNN_FREQ_BINS + k) * 3) * 2;
-            for f in 0..3 {
-                let cl = self.ws.spec_frames_l[f][k];
-                let cr = self.ws.spec_frames_r[f][k];
-                self.input_spec_buf[base_l + f * 2] = cl.re;
-                self.input_spec_buf[base_l + f * 2 + 1] = cl.im;
-                self.input_spec_buf[base_r + f * 2] = cr.re;
-                self.input_spec_buf[base_r + f * 2 + 1] = cr.im;
+        {
+            let in_spec = self.input_spec_buf.as_mut_slice();
+            let [sf_l0, sf_l1, sf_l2] = &self.ws.spec_frames_l;
+            let [sf_r0, sf_r1, sf_r2] = &self.ws.spec_frames_r;
+            for k in 0..BSRNN_FREQ_BINS {
+                let base_l = (k * 3) * 2;
+                let base_r = ((BSRNN_FREQ_BINS + k) * 3) * 2;
+                let (cl0, cl1, cl2) = (sf_l0[k], sf_l1[k], sf_l2[k]);
+                let (cr0, cr1, cr2) = (sf_r0[k], sf_r1[k], sf_r2[k]);
+                in_spec[base_l] = cl0.re;
+                in_spec[base_l + 1] = cl0.im;
+                in_spec[base_l + 2] = cl1.re;
+                in_spec[base_l + 3] = cl1.im;
+                in_spec[base_l + 4] = cl2.re;
+                in_spec[base_l + 5] = cl2.im;
+                in_spec[base_r] = cr0.re;
+                in_spec[base_r + 1] = cr0.im;
+                in_spec[base_r + 2] = cr1.re;
+                in_spec[base_r + 3] = cr1.im;
+                in_spec[base_r + 4] = cr2.re;
+                in_spec[base_r + 5] = cr2.im;
             }
         }
 
@@ -388,48 +408,52 @@ impl OzoneBsrnnOnnxSeparator {
             self.norm_buf.copy_from_slice(next_norm);
         }
 
-        for k in 0..BSRNN_FREQ_BINS {
-            let l_voc_off = (0 * BSRNN_FREQ_BINS + k) * 2;
-            let l_bas_off = (1 * BSRNN_FREQ_BINS + k) * 2;
-            let l_drm_off = (2 * BSRNN_FREQ_BINS + k) * 2;
+        {
+            let out_spec = self.output_spec_buf.as_slice();
+            let ws = &mut *self.ws;
+            for k in 0..BSRNN_FREQ_BINS {
+                let l_voc_off = k * 2;
+                let l_bas_off = (BSRNN_FREQ_BINS + k) * 2;
+                let l_drm_off = (2 * BSRNN_FREQ_BINS + k) * 2;
 
-            let r_voc_off = (3 * BSRNN_FREQ_BINS + k) * 2;
-            let r_bas_off = (4 * BSRNN_FREQ_BINS + k) * 2;
-            let r_drm_off = (5 * BSRNN_FREQ_BINS + k) * 2;
+                let r_voc_off = (3 * BSRNN_FREQ_BINS + k) * 2;
+                let r_bas_off = (4 * BSRNN_FREQ_BINS + k) * 2;
+                let r_drm_off = (5 * BSRNN_FREQ_BINS + k) * 2;
 
-            let mut v_l = Complex32::new(self.output_spec_buf[l_voc_off], self.output_spec_buf[l_voc_off + 1]);
-            let mut b_l = Complex32::new(self.output_spec_buf[l_bas_off], self.output_spec_buf[l_bas_off + 1]);
-            let mut d_l = Complex32::new(self.output_spec_buf[l_drm_off], self.output_spec_buf[l_drm_off + 1]);
+                let mut v_l = Complex32::new(out_spec[l_voc_off], out_spec[l_voc_off + 1]);
+                let mut b_l = Complex32::new(out_spec[l_bas_off], out_spec[l_bas_off + 1]);
+                let mut d_l = Complex32::new(out_spec[l_drm_off], out_spec[l_drm_off + 1]);
 
-            let mut v_r = Complex32::new(self.output_spec_buf[r_voc_off], self.output_spec_buf[r_voc_off + 1]);
-            let mut b_r = Complex32::new(self.output_spec_buf[r_bas_off], self.output_spec_buf[r_bas_off + 1]);
-            let mut d_r = Complex32::new(self.output_spec_buf[r_drm_off], self.output_spec_buf[r_drm_off + 1]);
+                let mut v_r = Complex32::new(out_spec[r_voc_off], out_spec[r_voc_off + 1]);
+                let mut b_r = Complex32::new(out_spec[r_bas_off], out_spec[r_bas_off + 1]);
+                let mut d_r = Complex32::new(out_spec[r_drm_off], out_spec[r_drm_off + 1]);
 
-            let mut x0_l = self.ws.spec_frames_l[0][k];
-            let mut x0_r = self.ws.spec_frames_r[0][k];
-            if k == 0 || k == BSRNN_FREQ_BINS - 1 {
-                v_l.im = 0.0;
-                b_l.im = 0.0;
-                d_l.im = 0.0;
-                v_r.im = 0.0;
-                b_r.im = 0.0;
-                d_r.im = 0.0;
-                x0_l.im = 0.0;
-                x0_r.im = 0.0;
+                let mut x0_l = ws.spec_frames_l[0][k];
+                let mut x0_r = ws.spec_frames_r[0][k];
+                if k == 0 || k == BSRNN_FREQ_BINS - 1 {
+                    v_l.im = 0.0;
+                    b_l.im = 0.0;
+                    d_l.im = 0.0;
+                    v_r.im = 0.0;
+                    b_r.im = 0.0;
+                    d_r.im = 0.0;
+                    x0_l.im = 0.0;
+                    x0_r.im = 0.0;
+                }
+
+                let o_l = x0_l - (v_l + d_l + b_l);
+                let o_r = x0_r - (v_r + d_r + b_r);
+
+                ws.stems_l[0][k] = v_l;
+                ws.stems_l[1][k] = d_l;
+                ws.stems_l[2][k] = b_l;
+                ws.stems_l[3][k] = o_l;
+
+                ws.stems_r[0][k] = v_r;
+                ws.stems_r[1][k] = d_r;
+                ws.stems_r[2][k] = b_r;
+                ws.stems_r[3][k] = o_r;
             }
-
-            let o_l = x0_l - (v_l + d_l + b_l);
-            let o_r = x0_r - (v_r + d_r + b_r);
-
-            self.ws.stems_l[0][k] = v_l;
-            self.ws.stems_l[1][k] = d_l;
-            self.ws.stems_l[2][k] = b_l;
-            self.ws.stems_l[3][k] = o_l;
-
-            self.ws.stems_r[0][k] = v_r;
-            self.ws.stems_r[1][k] = d_r;
-            self.ws.stems_r[2][k] = b_r;
-            self.ws.stems_r[3][k] = o_r;
         }
 
         for s in 0..BSRNN_STEM_COUNT {
@@ -537,6 +561,37 @@ impl OzoneBsrnnOnnxSeparator {
             }
         }
 
+        self.shrink_gpu_arena();
         Ok(stems)
+    }
+
+    /// Executes one lightweight zero-input pass with `memory.enable_memory_arena_shrinkage = "gpu:0"`
+    /// right before idle release / offline completion so ORT's CUDA `BFCArena` frees peak workspace VRAM
+    /// without stalling 10.67 ms real-time streaming hops!
+    pub fn shrink_gpu_arena(&mut self) {
+        let Some(ref opts) = self.shrink_run_opts else {
+            return;
+        };
+        self.input_spec_buf.fill(0.0);
+        self.states_buf.fill(0.0);
+        self.norm_buf = [0.0; 2];
+        if let (Ok(t_spec), Ok(t_states), Ok(t_norm)) = (
+            TensorRef::from_array_view((
+                [2usize, 1, BSRNN_FREQ_BINS, 3, 2],
+                self.input_spec_buf.as_slice(),
+            )),
+            TensorRef::from_array_view(([2usize, 2, 2, 1, 13, 128], self.states_buf.as_slice())),
+            TensorRef::from_array_view(([2usize, 1], self.norm_buf.as_slice())),
+        ) {
+            let _ = self.session.run_with_options(
+                ort::inputs![
+                    "input_spectrogram" => t_spec,
+                    "input_states" => t_states,
+                    "input_states_normalize" => t_norm,
+                ],
+                opts,
+            );
+        }
+        self.reset();
     }
 }

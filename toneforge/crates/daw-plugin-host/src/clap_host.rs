@@ -27,11 +27,13 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 pub const MAX_CLAP_RT_EVENTS: usize = 512;
-pub const MAX_CLAP_RT_PARAMS: usize = 128;
+
+static NEXT_CLAP_INSTANCE_ID: AtomicU64 = AtomicU64::new(0x1000_0000_0000_0001);
 
 /// Parameter descriptor shared across CLAP 1.2 and VST3 3.7 hosted plugins.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -104,10 +106,11 @@ struct ClapRtArena {
     out_ptrs: [*mut f32; 2],
     events: [ClapEventSlot; MAX_CLAP_RT_EVENTS],
     event_count: usize,
+    chunk_events: [ClapEventSlot; MAX_CLAP_RT_EVENTS],
+    chunk_event_count: usize,
     out_param_edits: [clap_event_param_value; 64],
     out_param_count: usize,
-    params: [RtParamSlot; MAX_CLAP_RT_PARAMS],
-    param_count: usize,
+    params: Box<[RtParamSlot]>,
 }
 
 impl ClapRtArena {
@@ -121,10 +124,11 @@ impl ClapRtArena {
             out_ptrs: [std::ptr::null_mut(); 2],
             events: [ClapEventSlot::default(); MAX_CLAP_RT_EVENTS],
             event_count: 0,
+            chunk_events: [ClapEventSlot::default(); MAX_CLAP_RT_EVENTS],
+            chunk_event_count: 0,
             out_param_edits: [clap_event_param_value::default(); 64],
             out_param_count: 0,
-            params: [RtParamSlot::default(); MAX_CLAP_RT_PARAMS],
-            param_count: 0,
+            params: Box::new([]),
         });
         boxed.in_ptrs[0] = boxed.in_left.as_mut_ptr();
         boxed.in_ptrs[1] = boxed.in_right.as_mut_ptr();
@@ -231,7 +235,7 @@ unsafe extern "C" fn clap_in_events_size(list: *const clap_input_events) -> u32 
             return 0;
         }
         let arena = &*((*list).ctx as *const ClapRtArena);
-        arena.event_count as u32
+        arena.chunk_event_count as u32
     }
 }
 
@@ -245,10 +249,10 @@ unsafe extern "C" fn clap_in_events_get(
         }
         let arena = &*((*list).ctx as *const ClapRtArena);
         let idx = index as usize;
-        if idx >= arena.event_count {
+        if idx >= arena.chunk_event_count {
             return std::ptr::null();
         }
-        &arena.events[idx].header as *const clap_event_header
+        &arena.chunk_events[idx].header as *const clap_event_header
     }
 }
 
@@ -567,6 +571,7 @@ pub fn enumerate_clap_plugins_in_library(
 
 /// Real-Time Hosted CLAP 1.2 Plugin Node (`UnifiedDspNode`, `0` RT heap allocations).
 pub struct ClapHostedPluginNode {
+    instance_id: u64,
     canon_path: PathBuf,
     plugin_id: String,
     plugin_name: String,
@@ -586,6 +591,7 @@ pub struct ClapHostedPluginNode {
     gui_created: bool,
     /// Shared with [`ClapLiveEditor`]s on this instance; cleared (under lock) before destroy.
     live_guard: std::sync::Arc<parking_lot::Mutex<bool>>,
+    has_audio_input: bool,
     activated: bool,
     processing_started: bool,
     sample_rate: f64,
@@ -755,11 +761,26 @@ impl ClapHostedPluginNode {
         let ext_audio_ports = query_ext(CLAP_EXT_AUDIO_PORTS) as *const clap_plugin_audio_ports;
         let ext_note_ports = query_ext(CLAP_EXT_NOTE_PORTS) as *const clap_plugin_note_ports;
 
+        let has_audio_input = if !ext_audio_ports.is_null() {
+            let in_ports = unsafe {
+                (*ext_audio_ports)
+                    .count
+                    .map(|c| c(plugin_ptr, true))
+                    .unwrap_or(1)
+            };
+            in_ports > 0
+        } else {
+            true
+        };
+
         let mut rt_arena = ClapRtArena::new_boxed();
         let mut param_metadata = Vec::new();
+        let mut rt_params = Vec::new();
 
         if !ext_params.is_null() {
             let pcount = unsafe { (*ext_params).count.map(|c| c(plugin_ptr)).unwrap_or(0) };
+            param_metadata.reserve(pcount as usize);
+            rt_params.reserve(pcount as usize);
             for i in 0..pcount {
                 let mut info: clap_param_info = unsafe { std::mem::zeroed() };
                 let ok = unsafe {
@@ -786,22 +807,22 @@ impl ClapHostedPluginNode {
                         default_value: info.default_value,
                         current_value: cur_val,
                     });
-                    if rt_arena.param_count < MAX_CLAP_RT_PARAMS {
-                        rt_arena.params[rt_arena.param_count] = RtParamSlot {
-                            id: info.id,
-                            min_value: info.min_value,
-                            max_value: info.max_value,
-                            current_plain: cur_val,
-                        };
-                        rt_arena.param_count += 1;
-                    }
+                    rt_params.push(RtParamSlot {
+                        id: info.id,
+                        min_value: info.min_value,
+                        max_value: info.max_value,
+                        current_plain: cur_val,
+                    });
                 }
             }
         }
+        rt_arena.params = rt_params.into_boxed_slice();
 
         let sr = sample_rate.max(8_000.0);
         let mbs = max_block_size.clamp(1, MAX_BLOCK_SIZE);
+        let instance_id = NEXT_CLAP_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
         let mut node = Self {
+            instance_id,
             canon_path: canon,
             plugin_id,
             plugin_name,
@@ -820,6 +841,7 @@ impl ClapHostedPluginNode {
             editor_window: None,
             gui_created: false,
             live_guard: std::sync::Arc::new(parking_lot::Mutex::new(true)),
+            has_audio_input,
             activated: false,
             processing_started: false,
             sample_rate: sr,
@@ -947,12 +969,9 @@ impl ClapHostedPluginNode {
     /// Schedules a sample-accurate plain parameter change (`0` heap allocations).
     #[inline]
     pub fn queue_parameter_plain(&mut self, param_id: u32, plain_value: f64, sample_offset: u32) {
-        for i in 0..self.rt_arena.param_count {
-            if self.rt_arena.params[i].id == param_id {
-                self.rt_arena.params[i].current_plain = plain_value.clamp(
-                    self.rt_arena.params[i].min_value,
-                    self.rt_arena.params[i].max_value,
-                );
+        for slot in self.rt_arena.params.iter_mut() {
+            if slot.id == param_id {
+                slot.current_plain = plain_value.clamp(slot.min_value, slot.max_value);
                 break;
             }
         }
@@ -1044,9 +1063,9 @@ impl ClapHostedPluginNode {
             };
             if ok {
                 meta.current_value = v;
-                for i in 0..self.rt_arena.param_count {
-                    if self.rt_arena.params[i].id == meta.id {
-                        self.rt_arena.params[i].current_plain = v;
+                for slot in self.rt_arena.params.iter_mut() {
+                    if slot.id == meta.id {
+                        slot.current_plain = v;
                     }
                 }
             }
@@ -1137,7 +1156,20 @@ impl ClapHostedPluginNode {
         if self.ext_gui.is_null() || self.plugin_ptr.is_null() {
             return None;
         }
+        let wide = wide_null_path(&self.canon_path);
+        let pinned_hmodule = unsafe { LoadLibraryW(wide.as_ptr()) };
+        if pinned_hmodule.is_null() {
+            return None;
+        }
+        {
+            let mut counts = clap_module_refcounts().lock();
+            *counts.entry(self.canon_path.clone()).or_insert(0) += 1;
+        }
         Some(ClapLiveEditor {
+            instance_id: self.instance_id,
+            canon_path: self.canon_path.clone(),
+            entry_ptr: self.entry_ptr,
+            hmodule: pinned_hmodule,
             plugin_ptr: self.plugin_ptr,
             ext_gui: self.ext_gui,
             ext_params: self.ext_params,
@@ -1184,6 +1216,10 @@ impl UnifiedDspNode for ClapHostedPluginNode {
         "CLAP 1.2 Hosted Plugin"
     }
 
+    fn hosted_instance_id(&self) -> Option<u64> {
+        Some(self.instance_id)
+    }
+
     fn latency_samples(&self) -> usize {
         self.cached_latency_samples
     }
@@ -1194,6 +1230,7 @@ impl UnifiedDspNode for ClapHostedPluginNode {
 
     fn reset_state(&mut self) {
         self.rt_arena.event_count = 0;
+        self.rt_arena.chunk_event_count = 0;
         self.rt_arena.out_param_count = 0;
         unsafe {
             if let Some(reset_fn) = (*self.plugin_ptr).reset {
@@ -1204,25 +1241,22 @@ impl UnifiedDspNode for ClapHostedPluginNode {
 
     fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
         let n = (norm_val as f64).clamp(0.0, 1.0);
-        let mut resolved_id = param_id;
-        let mut plain = n;
-        let mut matched = false;
-        for i in 0..self.rt_arena.param_count {
-            if self.rt_arena.params[i].id == param_id {
-                let slot = &mut self.rt_arena.params[i];
-                plain = slot.min_value + (slot.max_value - slot.min_value) * n;
+        if self.rt_arena.params.is_empty() {
+            self.rt_arena.push_param_event(0, param_id, n);
+            return;
+        }
+        let mut matched_plain = None;
+        for slot in self.rt_arena.params.iter_mut() {
+            if slot.id == param_id {
+                let plain = slot.min_value + (slot.max_value - slot.min_value) * n;
                 slot.current_plain = plain;
-                matched = true;
+                matched_plain = Some(plain);
                 break;
             }
         }
-        if !matched && (param_id as usize) < self.rt_arena.param_count {
-            let slot = &mut self.rt_arena.params[param_id as usize];
-            resolved_id = slot.id;
-            plain = slot.min_value + (slot.max_value - slot.min_value) * n;
-            slot.current_plain = plain;
+        if let Some(plain) = matched_plain {
+            self.rt_arena.push_param_event(0, param_id, plain);
         }
-        self.rt_arena.push_param_event(0, resolved_id, plain);
     }
 
     fn on_voice_event(&mut self, event: &SequencerVoiceEvent, ctx: &ProcessContext) {
@@ -1257,6 +1291,15 @@ impl UnifiedDspNode for ClapHostedPluginNode {
                 self.rt_arena
                     .push_midi_event(offset, 0xB0 | (ch as u8 & 0x0F), 123, 0);
             }
+            VoiceEventKind::PitchBend => {
+                let bend14 = ((event.fine_pitch_cents / 200.0) * 8192.0 + 8192.0)
+                    .round()
+                    .clamp(0.0, 16383.0) as u16;
+                let lsb = (bend14 & 0x7F) as u8;
+                let msb = ((bend14 >> 7) & 0x7F) as u8;
+                self.rt_arena
+                    .push_midi_event(offset, 0xE0 | (ch as u8 & 0x0F), lsb, msb);
+            }
             VoiceEventKind::SlotEnable => {}
         }
     }
@@ -1271,21 +1314,41 @@ impl UnifiedDspNode for ClapHostedPluginNode {
         let total = main_io.len();
         if total == 0 {
             self.rt_arena.event_count = 0;
+            self.rt_arena.chunk_event_count = 0;
             return;
         }
 
         let Some(process_fn) = (unsafe { (*self.plugin_ptr).process }) else {
             self.rt_arena.event_count = 0;
+            self.rt_arena.chunk_event_count = 0;
             return;
         };
 
         self.rt_arena.sort_events_by_time();
+        let total_events = self.rt_arena.event_count;
+        let max_blk = self.max_block_size.clamp(1, MAX_BLOCK_SIZE);
         let arena_ptr: *mut ClapRtArena = &mut *self.rt_arena;
 
-        // Chunk safely in <= MAX_BLOCK_SIZE blocks (`0` heap allocations).
+        // Chunk safely in <= self.max_block_size blocks (`0` heap allocations).
         let mut cursor = 0usize;
         while cursor < total {
-            let chunk = (total - cursor).min(MAX_BLOCK_SIZE);
+            let chunk = (total - cursor).min(max_blk);
+            let chunk_end = cursor + chunk;
+            let is_last_chunk = chunk_end >= total;
+
+            let mut c_ev = 0usize;
+            for ev_i in 0..total_events {
+                let mut slot = self.rt_arena.events[ev_i];
+                let t = unsafe { slot.header.time } as usize;
+                if (t >= cursor && t < chunk_end) || (is_last_chunk && t >= chunk_end) {
+                    slot.header.time =
+                        t.saturating_sub(cursor).min(chunk.saturating_sub(1)) as u32;
+                    self.rt_arena.chunk_events[c_ev] = slot;
+                    c_ev += 1;
+                }
+            }
+            self.rt_arena.chunk_event_count = c_ev;
+
             for i in 0..chunk {
                 let f = main_io[cursor + i];
                 self.rt_arena.in_left[i] = f[0];
@@ -1357,9 +1420,13 @@ impl UnifiedDspNode for ClapHostedPluginNode {
                 steady_time: self.steady_time,
                 frames_count: chunk as u32,
                 transport: &transport as *const clap_event_transport as *const c_void,
-                audio_inputs: &in_buf,
+                audio_inputs: if self.has_audio_input {
+                    &in_buf
+                } else {
+                    std::ptr::null()
+                },
                 audio_outputs: &mut out_buf,
-                audio_inputs_count: 1,
+                audio_inputs_count: if self.has_audio_input { 1 } else { 0 },
                 audio_outputs_count: 1,
                 in_events: &in_events,
                 out_events: &out_events,
@@ -1373,16 +1440,17 @@ impl UnifiedDspNode for ClapHostedPluginNode {
                 main_io[cursor + i] = [self.rt_arena.out_left[i], self.rt_arena.out_right[i]];
             }
             self.steady_time = self.steady_time.wrapping_add(chunk as i64);
-            self.rt_arena.event_count = 0;
             cursor += chunk;
         }
+        self.rt_arena.event_count = 0;
+        self.rt_arena.chunk_event_count = 0;
     }
 }
 
 impl Drop for ClapHostedPluginNode {
     fn drop(&mut self) {
-        *self.live_guard.lock() = false;
         self.close_editor();
+        *self.live_guard.lock() = false;
         if !self.plugin_ptr.is_null() {
             unsafe {
                 if self.processing_started {
@@ -1413,6 +1481,10 @@ impl Drop for ClapHostedPluginNode {
 /// `clap.params.get_value` on the same plug-in object the audio thread processes, so any preset,
 /// sample or parameter edited in the window is what plays.
 pub struct ClapLiveEditor {
+    instance_id: u64,
+    canon_path: PathBuf,
+    entry_ptr: *const clap_plugin_entry,
+    hmodule: HMODULE,
     plugin_ptr: *const clap_plugin,
     ext_gui: *const clap_plugin_gui,
     ext_params: *const clap_plugin_params,
@@ -1423,13 +1495,18 @@ pub struct ClapLiveEditor {
     gui_created: bool,
 }
 
-// SAFETY: handed once to the single GUI thread; every plug-in call happens under `live_guard`.
+// SAFETY: handed once to the single GUI thread; every plug-in call runs on the single STA thread.
 unsafe impl Send for ClapLiveEditor {}
 
 impl ClapLiveEditor {
+    #[inline]
+    pub fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
     pub fn open_editor(&mut self, owner_hwnd: Option<isize>, visible: bool) -> Result<isize, String> {
-        let alive = self.live_guard.lock();
-        if !*alive {
+        let is_alive = *self.live_guard.lock();
+        if !is_alive {
             return Err("Plug-in instance was removed".to_string());
         }
         if let Some(ref win) = self.editor_window {
@@ -1440,6 +1517,8 @@ impl ClapLiveEditor {
                 return Ok(win.hwnd_isize());
             }
         }
+        self.close_editor();
+
         let api_ptr = CLAP_WINDOW_API_WIN32.as_ptr() as *const c_char;
         unsafe {
             let gui = &*self.ext_gui;
@@ -1480,8 +1559,8 @@ impl ClapLiveEditor {
     }
 
     pub fn close_editor(&mut self) {
-        let alive = self.live_guard.lock();
-        if *alive && self.gui_created {
+        let is_alive = *self.live_guard.lock();
+        if is_alive && self.gui_created && !self.ext_gui.is_null() {
             unsafe {
                 let gui = &*self.ext_gui;
                 if let Some(hide_fn) = gui.hide {
@@ -1499,7 +1578,8 @@ impl ClapLiveEditor {
     }
 
     pub fn pump_editor_messages(&mut self) -> usize {
-        if !*self.live_guard.lock() {
+        let is_alive = *self.live_guard.lock();
+        if !is_alive {
             self.close_editor();
             return 0;
         }
@@ -1512,8 +1592,8 @@ impl ClapLiveEditor {
     }
 
     pub fn get_parameter_plain(&self, param_id: u32) -> Option<f64> {
-        let alive = self.live_guard.lock();
-        if !*alive || self.ext_params.is_null() {
+        let is_alive = *self.live_guard.lock();
+        if !is_alive || self.ext_params.is_null() {
             return None;
         }
         let mut val = 0.0f64;
@@ -1534,5 +1614,11 @@ impl ClapLiveEditor {
 impl Drop for ClapLiveEditor {
     fn drop(&mut self) {
         self.close_editor();
+        ClapHostedPluginNode::decrement_entry_and_free(
+            &self.canon_path,
+            self.entry_ptr,
+            self.hmodule,
+        );
+        self.hmodule = std::ptr::null_mut();
     }
 }

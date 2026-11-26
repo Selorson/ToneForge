@@ -1428,25 +1428,56 @@ impl FractionalSlopeBiquadBand {
 
     #[inline(always)]
     pub fn process_sample(&mut self, ch: usize, x: f64) -> f64 {
-        let mut y1 = x;
+        let x_clean = if x.is_finite() { x } else { 0.0 };
+        let mut y1 = x_clean;
         for s in 0..self.sections_n1 {
             let [b0, b1, b2, a1, a2] = self.cascade_n1[s];
             let [z1, z2] = self.z_n1[ch][s];
             let out = b0 * y1 + z1;
-            self.z_n1[ch][s][0] = b1 * y1 - a1 * out + z2;
-            self.z_n1[ch][s][1] = b2 * y1 - a2 * out;
+            if !out.is_finite() {
+                self.z_n1[ch][s] = [0.0; 2];
+                y1 = 0.0;
+                continue;
+            }
+            let next_z1 = b1 * y1 - a1 * out + z2;
+            let next_z2 = b2 * y1 - a2 * out;
+            self.z_n1[ch][s][0] = if !next_z1.is_finite() || next_z1.abs() < 1e-20 {
+                0.0
+            } else {
+                next_z1
+            };
+            self.z_n1[ch][s][1] = if !next_z2.is_finite() || next_z2.abs() < 1e-20 {
+                0.0
+            } else {
+                next_z2
+            };
             y1 = out;
         }
         if self.alpha_frac <= 1e-6 {
             return y1;
         }
-        let mut y2 = x;
+        let mut y2 = x_clean;
         for s in 0..self.sections_n2 {
             let [b0, b1, b2, a1, a2] = self.cascade_n2[s];
             let [z1, z2] = self.z_n2[ch][s];
             let out = b0 * y2 + z1;
-            self.z_n2[ch][s][0] = b1 * y2 - a1 * out + z2;
-            self.z_n2[ch][s][1] = b2 * y2 - a2 * out;
+            if !out.is_finite() {
+                self.z_n2[ch][s] = [0.0; 2];
+                y2 = 0.0;
+                continue;
+            }
+            let next_z1 = b1 * y2 - a1 * out + z2;
+            let next_z2 = b2 * y2 - a2 * out;
+            self.z_n2[ch][s][0] = if !next_z1.is_finite() || next_z1.abs() < 1e-20 {
+                0.0
+            } else {
+                next_z1
+            };
+            self.z_n2[ch][s][1] = if !next_z2.is_finite() || next_z2.abs() < 1e-20 {
+                0.0
+            } else {
+                next_z2
+            };
             y2 = out;
         }
         (1.0 - self.alpha_frac) * y1 + self.alpha_frac * y2
@@ -1455,16 +1486,29 @@ impl FractionalSlopeBiquadBand {
     /// Processes a single sample through the Cytomic Trapezoidal Integrator SVF dual-cascade (`0x180111550`).
     #[inline(always)]
     pub fn process_sample_svf(&mut self, ch: usize, x: f64) -> f64 {
-        let mut y1 = x;
+        let x_clean = if x.is_finite() { x } else { 0.0 };
+        let mut y1 = x_clean;
         for s in 0..self.sections_n1 {
-            y1 = self.svf_n1[s].step(y1, &mut self.svf_z_n1[ch][s]);
+            let out = self.svf_n1[s].step(y1, &mut self.svf_z_n1[ch][s]);
+            if !out.is_finite() || !self.svf_z_n1[ch][s][0].is_finite() || !self.svf_z_n1[ch][s][1].is_finite() {
+                self.svf_z_n1[ch][s] = [0.0; 2];
+                y1 = 0.0;
+            } else {
+                y1 = out;
+            }
         }
         if self.alpha_frac <= 1e-6 {
             return y1;
         }
-        let mut y2 = x;
+        let mut y2 = x_clean;
         for s in 0..self.sections_n2 {
-            y2 = self.svf_n2[s].step(y2, &mut self.svf_z_n2[ch][s]);
+            let out = self.svf_n2[s].step(y2, &mut self.svf_z_n2[ch][s]);
+            if !out.is_finite() || !self.svf_z_n2[ch][s][0].is_finite() || !self.svf_z_n2[ch][s][1].is_finite() {
+                self.svf_z_n2[ch][s] = [0.0; 2];
+                y2 = 0.0;
+            } else {
+                y2 = out;
+            }
         }
         (1.0 - self.alpha_frac) * y1 + self.alpha_frac * y2
     }

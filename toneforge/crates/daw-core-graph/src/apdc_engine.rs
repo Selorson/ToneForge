@@ -6,6 +6,29 @@
 //! operate strictly on pre-allocated buffers with **Zero Heap Allocation**.
 
 use crate::{FIXED_POINT_30BIT_SCALE, MAX_BLOCK_SIZE, ProcessContext, StereoFrame, UnifiedDspNode};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Atomic counter incremented whenever an RT `ApdcDelayLine::set_delay_samples` request exceeds
+/// the pre-allocated ring buffer capacity and is safely clamped instead of panicking.
+static APDC_CAPACITY_CLAMP_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the cumulative count of RT APDC capacity-clamp events across the process lifetime.
+#[inline]
+pub fn apdc_capacity_clamp_count() -> u64 {
+    APDC_CAPACITY_CLAMP_EVENTS.load(Ordering::Relaxed)
+}
+
+/// Branchless real-time sanitizer replacing `NaN`, `±Inf`, and subnormal/runaway values (`|x| > 1e6`)
+/// with `0.0` so downstream IIR/EMA/LUFS feedback loops can never lock up permanently.
+#[inline(always)]
+pub fn sanitize_stereo_slice(buf: &mut [StereoFrame]) {
+    for f in buf.iter_mut() {
+        let l = f[0];
+        let r = f[1];
+        f[0] = if l.is_finite() && l.abs() <= 1.0e6 { l } else { 0.0 };
+        f[1] = if r.is_finite() && r.abs() <= 1.0e6 { r } else { 0.0 };
+    }
+}
 
 /// Default pre-allocated capacity in stereo frames for track/slot APDC delay lines
 /// (`32,768` frames accommodates full Linear-Phase FIR + Soothe3 + Mastering Lookahead APDC on RT without resizing).
@@ -30,6 +53,17 @@ pub struct ApdcDelayLine {
 pub type BasicDelay32FS = ApdcDelayLine;
 
 impl ApdcDelayLine {
+    /// Zero-allocation empty shell used only when packaging a retired plugin node on the RT thread
+    /// for off-thread disposal (`0` heap allocations).
+    #[inline]
+    pub const fn empty_rt() -> Self {
+        Self {
+            ring: Vec::new(),
+            cursor: 0,
+            delay_samples: 0,
+        }
+    }
+
     /// Pre-allocates a delay line capable of holding up to `max_delay_samples` frames
     /// without reallocating during real-time playback.
     pub fn with_capacity(max_delay_samples: usize) -> Self {
@@ -60,20 +94,27 @@ impl ApdcDelayLine {
         }
     }
 
-    /// Sets the active delay in samples (Zero Heap Allocation).
-    /// Panics in debug/release if `delay_samples > self.ring.len()`.
+    /// Sets the active delay in samples (Zero Heap Allocation, RT-safe: never panics).
+    /// If `delay_samples` exceeds the pre-allocated ring capacity, clamps safely to `self.ring.len()`
+    /// and increments [`apdc_capacity_clamp_count`].
     #[inline]
     pub fn set_delay_samples(&mut self, delay_samples: usize) {
-        assert!(
-            delay_samples <= self.ring.len(),
-            "ApdcDelayLine capacity ({}) exceeded by requested delay ({})",
-            self.ring.len(),
-            delay_samples
-        );
-        if self.delay_samples != delay_samples {
-            self.delay_samples = delay_samples;
+        let ring_len = self.ring.len();
+        if ring_len == 0 {
+            self.delay_samples = 0;
             self.cursor = 0;
-            self.ring[..delay_samples.max(1)].fill([0.0; 2]);
+            return;
+        }
+        let clamped = if delay_samples > ring_len {
+            APDC_CAPACITY_CLAMP_EVENTS.fetch_add(1, Ordering::Relaxed);
+            ring_len
+        } else {
+            delay_samples
+        };
+        if self.delay_samples != clamped {
+            self.delay_samples = clamped;
+            self.cursor = 0;
+            self.ring[..clamped.max(1)].fill([0.0; 2]);
         }
     }
 
@@ -158,6 +199,19 @@ pub struct PluginRackSlot {
 }
 
 impl PluginRackSlot {
+    /// Wraps a displaced `plugin` in a zero-allocation carrier shell so `RtGraphMutation::RemovePluginSlot`
+    /// can replace an interior slot with `EmptySlotNode` in-place while retiring `plugin` via `RetiredRtResource::PluginSlot`.
+    #[inline]
+    pub fn from_retired_plugin_rt(plugin: Box<dyn UnifiedDspNode>) -> Self {
+        Self {
+            plugin,
+            enabled: false,
+            wet_mix: 0.0,
+            dry_apdc_delay: ApdcDelayLine::empty_rt(),
+            dry_scratch: Vec::new(),
+        }
+    }
+
     /// Creates a new FX slot wrapping `plugin`, pre-allocating `dry_scratch` and `dry_apdc_delay`.
     pub fn new(plugin: Box<dyn UnifiedDspNode>, wet_mix: f32) -> Self {
         let lat = plugin.latency_samples();
@@ -238,6 +292,7 @@ impl PluginRackSlot {
             // Point 3 APDC: delay Dry branch by exact plugin latency `lat`
             self.dry_apdc_delay.process_in_place(dry);
             self.plugin.process_slice(ctx, track_buf, sidechain_in, &mut []);
+            sanitize_stereo_slice(track_buf);
             let inv_w = 1.0 - w;
             for i in 0..n {
                 track_buf[i][0] = dry[i][0] * inv_w + track_buf[i][0] * w;
@@ -245,6 +300,7 @@ impl PluginRackSlot {
             }
         } else {
             self.plugin.process_slice(ctx, track_buf, sidechain_in, &mut []);
+            sanitize_stereo_slice(track_buf);
         }
     }
 }
@@ -252,8 +308,8 @@ impl PluginRackSlot {
 /// Sample-accurate delayed parameter automation event (`TAutomationDelay` `VMT = 0x00c5e568`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DelayedAutomationEvent {
-    pub target_sample_pos: i64,
     pub target_track: u16,
+    pub target_sample_pos: i64,
     pub slot_index: u8, // 0..10 for insert slot, 0xFF for track parameter
     pub plugin_id: u32,
     pub param_index: u32,
@@ -269,6 +325,7 @@ pub enum VoiceEventKind {
     SlideNote,
     ChannelMute,
     SlotEnable,
+    PitchBend,
 }
 
 /// Sample-accurate delayed voice / MIDI / mute event (`sub_c61970`).
@@ -378,6 +435,36 @@ impl SampleAccurateAutomationQueue {
         self.param_len = 0;
         self.voice_len = 0;
         self.dedup_table.fill(EventIdValueRec::default());
+    }
+
+    /// Invalidates the cached deduplication record for `(target_track, slot_index, param_index)`
+    /// when a parameter is modified directly (e.g. live UI knob turn) so subsequent scheduled
+    /// automation returning to the previous value is never suppressed.
+    #[inline]
+    pub fn invalidate_param_dedup(&mut self, target_track: u16, slot_index: u8, param_index: u32) {
+        let key = Self::make_event_key(target_track, slot_index, param_index);
+        let mask = self.dedup_table.len() - 1;
+        let mut idx = (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) as usize) & mask;
+        for _ in 0..8 {
+            let entry = &mut self.dedup_table[idx];
+            if entry.occupied && entry.event_key == key {
+                *entry = EventIdValueRec::default();
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    /// Invalidates all cached deduplication records belonging to `(target_track, slot_index)`
+    /// when a plugin slot is replaced or removed (`0` heap allocations).
+    #[inline]
+    pub fn invalidate_slot_dedup(&mut self, target_track: u16, slot_index: u8) {
+        let prefix = ((target_track as u64) << 40) | ((slot_index as u64) << 32);
+        let prefix_mask = 0xFFFF_FF00_0000_0000u64 | 0x0000_00FF_0000_0000u64;
+        for entry in &mut self.dedup_table {
+            if entry.occupied && (entry.event_key & prefix_mask) == prefix {
+                *entry = EventIdValueRec::default();
+            }
+        }
     }
 
     #[inline]
@@ -566,5 +653,41 @@ impl SampleAccurateAutomationQueue {
             }
             self.param_len = remaining;
         }
+    }
+}
+
+#[cfg(test)]
+mod apdc_safety_tests {
+    use super::*;
+
+    #[test]
+    fn test_apdc_delay_line_clamps_without_panic_and_dedup_invalidation() {
+        let before = apdc_capacity_clamp_count();
+        let mut dl = ApdcDelayLine::with_capacity(64);
+        dl.set_delay_samples(131_072);
+        assert_eq!(dl.delay_samples(), 64);
+        assert!(apdc_capacity_clamp_count() > before);
+        let mut buf = [[1.0f32, -1.0f32]; 128];
+        dl.process_in_place(&mut buf);
+        assert_eq!(buf[0], [0.0, 0.0]);
+        assert_eq!(buf[64], [1.0, -1.0]);
+
+        // Verify SampleAccurateAutomationQueue dedup invalidation allows re-sending prior value
+        let mut q = SampleAccurateAutomationQueue::default();
+        assert!(q.schedule_param_normalized(0, 0, 1, 0, 10, 2, 0.5));
+        let mut dispatched = Vec::new();
+        q.drain_up_to(16, |ev| dispatched.push(ev.value_fixed30), |_| {});
+        assert_eq!(dispatched.len(), 1);
+
+        // Identical value without invalidation is deduplicated
+        assert!(q.schedule_param_normalized(16, 0, 1, 0, 10, 2, 0.5));
+        q.drain_up_to(32, |ev| dispatched.push(ev.value_fixed30), |_| {});
+        assert_eq!(dispatched.len(), 1);
+
+        // Manual knob change invalidates dedup so returning to 0.5 dispatches cleanly
+        q.invalidate_param_dedup(1, 0, 2);
+        assert!(q.schedule_param_normalized(32, 0, 1, 0, 10, 2, 0.5));
+        q.drain_up_to(48, |ev| dispatched.push(ev.value_fixed30), |_| {});
+        assert_eq!(dispatched.len(), 2);
     }
 }

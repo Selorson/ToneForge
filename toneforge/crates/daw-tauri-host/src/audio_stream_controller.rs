@@ -132,6 +132,7 @@ pub struct AudioStreamController {
     pub htdemucs4_separator: HTDemucs4,
     pub vr_aspp_separator: CascadedASPPNet,
     pub spectral_ensembler: SpectralEnsembler,
+    pub(crate) _rt_gc: Option<daw_core_graph::RtGarbageCollector>,
 }
 
 impl AudioStreamController {
@@ -140,12 +141,13 @@ impl AudioStreamController {
         let sr = sample_rate.max(8000.0);
         let blk = max_block_size.clamp(16, MAX_BLOCK_SIZE);
         let bpm = 128.0;
-        let (engine, cmd_prod, telem_out) = MixerEngine::new(sr, bpm, worker_threads);
+        let (engine, cmd_prod, mut_prod, gc_worker, telem_out) =
+            MixerEngine::new_with_rt_gc(sr, bpm, worker_threads);
         let mut project_state = ToneForgeProjectState::new_default(sr, bpm);
         project_state.max_block_size = blk;
 
         let mut controller = Self {
-            app_state: DawAppState::new(cmd_prod),
+            app_state: DawAppState::new_with_rt_mutations(cmd_prod, mut_prod),
             telemetry_streamer: ZeroCopyBinaryTelemetryStreamer::new(telem_out),
             mixer_engine: Box::new(engine),
             project_state,
@@ -158,6 +160,7 @@ impl AudioStreamController {
             htdemucs4_separator: HTDemucs4::default(),
             vr_aspp_separator: CascadedASPPNet::default(),
             spectral_ensembler: SpectralEnsembler::default(),
+            _rt_gc: Some(gc_worker),
         };
         let _ = controller.mixer_engine.route_inserts_to_master(4);
         controller
@@ -213,6 +216,7 @@ impl AudioStreamController {
             htdemucs4_separator: HTDemucs4::default(),
             vr_aspp_separator: CascadedASPPNet::default(),
             spectral_ensembler: SpectralEnsembler::default(),
+            _rt_gc: None,
         };
         let _ = controller.mixer_engine.route_inserts_to_master(4);
         (controller, gc_worker)
@@ -813,7 +817,7 @@ impl AudioStreamController {
                 9,
                 ((cfg.maximizer_transient_shaping + 1.0) * 0.5).clamp(0.0, 1.0),
             ),
-            (65, (cfg.maximizer_irc_mode.min(8) as f32) / 8.0),
+            (65, (cfg.maximizer_irc_mode.min(5) as f32) / 5.0),
             (66, if cfg.maximizer_true_peak { 1.0 } else { 0.0 }),
             (4, 0.5),
         ];
@@ -939,18 +943,18 @@ impl AudioStreamController {
 
         // Low End Focus (69..=74) & Codec Preview (85..=87)
         let v3_params: [(u32, f32); 9] = [
-            (69, if cfg.low_end_focus_enabled { 1.0 } else { 0.0 }),
-            (70, if cfg.low_end_focus_punchy { 0.0 } else { 1.0 }),
+            (70, if cfg.low_end_focus_enabled { 1.0 } else { 0.0 }),
+            (71, if cfg.low_end_focus_punchy { 0.0 } else { 1.0 }),
             (
-                71,
+                72,
                 ((cfg.low_end_focus_contrast_pct + 100.0) / 200.0).clamp(0.0, 1.0),
             ),
             (
-                72,
+                73,
                 ((cfg.low_end_focus_upper_hz.clamp(20.0, 300.0) - 20.0) / 280.0).clamp(0.0, 1.0),
             ),
-            (73, ((cfg.low_end_focus_gain_db + 12.0) / 24.0).clamp(0.0, 1.0)),
-            (74, if cfg.low_end_focus_solo { 1.0 } else { 0.0 }),
+            (74, ((cfg.low_end_focus_gain_db + 12.0) / 24.0).clamp(0.0, 1.0)),
+            (69, if cfg.low_end_focus_solo { 1.0 } else { 0.0 }),
             (85, if cfg.codec_preview_enabled { 1.0 } else { 0.0 }),
             (
                 86,
@@ -1097,14 +1101,16 @@ impl AudioStreamController {
         mix: &[StereoFrame],
         enable_denoise_2pass: bool,
     ) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
+        let sr = (self.sample_rate.round() as u32).clamp(8_000, 384_000);
         self.mdx23c_separator.enable_denoise_2pass = enable_denoise_2pass;
-        self.mdx23c_separator.separate_offline(mix)
+        self.mdx23c_separator.separate_offline(mix, sr)
     }
 
     /// Runs offline Hybrid Transformer Demucs v4 (`HTDemucs4`) 4-stem separation
     /// returning `[Drums, Bass, Other, Vocals]`.
     pub fn separate_htdemucs4_offline(&self, mix: &[StereoFrame]) -> [Vec<StereoFrame>; 4] {
-        self.htdemucs4_separator.separate_4stems(mix)
+        let sr = (self.sample_rate.round() as u32).clamp(8_000, 384_000);
+        self.htdemucs4_separator.separate_4stems(mix, sr)
     }
 
     /// Runs offline VR `CascadedASPPNet` (`dilations = [1, 2, 4, 8, 16]`) separation
@@ -1114,8 +1120,9 @@ impl AudioStreamController {
         mix: &[StereoFrame],
         aggressiveness: f32,
     ) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
+        let sr = (self.sample_rate.round() as u32).clamp(8_000, 384_000);
         self.vr_aspp_separator.aggressiveness = aggressiveness.clamp(-1.0, 1.0);
-        self.vr_aspp_separator.separate_vocal_instrumental(mix)
+        self.vr_aspp_separator.separate_vocal_instrumental(mix, sr)
     }
 
     /// Executes the full UVR5 Multi-Model Ensemble Studio pipeline across `Mdx23cSeparator`,
@@ -1181,10 +1188,11 @@ impl AudioStreamController {
             };
         }
 
-        let (mdx_vocals, _mdx_inst) = self.mdx23c_separator.separate_offline(mix);
+        let sr_hz = (self.sample_rate.round() as u32).clamp(8_000, 384_000);
+        let (mdx_vocals, _mdx_inst) = self.mdx23c_separator.separate_offline(mix, sr_hz);
         let [demucs_drums, demucs_bass, demucs_other, demucs_vocals] =
-            self.htdemucs4_separator.separate_4stems(mix);
-        let (vr_vocals, _vr_inst) = self.vr_aspp_separator.separate_vocal_instrumental(mix);
+            self.htdemucs4_separator.separate_4stems(mix, sr_hz);
+        let (vr_vocals, _vr_inst) = self.vr_aspp_separator.separate_vocal_instrumental(mix, sr_hz);
 
         self.spectral_ensembler.mode = mode;
         self.spectral_ensembler.phase_denoise_strength = phase_denoise_strength.clamp(0.0, 1.0);
@@ -1519,7 +1527,7 @@ impl AudioStreamController {
         if self.mixer_engine.tracks[MASTER_TRACK_INDEX].slots.is_empty() {
             return Err("Master Track 0 has no Slot 0 for RealTimeBsrnnStemNode".to_string());
         }
-        let mut gpu_node = RealTimeBsrnnStemNode::new_with_onnx_gpu(self.sample_rate)?;
+        let mut gpu_node = RealTimeBsrnnStemNode::new_with_onnx_gpu_lazy(self.sample_rate)?;
         gpu_node.prepare(self.sample_rate, self.max_block_size);
         if let Some(PluginSlotStateDto {
             plugin: PluginConfigDto::RealTimeBsrnnStem(bsrnn_dto),

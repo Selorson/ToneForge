@@ -157,7 +157,7 @@ static GLOBAL_VR_INST_HQ3: IdleSlot<Uvr5MdxOnnxSeparator> = IdleSlot::new();
 
 /// Applies UVR5 VR `aggressiveness` (`[-1.0, +1.0]`) power-law Wiener mask sharpening to a real
 /// neural `(vocals, instrumental)` pair while preserving exact mixture phase and `vocals + inst == mix`.
-fn sharpen_vocal_mask_aggressiveness(
+pub(crate) fn sharpen_vocal_mask_aggressiveness(
     mix: &[StereoFrame],
     vocals_raw: &[StereoFrame],
     inst_raw: &[StereoFrame],
@@ -183,6 +183,8 @@ fn sharpen_vocal_mask_aggressiveness(
     let mut planner = RealFftPlanner::<f32>::new();
     let fft_fwd = planner.plan_fft_forward(n_fft);
     let fft_inv = planner.plan_fft_inverse(n_fft);
+    let mut scratch_fwd = fft_fwd.make_scratch_vec();
+    let mut scratch_inv = fft_inv.make_scratch_vec();
 
     let mut hann = vec![0.0f32; n_fft];
     for i in 0..n_fft {
@@ -204,7 +206,10 @@ fn sharpen_vocal_mask_aggressiveness(
             win_norm[start + i] += hann[i] * hann[i];
         }
         for ch in 0..2 {
-            let fill_fft = |src: &[StereoFrame], buf: &mut [f32], out: &mut [Complex32]| {
+            let fill_fft = |src: &[StereoFrame],
+                            buf: &mut [f32],
+                            out: &mut [Complex32],
+                            scratch: &mut [Complex32]| {
                 for i in 0..n_fft {
                     let idx = start + i;
                     let s = if idx >= pad && (idx - pad) < src.len() {
@@ -214,11 +219,11 @@ fn sharpen_vocal_mask_aggressiveness(
                     };
                     buf[i] = s * hann[i];
                 }
-                let _ = fft_fwd.process(buf, out);
+                let _ = fft_fwd.process_with_scratch(buf, out, scratch);
             };
-            fill_fft(mix, &mut tb, &mut sm);
-            fill_fft(vocals_raw, &mut tb, &mut sv);
-            fill_fft(inst_raw, &mut tb, &mut si);
+            fill_fft(mix, &mut tb, &mut sm, &mut scratch_fwd);
+            fill_fft(vocals_raw, &mut tb, &mut sv, &mut scratch_fwd);
+            fill_fft(inst_raw, &mut tb, &mut si, &mut scratch_fwd);
 
             for k in 0..f_bins {
                 let mv = sv[k].norm().powf(exponent);
@@ -234,7 +239,7 @@ fn sharpen_vocal_mask_aggressiveness(
             sv[0].im = 0.0;
             sv[f_bins - 1].im = 0.0;
 
-            let _ = fft_inv.process(&mut sv, &mut tb);
+            let _ = fft_inv.process_with_scratch(&mut sv, &mut tb, &mut scratch_inv);
             let dst = if ch == 0 { &mut ola_l } else { &mut ola_r };
             for i in 0..n_fft {
                 dst[start + i] += tb[i] * inv_n * hann[i];
@@ -349,22 +354,29 @@ impl CascadedASPPNet {
         mask
     }
 
-    /// Separates stereo audio into `(vocal_stem, instrumental_stem)` using real
+    /// Separates stereo audio at `source_sr` Hz into `(vocal_stem, instrumental_stem)` using real
     /// `UVR-MDX-NET-Inst_HQ_3.onnx` inference (`CUDA -> DirectML -> CPU`), falling back to real
     /// `GruThreeStemSeparator` `.npz` weights when ONNX Runtime is unavailable.
     pub fn separate_vocal_instrumental(
         &self,
         mix: &[StereoFrame],
+        source_sr: u32,
     ) -> (Vec<StereoFrame>, Vec<StereoFrame>) {
         let len = mix.len();
         if len == 0 {
             return (Vec::new(), Vec::new());
         }
+        let sr = source_sr.clamp(8_000, 384_000);
 
         // 1. Primary path: Real `UVR-MDX-NET-Inst_HQ_3.onnx` ONNX inference
-        if let Some(Ok((voc_raw, inst_raw))) = GLOBAL_VR_INST_HQ3.with(
-            || Uvr5MdxOnnxSeparator::from_inst_hq_3().ok(),
-            |sep| sep.separate_vocal_instrumental(mix, 48_000, false),
+        if let Some(Ok((voc_raw, inst_raw))) = GLOBAL_VR_INST_HQ3.with_fallible(
+            || {
+                crate::idle_release::classify_onnx_load(
+                    crate::onnx_gpu_runtime::resolve_uvr5_inst_hq3_onnx_path(),
+                    Uvr5MdxOnnxSeparator::from_inst_hq_3_path,
+                )
+            },
+            |sep| sep.separate_vocal_instrumental(mix, sr, false),
         ) {
             return sharpen_vocal_mask_aggressiveness(
                 mix,
@@ -378,7 +390,7 @@ impl CascadedASPPNet {
 
         // 2. Pure-Rust real-weight fallback: 3-model GRU-512 `.npz` separator
         if let Some(mut gru) = GruThreeStemSeparator::from_global_cache() {
-            let [voc_raw, _, _, _] = gru.separate_4stems(mix, 48_000);
+            let [voc_raw, _, _, _] = gru.separate_4stems(mix, sr);
             let mut inst_raw = vec![[0.0f32; 2]; len];
             for i in 0..len {
                 inst_raw[i] = [mix[i][0] - voc_raw[i][0], mix[i][1] - voc_raw[i][1]];

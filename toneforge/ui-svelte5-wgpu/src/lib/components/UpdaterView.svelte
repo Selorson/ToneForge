@@ -6,7 +6,7 @@
 
   const RELEASES_URL = 'https://github.com/Selorson/ToneForge-Release/releases';
 
-  let version = $state('0.1.0');
+  let version = $state('0.1.1');
   let checking = $state(false);
   let downloading = $state(false);
   let hasUpdate = $state(false);
@@ -30,7 +30,7 @@
         const { getVersion } = await import('@tauri-apps/api/app');
         version = await getVersion();
       } catch {
-        // giữ mặc định 0.1.0
+        // giữ mặc định 0.1.1
       }
     }
   });

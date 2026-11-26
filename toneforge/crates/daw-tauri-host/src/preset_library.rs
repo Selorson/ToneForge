@@ -1089,7 +1089,7 @@ fn overlay_ozone12_xml_params(cfg: &mut Ozone12MasterConfigDto, xml_text: &str) 
                         cfg.maximizer_ceiling_dbtp = val.clamp(-6.0, 0.0);
                     }
                     "Mode" | "IRCMode" => {
-                        cfg.maximizer_irc_mode = (val.round() as u8).min(8);
+                        cfg.maximizer_irc_mode = (val.round() as u8).min(5);
                     }
                     "TruePeak" => {
                         cfg.maximizer_true_peak = val >= 0.5;
@@ -2085,6 +2085,32 @@ fn load_fl26_sample_kit_internal(
     ))
 }
 
+fn resample_kit_voices_to_sr(
+    dto: &Fl26SampleKitDto,
+    voices: Vec<(u8, Vec<daw_core_graph::StereoFrame>)>,
+    target_sr: f64,
+) -> Vec<(u8, Vec<daw_core_graph::StereoFrame>)> {
+    let dst_sr = (target_sr.round() as u32).clamp(8_000, 384_000);
+    voices
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (root_key, frames))| {
+            let src_sr = dto
+                .voices
+                .get(idx)
+                .map(|v| v.sample_rate)
+                .unwrap_or(44_100)
+                .clamp(8_000, 384_000);
+            let resampled = if src_sr != dst_sr {
+                ai_uvr5_stem_engine::resample_stereo_frames(&frames, src_sr, dst_sr)
+            } else {
+                frames
+            };
+            (root_key, resampled)
+        })
+        .collect()
+}
+
 /// Reads the raw `.wav` file bytes for a specific voice (`sample_idx`) in an FL Studio 26 sample kit (`[Nhóm D.4]`).
 pub fn read_fl26_sample_kit_wav_bytes(
     kit_query: &str,
@@ -2119,11 +2145,12 @@ pub fn apply_fl26_sample_kit_to_engine(
     engine: &mut daw_core_graph::MixerEngine,
     kit_query: &str,
 ) -> Result<Fl26SampleKitDto, String> {
+    let engine_sr = engine.slicer.sample_rate().max(8_000.0);
     let (dto, discrete_voices) = load_fl26_sample_kit_internal(kit_query)?;
-    let mut synth =
-        daw_core_graph::PolyphonicSynthGeneratorNode::new(1, engine.slicer.sample_rate);
+    let resampled_voices = resample_kit_voices_to_sr(&dto, discrete_voices, engine_sr);
+    let mut synth = daw_core_graph::PolyphonicSynthGeneratorNode::new(1, engine_sr);
     if !kit_query.trim().eq_ignore_ascii_case("Sytrus / Harmor Lead") {
-        synth.load_sample_kit_voices(discrete_voices);
+        synth.load_sample_kit_voices(resampled_voices);
     }
     engine.remove_stem_channels_on_tracks(&[2]);
     if let Some(existing) = engine.channels.iter_mut().find(|c| c.id == 1) {
@@ -2564,7 +2591,7 @@ pub fn apply_fl26_fx_preset_to_engine(
         return Err("Track or slot index out of range".to_string());
     }
     let dto = load_fl26_fx_preset(state, track_idx, slot_idx, preset_query)?;
-    let sr = engine.slicer.sample_rate.max(8000.0);
+    let sr = engine.slicer.sample_rate().max(8000.0);
     let blk = daw_core_graph::MAX_BLOCK_SIZE;
 
     let norm_thresh = ((dto.threshold_db + 30.0) / 30.0).clamp(0.0, 1.0);
@@ -2748,9 +2775,10 @@ pub fn apply_fl26_sample_kit_rt(
 ) -> Result<Fl26SampleKitDto, String> {
     let sr = sample_rate.max(8_000.0);
     let (dto, discrete_voices) = load_fl26_sample_kit_internal(kit_query)?;
+    let resampled_voices = resample_kit_voices_to_sr(&dto, discrete_voices, sr);
     let mut synth = daw_core_graph::PolyphonicSynthGeneratorNode::new(1, sr).with_lookahead_latency(64);
     if !kit_query.trim().eq_ignore_ascii_case("Sytrus / Harmor Lead") {
-        synth.load_sample_kit_voices(discrete_voices);
+        synth.load_sample_kit_voices(resampled_voices);
     }
     let mut ch = ChannelGenerator::new(1, 1, Box::new(synth));
     ch.prepare(sr, daw_core_graph::MAX_BLOCK_SIZE);

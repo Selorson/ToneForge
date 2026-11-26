@@ -52,6 +52,7 @@ export class RealtimeSpeakerEngine {
 
   private fftRawBuf = new Float32Array(1024);
   private unlockListenersAttached = false;
+  private boundUnlockHandler: (() => void) | null = null;
   private latestTelemetry: DawTelemetryView | null = null;
 
   constructor() {
@@ -76,9 +77,27 @@ export class RealtimeSpeakerEngine {
         this.startPlaybackLoop(this.latestTelemetry);
       }
     };
+    this.boundUnlockHandler = unlock;
 
     window.addEventListener('pointerdown', unlock, { passive: true });
     window.addEventListener('keydown', unlock, { passive: true });
+  }
+
+  dispose(): void {
+    if (typeof window !== 'undefined' && this.boundUnlockHandler) {
+      window.removeEventListener('pointerdown', this.boundUnlockHandler);
+      window.removeEventListener('keydown', this.boundUnlockHandler);
+    }
+    this.boundUnlockHandler = null;
+    this.unlockListenersAttached = false;
+    if (this.schedulerTimerId !== null) {
+      clearInterval(this.schedulerTimerId);
+      this.schedulerTimerId = null;
+    }
+    if (this.ctx) {
+      void this.ctx.close().catch(() => {});
+      this.ctx = null;
+    }
   }
 
   /**

@@ -167,7 +167,12 @@
                   <span class="fmt-badge {lp.isClap ? 'clap' : 'vst3'}">
                     {lp.isClap ? 'CLAP 1.2' : 'VST3 3.7'}
                   </span>
-                  <strong>Track #{lp.trackIdx} · Slot #{lp.slotIdx + 1}: {lp.name}</strong>
+                  <strong>
+                    Track #{lp.trackIdx} ·
+                    {lp.isInstrument || lp.slotIdx === 0xfe
+                      ? '🎹 Channel Synth'
+                      : `Slot #${lp.slotIdx + 1}`}: {lp.name}
+                  </strong>
                 </div>
                 <div class="loaded-badges">
                   <span class="apdc-pill">APDC +{lp.latencySamples} smp</span>

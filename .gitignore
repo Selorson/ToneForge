@@ -46,5 +46,4 @@ toneforge/assets/uvr5/models/**/*.th
 
 # Explicitly keep small bundled Ozone 12 ONNX models (< 7 MB) tracked
 !toneforge/assets/ozone12/models/*.onnx
-!toneforge/assets/models/bsrnn_realtime/*.onnx
 

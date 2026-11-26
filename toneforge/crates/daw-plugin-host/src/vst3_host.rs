@@ -25,16 +25,27 @@ use daw_core_graph::{
     MAX_BLOCK_SIZE, ProcessContext, SequencerVoiceEvent, StereoFrame, UnifiedDspNode,
     VoiceEventKind,
 };
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 pub const MAX_VST3_RT_EVENTS: usize = 512;
 pub const MAX_VST3_PARAM_QUEUES: usize = 64;
 pub const MAX_POINTS_PER_QUEUE: usize = 16;
+
+static NEXT_VST3_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Global non-RT refcount table for Steinberg VST3 `InitDll()` / `ExitDll()` per canonical DLL path.
+fn vst3_module_refcounts() -> &'static Mutex<HashMap<PathBuf, usize>> {
+    static MAP: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Summary of a Steinberg VST3 `"Audio Module Class"` discovered inside a `.vst3` binary/bundle.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -860,8 +871,11 @@ struct Vst3RtArena {
     out_param_changes: PreallocParameterChanges,
     in_events: PreallocEventList,
     out_events: PreallocEventList,
-    param_ids: [ParamID; 128],
-    param_count: usize,
+    staged_events: [Vst3Event; MAX_VST3_RT_EVENTS],
+    staged_event_count: usize,
+    staged_param_points: [(ParamID, i32, ParamValue); MAX_VST3_RT_EVENTS],
+    staged_param_point_count: usize,
+    param_ids: Box<[ParamID]>,
 }
 
 impl Vst3RtArena {
@@ -880,8 +894,11 @@ impl Vst3RtArena {
             out_param_changes: PreallocParameterChanges::new(),
             in_events: PreallocEventList::new(),
             out_events: PreallocEventList::new(),
-            param_ids: [0; 128],
-            param_count: 0,
+            staged_events: [Vst3Event::default(); MAX_VST3_RT_EVENTS],
+            staged_event_count: 0,
+            staged_param_points: [(0, 0, 0.0); MAX_VST3_RT_EVENTS],
+            staged_param_point_count: 0,
+            param_ids: Box::new([]),
         });
         b.in_ptrs[0] = b.in_left.as_mut_ptr();
         b.in_ptrs[1] = b.in_right.as_mut_ptr();
@@ -890,6 +907,23 @@ impl Vst3RtArena {
         b.aux_ptrs[0] = b.aux_left.as_mut_ptr();
         b.aux_ptrs[1] = b.aux_right.as_mut_ptr();
         b
+    }
+
+    #[inline]
+    fn push_staged_event(&mut self, ev: Vst3Event) {
+        if self.staged_event_count < MAX_VST3_RT_EVENTS {
+            self.staged_events[self.staged_event_count] = ev;
+            self.staged_event_count += 1;
+        }
+    }
+
+    #[inline]
+    fn push_staged_param_point(&mut self, param_id: ParamID, sample_offset: i32, norm_val: ParamValue) {
+        if self.staged_param_point_count < MAX_VST3_RT_EVENTS {
+            self.staged_param_points[self.staged_param_point_count] =
+                (param_id, sample_offset.max(0), norm_val);
+            self.staged_param_point_count += 1;
+        }
     }
 }
 
@@ -956,17 +990,17 @@ unsafe fn com_query(ptr: *mut c_void, iid: &TUID) -> *mut c_void {
     }
 }
 
-/// Enumerates all Steinberg VST3 `"Audio Module Class"` plugins inside `vst3_path` via `LoadLibraryW`.
-pub fn enumerate_vst3_plugins_in_library(
+fn acquire_vst3_module(
     vst3_path: &Path,
-) -> Result<Vec<Vst3DescriptorSummary>, String> {
+) -> Result<(PathBuf, HMODULE, Option<InitExitDllFn>), String> {
     let dll_path = resolve_vst3_binary_path(vst3_path)?;
-    let wide = wide_null_path(&dll_path);
+    let canon = std::fs::canonicalize(&dll_path).unwrap_or(dll_path);
+    let wide = wide_null_path(&canon);
     let hmodule = unsafe { LoadLibraryW(wide.as_ptr()) };
     if hmodule.is_null() {
         return Err(format!(
             "LoadLibraryW failed for VST3 binary: {}",
-            dll_path.display()
+            canon.display()
         ));
     }
 
@@ -976,44 +1010,73 @@ pub fn enumerate_vst3_plugins_in_library(
     let exit_dll: Option<InitExitDllFn> = unsafe {
         GetProcAddress(hmodule, b"ExitDll\0".as_ptr()).map(|f| std::mem::transmute(f))
     };
-    if let Some(init_fn) = init_dll {
-        let ok = unsafe { init_fn() };
-        if !ok {
-            unsafe {
-                let _ = FreeLibrary(hmodule);
+
+    {
+        let mut counts = vst3_module_refcounts().lock();
+        let entry = counts.entry(canon.clone()).or_insert(0);
+        if *entry == 0 {
+            if let Some(init_fn) = init_dll {
+                let ok = unsafe { init_fn() };
+                if !ok {
+                    counts.remove(&canon);
+                    unsafe {
+                        let _ = FreeLibrary(hmodule);
+                    }
+                    return Err(format!(
+                        "VST3 InitDll() returned false for {}",
+                        canon.display()
+                    ));
+                }
             }
-            return Err(format!("VST3 InitDll() returned false for {}", dll_path.display()));
+        }
+        *entry += 1;
+    }
+
+    Ok((canon, hmodule, exit_dll))
+}
+
+fn release_vst3_module(canon_path: &Path, exit_dll: Option<InitExitDllFn>, hmodule: HMODULE) {
+    {
+        let mut counts = vst3_module_refcounts().lock();
+        if let Some(c) = counts.get_mut(canon_path) {
+            *c = c.saturating_sub(1);
+            if *c == 0 {
+                counts.remove(canon_path);
+                if let Some(ex) = exit_dll {
+                    unsafe {
+                        let _ = ex();
+                    }
+                }
+            }
         }
     }
+    if !hmodule.is_null() {
+        unsafe {
+            let _ = FreeLibrary(hmodule);
+        }
+    }
+}
+
+/// Enumerates all Steinberg VST3 `"Audio Module Class"` plugins inside `vst3_path` via `LoadLibraryW`.
+pub fn enumerate_vst3_plugins_in_library(
+    vst3_path: &Path,
+) -> Result<Vec<Vst3DescriptorSummary>, String> {
+    let (canon_path, hmodule, exit_dll) = acquire_vst3_module(vst3_path)?;
 
     let get_factory: Option<GetPluginFactoryFn> = unsafe {
         GetProcAddress(hmodule, b"GetPluginFactory\0".as_ptr()).map(|f| std::mem::transmute(f))
     };
     let Some(get_factory_fn) = get_factory else {
-        if let Some(ex) = exit_dll {
-            unsafe {
-                let _ = ex();
-            }
-        }
-        unsafe {
-            let _ = FreeLibrary(hmodule);
-        }
+        release_vst3_module(&canon_path, exit_dll, hmodule);
         return Err(format!(
             "GetPluginFactory export not found in {}",
-            dll_path.display()
+            canon_path.display()
         ));
     };
 
     let factory_ptr = unsafe { get_factory_fn() };
     if factory_ptr.is_null() {
-        if let Some(ex) = exit_dll {
-            unsafe {
-                let _ = ex();
-            }
-        }
-        unsafe {
-            let _ = FreeLibrary(hmodule);
-        }
+        release_vst3_module(&canon_path, exit_dll, hmodule);
         return Err("GetPluginFactory() returned NULL".to_string());
     }
 
@@ -1097,23 +1160,20 @@ pub fn enumerate_vst3_plugins_in_library(
             });
         }
         com_release(factory_ptr);
-        if let Some(ex) = exit_dll {
-            let _ = ex();
-        }
-        let _ = FreeLibrary(hmodule);
     }
+    release_vst3_module(&canon_path, exit_dll, hmodule);
 
     Ok(out)
 }
 
 const TF_VST3_STATE_MAGIC: &[u8; 8] = b"TFVST3ST";
 
-/// Native editor window state (`IPlugView` + `IPlugFrame` + HWND) for one controller.
+/// Native editor window state (`IPlugView` + `IPlugFrame` + heap-pinned `NativePluginWindow`).
 #[derive(Default)]
 pub struct Vst3EditorSession {
     plug_view_ptr: *mut c_void,
     plug_frame: Option<Box<HostPlugFrameCom>>,
-    editor_window: Option<NativePluginWindow>,
+    editor_window: Option<Box<NativePluginWindow>>,
 }
 
 impl Vst3EditorSession {
@@ -1180,12 +1240,14 @@ impl Vst3EditorSession {
         let width = (rect.right - rect.left).max(160) as u32;
         let height = (rect.bottom - rect.top).max(96) as u32;
         let title = format!("{} (VST3)", plugin_name);
-        let mut win =
-            NativePluginWindow::open(&title, width, height, owner_hwnd, resizable, visible)?;
+        let mut win = Box::new(NativePluginWindow::open(
+            &title, width, height, owner_hwnd, resizable, visible,
+        )?);
+        let win_ptr: *mut NativePluginWindow = &mut *win;
 
         let mut frame_box = Box::new(HostPlugFrameCom {
             vtbl: &HOST_PLUG_FRAME_VTBL,
-            hwnd_ptr: (&mut win) as *mut NativePluginWindow,
+            hwnd_ptr: win_ptr,
         });
         unsafe {
             let vvtbl = *(view_ptr as *const *const IPlugViewVtbl);
@@ -1195,6 +1257,7 @@ impl Vst3EditorSession {
             );
             let att_rc = ((*vvtbl).attached)(view_ptr, win.hwnd_raw(), platform_ptr);
             if att_rc != K_RESULT_OK {
+                frame_box.hwnd_ptr = std::ptr::null_mut();
                 let _ = ((*vvtbl).setFrame)(view_ptr, std::ptr::null_mut());
                 com_release(view_ptr);
                 win.destroy_now();
@@ -1222,15 +1285,10 @@ impl Vst3EditorSession {
 
         let hwnd_val = win.hwnd_isize();
         self.editor_window = Some(win);
-        frame_box.hwnd_ptr = self
-            .editor_window
-            .as_mut()
-            .map(|w| w as *mut NativePluginWindow)
-            .unwrap_or(std::ptr::null_mut());
         self.plug_frame = Some(frame_box);
         self.plug_view_ptr = view_ptr;
         Ok(hwnd_val)
-        }
+    }
 
     pub fn pump(&self) -> usize {
         if let Some(ref win) = self.editor_window {
@@ -1241,6 +1299,9 @@ impl Vst3EditorSession {
     }
 
     pub fn close(&mut self) {
+        if let Some(ref mut frame) = self.plug_frame {
+            frame.hwnd_ptr = std::ptr::null_mut();
+        }
         if !self.plug_view_ptr.is_null() {
             unsafe {
                 let vvtbl = *(self.plug_view_ptr as *const *const IPlugViewVtbl);
@@ -1262,6 +1323,9 @@ impl Vst3EditorSession {
 /// any state edited in the plug-in window act on the sound that is playing. GUI parameter edits
 /// reach the processor through the instance's lock-free `IComponentHandler` queue.
 pub struct Vst3LiveEditor {
+    instance_id: u64,
+    canon_path: PathBuf,
+    exit_dll: Option<InitExitDllFn>,
     controller_ptr: *mut c_void,
     module_pin: HMODULE,
     plugin_name: String,
@@ -1274,9 +1338,14 @@ pub struct Vst3LiveEditor {
 unsafe impl Send for Vst3LiveEditor {}
 
 impl Vst3LiveEditor {
+    #[inline]
+    pub fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
     pub fn open_editor(&mut self, owner_hwnd: Option<isize>, visible: bool) -> Result<isize, String> {
-        let alive = self.live_guard.lock();
-        if !*alive {
+        let is_alive = *self.live_guard.lock();
+        if !is_alive {
             return Err("Plug-in instance was removed".to_string());
         }
         self.session
@@ -1284,19 +1353,24 @@ impl Vst3LiveEditor {
     }
 
     pub fn close_editor(&mut self) {
-        let alive = self.live_guard.lock();
-        if *alive {
+        let is_alive = *self.live_guard.lock();
+        if is_alive {
             self.session.close();
-        } else if let Some(mut win) = self.session.editor_window.take() {
-            // Instance already torn down: only drop our host window, never touch the plug-in.
+        } else {
+            if let Some(ref mut frame) = self.session.plug_frame {
+                frame.hwnd_ptr = std::ptr::null_mut();
+            }
             self.session.plug_view_ptr = std::ptr::null_mut();
             self.session.plug_frame = None;
-            win.destroy_now();
+            if let Some(mut win) = self.session.editor_window.take() {
+                win.destroy_now();
+            }
         }
     }
 
     pub fn pump_editor_messages(&mut self) -> usize {
-        if !*self.live_guard.lock() {
+        let is_alive = *self.live_guard.lock();
+        if !is_alive {
             self.close_editor();
             return 0;
         }
@@ -1308,8 +1382,8 @@ impl Vst3LiveEditor {
     }
 
     pub fn get_parameter_normalized(&self, param_id: u32) -> Option<f64> {
-        let alive = self.live_guard.lock();
-        if !*alive || self.controller_ptr.is_null() {
+        let is_alive = *self.live_guard.lock();
+        if !is_alive || self.controller_ptr.is_null() {
             return None;
         }
         unsafe {
@@ -1326,15 +1400,12 @@ impl Vst3LiveEditor {
 impl Drop for Vst3LiveEditor {
     fn drop(&mut self) {
         self.close_editor();
-        let alive = *self.live_guard.lock();
-        if alive && !self.controller_ptr.is_null() {
+        let is_alive = *self.live_guard.lock();
+        if is_alive && !self.controller_ptr.is_null() {
             unsafe { com_release(self.controller_ptr) };
         }
-        if !self.module_pin.is_null() {
-            unsafe {
-                let _ = FreeLibrary(self.module_pin);
-            }
-        }
+        release_vst3_module(&self.canon_path, self.exit_dll.take(), self.module_pin);
+        self.module_pin = std::ptr::null_mut();
     }
 }
 
@@ -1358,7 +1429,8 @@ fn pin_module_containing(addr: *const c_void) -> HMODULE {
 
 /// Real-Time Hosted Steinberg VST3 3.7 Plugin Node (`UnifiedDspNode`, `0` RT heap allocations).
 pub struct Vst3HostedPluginNode {
-    _dll_path: PathBuf,
+    instance_id: u64,
+    canon_path: PathBuf,
     cid_hex: String,
     plugin_name: String,
     hmodule: HMODULE,
@@ -1403,56 +1475,19 @@ impl Vst3HostedPluginNode {
         sample_rate: f64,
         max_block_size: usize,
     ) -> Result<Self, String> {
-        let dll_path = resolve_vst3_binary_path(vst3_path)?;
-        let wide = wide_null_path(&dll_path);
-        let hmodule = unsafe { LoadLibraryW(wide.as_ptr()) };
-        if hmodule.is_null() {
-            return Err(format!(
-                "LoadLibraryW failed for VST3 plugin: {}",
-                dll_path.display()
-            ));
-        }
-
-        let init_dll: Option<InitExitDllFn> = unsafe {
-            GetProcAddress(hmodule, b"InitDll\0".as_ptr()).map(|f| std::mem::transmute(f))
-        };
-        let exit_dll: Option<InitExitDllFn> = unsafe {
-            GetProcAddress(hmodule, b"ExitDll\0".as_ptr()).map(|f| std::mem::transmute(f))
-        };
-        if let Some(init_fn) = init_dll {
-            if !unsafe { init_fn() } {
-                unsafe {
-                    let _ = FreeLibrary(hmodule);
-                }
-                return Err("VST3 InitDll() returned false".to_string());
-            }
-        }
+        let (canon_path, hmodule, exit_dll) = acquire_vst3_module(vst3_path)?;
 
         let get_factory: Option<GetPluginFactoryFn> = unsafe {
             GetProcAddress(hmodule, b"GetPluginFactory\0".as_ptr()).map(|f| std::mem::transmute(f))
         };
         let Some(get_factory_fn) = get_factory else {
-            if let Some(ex) = exit_dll {
-                unsafe {
-                    let _ = ex();
-                }
-            }
-            unsafe {
-                let _ = FreeLibrary(hmodule);
-            }
+            release_vst3_module(&canon_path, exit_dll, hmodule);
             return Err("GetPluginFactory missing".to_string());
         };
 
         let factory_ptr = unsafe { get_factory_fn() };
         if factory_ptr.is_null() {
-            if let Some(ex) = exit_dll {
-                unsafe {
-                    let _ = ex();
-                }
-            }
-            unsafe {
-                let _ = FreeLibrary(hmodule);
-            }
+            release_vst3_module(&canon_path, exit_dll, hmodule);
             return Err("GetPluginFactory returned NULL".to_string());
         }
 
@@ -1486,13 +1521,8 @@ impl Vst3HostedPluginNode {
         }
 
         let Some(cid) = chosen_cid else {
-            unsafe {
-                com_release(factory_ptr);
-                if let Some(ex) = exit_dll {
-                    let _ = ex();
-                }
-                let _ = FreeLibrary(hmodule);
-            }
+            unsafe { com_release(factory_ptr) };
+            release_vst3_module(&canon_path, exit_dll, hmodule);
             return Err("No Audio Module Class found in VST3 factory".to_string());
         };
 
@@ -1516,13 +1546,8 @@ impl Vst3HostedPluginNode {
             ((*fvtbl).createInstance)(factory_ptr, &cid, &IID_ICOMPONENT, &mut component_ptr)
         };
         if create_rc != K_RESULT_OK || component_ptr.is_null() {
-            unsafe {
-                com_release(factory_ptr);
-                if let Some(ex) = exit_dll {
-                    let _ = ex();
-                }
-                let _ = FreeLibrary(hmodule);
-            }
+            unsafe { com_release(factory_ptr) };
+            release_vst3_module(&canon_path, exit_dll, hmodule);
             return Err("VST3 createInstance(IID_ICOMPONENT) failed".to_string());
         }
 
@@ -1534,11 +1559,8 @@ impl Vst3HostedPluginNode {
             unsafe {
                 com_release(component_ptr);
                 com_release(factory_ptr);
-                if let Some(ex) = exit_dll {
-                    let _ = ex();
-                }
-                let _ = FreeLibrary(hmodule);
             }
+            release_vst3_module(&canon_path, exit_dll, hmodule);
             return Err("IComponent::initialize failed".to_string());
         }
 
@@ -1549,11 +1571,8 @@ impl Vst3HostedPluginNode {
                 let _ = ((*cvtbl).base.terminate)(component_ptr);
                 com_release(component_ptr);
                 com_release(factory_ptr);
-                if let Some(ex) = exit_dll {
-                    let _ = ex();
-                }
-                let _ = FreeLibrary(hmodule);
             }
+            release_vst3_module(&canon_path, exit_dll, hmodule);
             return Err("IComponent does not expose IAudioProcessor".to_string());
         }
 
@@ -1719,19 +1738,22 @@ impl Vst3HostedPluginNode {
                             default_value: pinfo.defaultNormalizedValue,
                             current_value: cur_norm,
                         });
-                        if rt_arena.param_count < rt_arena.param_ids.len() {
-                            rt_arena.param_ids[rt_arena.param_count] = pinfo.id;
-                            rt_arena.param_count += 1;
-                        }
                     }
                 }
             }
         }
+        rt_arena.param_ids = param_metadata
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
 
         let sr = sample_rate.max(8_000.0);
         let mbs = max_block_size.clamp(1, MAX_BLOCK_SIZE);
+        let instance_id = NEXT_VST3_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
         let mut node = Self {
-            _dll_path: dll_path,
+            instance_id,
+            canon_path,
             cid_hex: tuid_to_hex(&cid),
             plugin_name: chosen_name,
             hmodule,
@@ -1836,14 +1858,13 @@ impl Vst3HostedPluginNode {
             }
         }
         self.rt_arena
-            .in_param_changes
-            .push_point(param_id, sample_offset, clamped);
+            .push_staged_param_point(param_id, sample_offset, clamped);
     }
 
     /// Queues a sample-accurate VST3 NoteOn event (`0` heap allocations).
     #[inline]
     pub fn queue_note_on(&mut self, key: u8, velocity: f32, channel: u8, sample_offset: i32) {
-        self.rt_arena.in_events.push(Vst3Event {
+        self.rt_arena.push_staged_event(Vst3Event {
             busIndex: 0,
             sampleOffset: sample_offset.max(0),
             ppqPosition: 0.0,
@@ -1865,7 +1886,7 @@ impl Vst3HostedPluginNode {
     /// Queues a sample-accurate VST3 NoteOff event (`0` heap allocations).
     #[inline]
     pub fn queue_note_off(&mut self, key: u8, velocity: f32, channel: u8, sample_offset: i32) {
-        self.rt_arena.in_events.push(Vst3Event {
+        self.rt_arena.push_staged_event(Vst3Event {
             busIndex: 0,
             sampleOffset: sample_offset.max(0),
             ppqPosition: 0.0,
@@ -2005,9 +2026,17 @@ impl Vst3HostedPluginNode {
             let evtbl = *(self.controller_ptr as *const *const IEditControllerVtbl);
             ((*evtbl).base.base.addRef)(self.controller_ptr);
             let vtbl_addr = *(self.controller_ptr as *const *const c_void);
+            let module_pin = pin_module_containing(vtbl_addr);
+            {
+                let mut counts = vst3_module_refcounts().lock();
+                *counts.entry(self.canon_path.clone()).or_insert(0) += 1;
+            }
             Some(Vst3LiveEditor {
+                instance_id: self.instance_id,
+                canon_path: self.canon_path.clone(),
+                exit_dll: self.exit_dll,
                 controller_ptr: self.controller_ptr,
-                module_pin: pin_module_containing(vtbl_addr),
+                module_pin,
                 plugin_name: self.plugin_name.clone(),
                 param_ids: self.param_metadata.iter().map(|p| p.id).collect(),
                 live_guard: std::sync::Arc::clone(&self.live_guard),
@@ -2035,6 +2064,10 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
         "Steinberg VST3 3.7 Hosted Plugin"
     }
 
+    fn hosted_instance_id(&self) -> Option<u64> {
+        Some(self.instance_id)
+    }
+
     fn latency_samples(&self) -> usize {
         self.cached_latency_samples
     }
@@ -2048,6 +2081,8 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
         self.rt_arena.out_param_changes.clear();
         self.rt_arena.in_events.clear();
         self.rt_arena.out_events.clear();
+        self.rt_arena.staged_event_count = 0;
+        self.rt_arena.staged_param_point_count = 0;
         if self.processing_flag && !self.processor_ptr.is_null() {
             unsafe {
                 let pvtbl = *(self.processor_ptr as *const *const IAudioProcessorVtbl);
@@ -2059,18 +2094,11 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
 
     fn set_parameter_normalized(&mut self, param_id: u32, norm_val: f32) {
         let n = (norm_val as f64).clamp(0.0, 1.0);
-        let mut resolved_id = param_id;
-        let mut matched = false;
-        for i in 0..self.rt_arena.param_count {
-            if self.rt_arena.param_ids[i] == param_id {
-                matched = true;
-                break;
-            }
+        if self.rt_arena.param_ids.is_empty()
+            || self.rt_arena.param_ids.iter().any(|&id| id == param_id)
+        {
+            self.rt_arena.push_staged_param_point(param_id, 0, n);
         }
-        if !matched && (param_id as usize) < self.rt_arena.param_count {
-            resolved_id = self.rt_arena.param_ids[param_id as usize];
-        }
-        self.rt_arena.in_param_changes.push_point(resolved_id, 0, n);
     }
 
     fn on_voice_event(&mut self, event: &SequencerVoiceEvent, ctx: &ProcessContext) {
@@ -2081,7 +2109,7 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
         let vel = event.velocity.clamp(0.0, 1.0);
         match event.kind {
             VoiceEventKind::NoteOn | VoiceEventKind::SlideNote => {
-                self.rt_arena.in_events.push(Vst3Event {
+                self.rt_arena.push_staged_event(Vst3Event {
                     busIndex: 0,
                     sampleOffset: offset,
                     ppqPosition: 0.0,
@@ -2100,7 +2128,7 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
                 });
             }
             VoiceEventKind::NoteOff => {
-                self.rt_arena.in_events.push(Vst3Event {
+                self.rt_arena.push_staged_event(Vst3Event {
                     busIndex: 0,
                     sampleOffset: offset,
                     ppqPosition: 0.0,
@@ -2120,7 +2148,7 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
             VoiceEventKind::ChannelMute => {
                 // All-notes-off: VST3 has no CC 123 event, so release every key on this channel.
                 for key in 0..128i16 {
-                    self.rt_arena.in_events.push(Vst3Event {
+                    self.rt_arena.push_staged_event(Vst3Event {
                         busIndex: 0,
                         sampleOffset: offset,
                         ppqPosition: 0.0,
@@ -2138,7 +2166,7 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
                     });
                 }
             }
-            VoiceEventKind::SlotEnable => {}
+            VoiceEventKind::SlotEnable | VoiceEventKind::PitchBend => {}
         }
     }
 
@@ -2153,19 +2181,48 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
         if total == 0 || self.processor_ptr.is_null() {
             self.rt_arena.in_param_changes.clear();
             self.rt_arena.in_events.clear();
+            self.rt_arena.staged_event_count = 0;
+            self.rt_arena.staged_param_point_count = 0;
             return;
         }
 
         // Drain any lock-free GUI parameter changes from `IComponentHandler::performEdit`
         while let Ok((pid, nval)) = self.gui_edit_rx.pop() {
-            self.rt_arena.in_param_changes.push_point(pid, 0, nval);
+            self.rt_arena.push_staged_param_point(pid, 0, nval);
         }
 
         let pvtbl = unsafe { *(self.processor_ptr as *const *const IAudioProcessorVtbl) };
+        let max_blk = self.max_block_size.clamp(1, MAX_BLOCK_SIZE);
+        let staged_ev_count = self.rt_arena.staged_event_count;
+        let staged_pp_count = self.rt_arena.staged_param_point_count;
         let mut cursor = 0usize;
 
         while cursor < total {
-            let chunk = (total - cursor).min(MAX_BLOCK_SIZE);
+            let chunk = (total - cursor).min(max_blk);
+            let chunk_end = cursor + chunk;
+            let is_last_chunk = chunk_end >= total;
+
+            self.rt_arena.in_param_changes.clear();
+            for i in 0..staged_pp_count {
+                let (pid, raw_off, nval) = self.rt_arena.staged_param_points[i];
+                let off = raw_off.max(0) as usize;
+                if (off >= cursor && off < chunk_end) || (is_last_chunk && off >= chunk_end) {
+                    let local_off = off.saturating_sub(cursor).min(chunk.saturating_sub(1)) as i32;
+                    self.rt_arena.in_param_changes.push_point(pid, local_off, nval);
+                }
+            }
+
+            self.rt_arena.in_events.clear();
+            for i in 0..staged_ev_count {
+                let mut ev = self.rt_arena.staged_events[i];
+                let off = ev.sampleOffset.max(0) as usize;
+                if (off >= cursor && off < chunk_end) || (is_last_chunk && off >= chunk_end) {
+                    ev.sampleOffset =
+                        off.saturating_sub(cursor).min(chunk.saturating_sub(1)) as i32;
+                    self.rt_arena.in_events.push(ev);
+                }
+            }
+
             for i in 0..chunk {
                 let f = main_io[cursor + i];
                 self.rt_arena.in_left[i] = f[0];
@@ -2286,13 +2343,16 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
             self.rt_arena.in_events.clear();
             cursor += chunk;
         }
+
+        self.rt_arena.staged_event_count = 0;
+        self.rt_arena.staged_param_point_count = 0;
     }
 }
 
 impl Drop for Vst3HostedPluginNode {
     fn drop(&mut self) {
-        *self.live_guard.lock() = false;
         self.close_editor();
+        *self.live_guard.lock() = false;
         unsafe {
             if !self.processor_ptr.is_null() && self.processing_flag {
                 let pvtbl = *(self.processor_ptr as *const *const IAudioProcessorVtbl);
@@ -2335,15 +2395,9 @@ impl Drop for Vst3HostedPluginNode {
             }
             com_release(self.factory_ptr);
             self.factory_ptr = std::ptr::null_mut();
-
-            if let Some(ex) = self.exit_dll.take() {
-                let _ = ex();
-            }
-            if !self.hmodule.is_null() {
-                let _ = FreeLibrary(self.hmodule);
-                self.hmodule = std::ptr::null_mut();
-            }
         }
+        release_vst3_module(&self.canon_path, self.exit_dll.take(), self.hmodule);
+        self.hmodule = std::ptr::null_mut();
     }
 }
 

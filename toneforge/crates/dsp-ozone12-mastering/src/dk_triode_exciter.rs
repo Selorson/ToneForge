@@ -465,9 +465,11 @@ impl DkKStateBlock {
 
     #[inline(always)]
     pub fn sample_bilinear(&self, p1: f64, p2: f64) -> [f64; 2] {
+        let p1_clean = if p1.is_finite() { p1 } else { 0.0 };
+        let p2_clean = if p2.is_finite() { p2 } else { 0.0 };
         let [p1_min, p1_max, p2_min, p2_max] = self.bounds;
-        let u = 359.0 * ((p1 - p1_min) / (p1_max - p1_min)).clamp(0.0, 1.0);
-        let v = 359.0 * ((p2 - p2_min) / (p2_max - p2_min)).clamp(0.0, 1.0);
+        let u = 359.0 * ((p1_clean - p1_min) / (p1_max - p1_min)).clamp(0.0, 1.0);
+        let v = 359.0 * ((p2_clean - p2_min) / (p2_max - p2_min)).clamp(0.0, 1.0);
 
         let i0 = (u.floor() as usize).min(358);
         let j0 = (v.floor() as usize).min(358);
@@ -1016,6 +1018,7 @@ impl DkTriodeChannelState {
         let u_sum = [u[0] + self.u_prev[0], u[1] + self.u_prev[1]];
         let i_sum = [i_nl[0] + self.i_nl_prev[0], i_nl[1] + self.i_nl_prev[1]];
         let mut x_next = [0.0f64; 3];
+        let mut finite_ok = i_nl[0].is_finite() && i_nl[1].is_finite();
         for r in 0..3 {
             let val = l.a_d[r][0] * self.x[0]
                 + l.a_d[r][1] * self.x[1]
@@ -1024,14 +1027,25 @@ impl DkTriodeChannelState {
                 + l.b_d[r][1] * u_sum[1]
                 + l.c_d[r][0] * i_sum[0]
                 + l.c_d[r][1] * i_sum[1];
-            x_next[r] = if val.abs() < 1e-18 { 0.0 } else { val };
+            if !val.is_finite() {
+                finite_ok = false;
+            }
+            x_next[r] = if !val.is_finite() || val.abs() < 1e-18 { 0.0 } else { val };
+        }
+
+        if !finite_ok {
+            self.x = l.x_dc;
+            self.u_prev = l.u_dc;
+            self.i_nl_prev = l.i_nl_dc;
+            return 0.0;
         }
 
         self.x = x_next;
         self.u_prev = u;
         self.i_nl_prev = i_nl;
 
-        (self.x[1] - l.x_dc[1]) * l.dc_offset
+        let out = (self.x[1] - l.x_dc[1]) * l.dc_offset;
+        if out.is_finite() { out } else { 0.0 }
     }
 }
 
@@ -1113,6 +1127,7 @@ impl DkDualTriodeChannelState {
         let u_sum = [u[0] + u_prev[0], u[1] + u_prev[1]];
         let i_sum = [i_nl[0] + i_prev[0], i_nl[1] + i_prev[1]];
         let mut x_next = [0.0_f64; 3];
+        let mut finite_ok = i_nl[0].is_finite() && i_nl[1].is_finite() && u[0].is_finite() && u[1].is_finite();
         for r in 0..3 {
             let val = ks.a_d[r][0] * x[0]
                 + ks.a_d[r][1] * x[1]
@@ -1121,7 +1136,16 @@ impl DkDualTriodeChannelState {
                 + ks.b_d[r][1] * u_sum[1]
                 + ks.c_d[r][0] * i_sum[0]
                 + ks.c_d[r][1] * i_sum[1];
-            x_next[r] = if val.abs() < 1e-18 { 0.0 } else { val };
+            if !val.is_finite() {
+                finite_ok = false;
+            }
+            x_next[r] = if !val.is_finite() || val.abs() < 1e-18 { 0.0 } else { val };
+        }
+        if !finite_ok {
+            *x = [0.0; 3];
+            *u_prev = [0.0; 2];
+            *i_prev = [0.0; 2];
+            return;
         }
         *x = x_next;
         *u_prev = u;

@@ -74,7 +74,14 @@ impl<T: FftNum> RealToComplex<T> for R2CPlan<T> {
         output: &mut [Complex<T>],
         scratch: &mut [Complex<T>],
     ) -> Result<(), &'static str> {
-        if input.len() != self.len || output.len() != self.complex_len() || scratch.len() < self.len
+        let req_scratch = self.get_scratch_len();
+        debug_assert!(
+            scratch.len() >= req_scratch,
+            "R2CPlan scratch too small ({} < {})",
+            scratch.len(),
+            req_scratch
+        );
+        if input.len() != self.len || output.len() != self.complex_len() || scratch.len() < req_scratch
         {
             return Err("invalid buffer length");
         }
@@ -122,7 +129,14 @@ impl<T: FftNum> ComplexToReal<T> for C2RPlan<T> {
         output: &mut [T],
         scratch: &mut [Complex<T>],
     ) -> Result<(), &'static str> {
-        if input.len() != self.complex_len() || output.len() != self.len || scratch.len() < self.len
+        let req_scratch = self.get_scratch_len();
+        debug_assert!(
+            scratch.len() >= req_scratch,
+            "C2RPlan scratch too small ({} < {})",
+            scratch.len(),
+            req_scratch
+        );
+        if input.len() != self.complex_len() || output.len() != self.len || scratch.len() < req_scratch
         {
             return Err("invalid buffer length");
         }

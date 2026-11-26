@@ -264,11 +264,25 @@ impl StereoBiquadF64 {
 
     #[inline(always)]
     pub fn step_channel(&mut self, ch: usize, x: f64) -> f64 {
-        let y = self.b0 * x + self.z1[ch];
-        let z1_next = self.b1 * x - self.a1 * y + self.z2[ch];
-        let z2_next = self.b2 * x - self.a2 * y;
-        self.z1[ch] = if z1_next.abs() < 1e-20 { 0.0 } else { z1_next };
-        self.z2[ch] = if z2_next.abs() < 1e-20 { 0.0 } else { z2_next };
+        let x_clean = if x.is_finite() { x } else { 0.0 };
+        let y = self.b0 * x_clean + self.z1[ch];
+        if !y.is_finite() {
+            self.z1[ch] = 0.0;
+            self.z2[ch] = 0.0;
+            return 0.0;
+        }
+        let z1_next = self.b1 * x_clean - self.a1 * y + self.z2[ch];
+        let z2_next = self.b2 * x_clean - self.a2 * y;
+        self.z1[ch] = if !z1_next.is_finite() || z1_next.abs() < 1e-20 {
+            0.0
+        } else {
+            z1_next
+        };
+        self.z2[ch] = if !z2_next.is_finite() || z2_next.abs() < 1e-20 {
+            0.0
+        } else {
+            z2_next
+        };
         y
     }
 

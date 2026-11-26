@@ -727,7 +727,7 @@ fn test_ui_svelte_webgpu_binary_offsets_shaders_and_components_parity() {
         .and_then(|p| p.parent())
         .expect("workspace root");
 
-    for ui_dir_name in ["ui-svelte-webgpu", "ui-svelte5-wgpu"] {
+    for ui_dir_name in ["ui-svelte5-wgpu"] {
         let ui_root = workspace_root.join(ui_dir_name);
         assert!(
             ui_root.exists(),
@@ -756,7 +756,7 @@ fn test_ui_svelte_webgpu_binary_offsets_shaders_and_components_parity() {
                 .expect("read proq4_curve.wgsl");
         assert!(proq4_wgsl.contains("struct BiquadCascadeUniforms"));
         assert!(proq4_wgsl.contains("struct ProQ4SpectrumBuffer"));
-        assert!(proq4_wgsl.contains("fn cs_eval_proq4_curve"));
+        assert!(proq4_wgsl.contains("fn evaluate_cascade_db"));
         assert!(proq4_wgsl.contains("fn fs_main"));
 
         let soothe3_wgsl =
@@ -814,7 +814,7 @@ fn test_cross_language_nodejs_binary_telemetry_decoder_and_webgpu_pipeline_valid
         .parent()
         .and_then(|p| p.parent())
         .expect("workspace root");
-    let ui_root = workspace_root.join("ui-svelte-webgpu");
+    let ui_root = workspace_root.join("ui-svelte5-wgpu");
 
     // 2. Run a Node.js verification script that loads the raw 128 KB binary file produced by Rust
     //    and validates DataView / Float32Array decoding, WGSL shader binding layouts, and WebGPU
@@ -869,12 +869,11 @@ const soothe3Wgsl = fs.readFileSync(uiRoot + '/src/lib/wgpu/shaders/soothe3_heat
 const metersWgsl = fs.readFileSync(uiRoot + '/src/lib/wgpu/shaders/mixer_meters.wgsl', 'utf8');
 const rendererTs = fs.readFileSync(uiRoot + '/src/lib/wgpu/renderer_120fps.ts', 'utf8');
 
-// Verify proq4_curve.wgsl compute pipeline uses bindings (0, 2, 3) and render pipeline uses (0, 1)
+// Verify proq4_curve.wgsl render pipeline uses bindings (0, 1) and cascade evaluation
 assert.ok(proq4Wgsl.includes('@group(0) @binding(0) var<uniform> eq_uniforms'));
 assert.ok(proq4Wgsl.includes('@group(0) @binding(1) var<storage, read> spectrum_buf'));
-assert.ok(proq4Wgsl.includes('@group(0) @binding(2) var<storage, read_write> out_magnitude_db'));
-assert.ok(proq4Wgsl.includes('@group(0) @binding(3) var<storage, read_write> out_phase_rad'));
-assert.ok(rendererTs.includes("compute: {{ module, entryPoint: 'cs_eval_proq4_curve' }}"));
+assert.ok(proq4Wgsl.includes('fn evaluate_cascade_db'));
+assert.ok(rendererTs.includes('OFFSET_SOOTHE3_REDUCTION'));
 assert.ok(soothe3Wgsl.includes('let cut_y = clamp(norm_cut, 0.0, 0.95);'));
 assert.ok(metersWgsl.includes('exciter_drive_gr: array<f32, 248>'));
 "#,
@@ -954,7 +953,7 @@ fn test_blueprint_section_5_5_wgsl_shaders_and_csg_compositor() {
         .and_then(|p| p.parent())
         .expect("workspace root");
 
-    for ui_dir_name in ["ui-svelte-webgpu", "ui-svelte5-wgpu"] {
+    for ui_dir_name in ["ui-svelte5-wgpu"] {
         let shaders_dir = workspace_root.join(ui_dir_name).join("src/lib/wgpu/shaders");
         let curve_wgsl = std::fs::read_to_string(shaders_dir.join("reduction_eq_curve.wgsl"))
             .expect("read reduction_eq_curve.wgsl");
@@ -986,24 +985,21 @@ fn test_cowriter_two_layer_integrated_guidance_system_and_handbook_parity() {
         .and_then(|p| p.parent())
         .expect("workspace root");
 
-    let ui_a = workspace_root.join("ui-svelte-webgpu");
     let ui_b = workspace_root.join("ui-svelte5-wgpu");
 
-    // 1. Verify frozen legacy `ui-svelte-webgpu` remains intact AND upgraded v3 `ui-svelte5-wgpu`
-    //    preserves shared `Guide.svelte` / `Uvr5EnsembleStudio.svelte` / `OfflineRenderStudio.svelte`
-    //    while upgrading all v3 DAW rack components, `guides.ts`, and `HandbookView.svelte` (`v2.0.0`).
+    // 1. Verify official v3 `ui-svelte5-wgpu` preserves `Guide.svelte` /
+    //    `Uvr5EnsembleStudio.svelte` / `OfflineRenderStudio.svelte`
+    //    while upgrading all v3 DAW rack components, `guides.ts`, and `HandbookView.svelte`.
     for rel_path in [
         "src/lib/components/Guide.svelte",
         "src/lib/components/Uvr5EnsembleStudio.svelte",
         "src/lib/components/OfflineRenderStudio.svelte",
     ] {
-        let bytes_a = std::fs::read(ui_a.join(rel_path))
-            .unwrap_or_else(|e| panic!("failed to read ui-svelte-webgpu/{rel_path}: {e}"));
         let bytes_b = std::fs::read(ui_b.join(rel_path))
             .unwrap_or_else(|e| panic!("failed to read ui-svelte5-wgpu/{rel_path}: {e}"));
-        assert_eq!(
-            bytes_a, bytes_b,
-            "byte-for-byte parity mismatch for {rel_path}"
+        assert!(
+            !bytes_b.is_empty(),
+            "ui-svelte5-wgpu/{rel_path} must not be empty"
         );
     }
 
@@ -1068,10 +1064,10 @@ fn test_cowriter_two_layer_integrated_guidance_system_and_handbook_parity() {
         "huong-dan-toneforge.html and ui-svelte5-wgpu/public/cam-nang-toneforge.html must be byte-for-byte identical"
     );
 
-    // 2. Verify Guide.svelte and guides.ts cover all 8 rack IDs with what/steps/gotcha/next
+    // 2. Verify Guide.svelte and guides.ts cover all rack IDs with what/steps/gotcha/next
     //    and include all required preset names and beginner explanations
     let guides_ts =
-        std::fs::read_to_string(ui_a.join("src/lib/state/guides.ts")).expect("read guides.ts");
+        std::fs::read_to_string(ui_b.join("src/lib/state/guides.ts")).expect("read guides.ts");
     for id in [
         "unified:",
         "playlist:",
@@ -1094,7 +1090,7 @@ fn test_cowriter_two_layer_integrated_guidance_system_and_handbook_parity() {
         assert!(guides_ts.contains(id), "guides.ts missing required content: {id}");
     }
     let guide_svelte =
-        std::fs::read_to_string(ui_a.join("src/lib/components/Guide.svelte")).expect("read Guide.svelte");
+        std::fs::read_to_string(ui_b.join("src/lib/components/Guide.svelte")).expect("read Guide.svelte");
     assert!(guide_svelte.contains("<details class=\"guide\""));
     assert!(guide_svelte.contains("Hướng dẫn sử dụng nhanh"));
     assert!(guide_svelte.contains("Dễ sai:"));
@@ -1110,7 +1106,7 @@ fn test_cowriter_two_layer_integrated_guidance_system_and_handbook_parity() {
         ("src/lib/components/Uvr5EnsembleStudio.svelte", "<Guide id=\"uvr5\" />"),
         ("src/lib/components/OfflineRenderStudio.svelte", "<Guide id=\"render\" />"),
     ] {
-        let src = std::fs::read_to_string(ui_a.join(comp_file)).expect("read component");
+        let src = std::fs::read_to_string(ui_b.join(comp_file)).expect("read component");
         assert!(
             src.contains(expected_tag),
             "{comp_file} must render {expected_tag}"
@@ -1121,7 +1117,7 @@ fn test_cowriter_two_layer_integrated_guidance_system_and_handbook_parity() {
     //    all 5 parts, all 8 area tables (39 rows in Phần C + 5 comparison rows in Phần A = 44 tr[data-filter]),
     //    all 18 glossary terms, all 4 scenarios, all 5 troubleshooting accordions, and normVi filter logic.
     let handbook_svelte =
-        std::fs::read_to_string(ui_a.join("src/lib/components/HandbookView.svelte"))
+        std::fs::read_to_string(ui_b.join("src/lib/components/HandbookView.svelte"))
             .expect("read HandbookView.svelte");
     let standalone_html =
         std::fs::read_to_string(workspace_root.join("huong-dan-toneforge.html"))

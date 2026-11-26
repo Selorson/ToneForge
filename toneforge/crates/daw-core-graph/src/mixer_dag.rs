@@ -59,6 +59,7 @@ pub enum RetiredRtResource {
     ),
     MidiInputConsumer(Box<Option<rtrb::Consumer<SequencerVoiceEvent>>>),
     StemRegions(Box<Vec<crate::sequencer_pianoroll::StemClipRegion>>),
+    ApdcBuffers(Box<Vec<ApdcDelayLine>>),
 }
 
 /// Lock-free, Zero-Allocation, Zero-Drop Real-Time Graph Mutation message (`Host -> RT`).
@@ -189,6 +190,13 @@ pub enum RtGraphMutation {
         channel_id: u32,
         regions: Box<Vec<crate::sequencer_pianoroll::StemClipRegion>>,
         count: usize,
+    },
+    /// Swaps pre-allocated high-capacity `ApdcDelayLine`s (`capacity >= required_samples`) into
+    /// active channels, slots, and mixer tracks without any RT heap allocation or deallocation.
+    UpgradeApdcCapacity {
+        required_samples: usize,
+        fresh_pool: Box<Vec<ApdcDelayLine>>,
+        retired_pool: Box<Vec<ApdcDelayLine>>,
     },
 }
 
@@ -546,6 +554,45 @@ impl MixerTrack {
         }
     }
 
+    /// Removes the FX plugin at `slot_index` (`0..10`) without shifting later slots:
+    /// interior slots become `EmptySlotNode` in-place so `(track_idx, slot_idx)` keys stay stable,
+    /// and trailing `EmptySlotNode`s are trimmed from the end.
+    pub fn remove_plugin_slot(&mut self, slot_index: usize) -> Option<PluginRackSlot> {
+        if slot_index >= self.slots.len() {
+            return None;
+        }
+        let displaced = if slot_index + 1 == self.slots.len() {
+            self.slots.pop()
+        } else {
+            let mut empty = PluginRackSlot::new(Box::new(crate::EmptySlotNode::new()), 1.0);
+            let cap = self.sub_block_buf.len().max(MAX_BLOCK_SIZE);
+            empty.prepare(48_000.0, cap);
+            Some(std::mem::replace(&mut self.slots[slot_index], empty))
+        };
+        while self
+            .slots
+            .last()
+            .map(|s| s.plugin.name() == crate::EMPTY_SLOT_NODE_NAME)
+            .unwrap_or(false)
+        {
+            let _ = self.slots.pop();
+        }
+        displaced
+    }
+
+    /// Ensures all APDC delay lines on this track (Points 2, 3, 4, 5) can hold `required_samples` (off-RT).
+    pub fn ensure_apdc_capacity(&mut self, required_samples: usize) {
+        let cap = required_samples.max(DEFAULT_APDC_CAPACITY);
+        self.input_apdc_delay.ensure_capacity(cap);
+        for slot in &mut self.slots {
+            slot.dry_apdc_delay.ensure_capacity(cap);
+        }
+        self.post_rack_apdc_delay.ensure_capacity(cap);
+        for send in &mut self.sends {
+            send.send_apdc_delay.ensure_capacity(cap);
+        }
+    }
+
     /// Adds a Send or Sidechain route from this track to `dest_track_index`.
     pub fn add_send(&mut self, dest_track_index: usize, gain: f32, is_sidechain_only: bool) {
         if dest_track_index < MAX_MIXER_TRACKS && dest_track_index != self.index {
@@ -746,6 +793,9 @@ impl MixerTrack {
                 frame[1] *= target[1];
             }
         }
+
+        // Sanitize non-finite / runaway samples before Point 4, Point 5 Sends, and Metering
+        crate::apdc_engine::sanitize_stereo_slice(buf);
 
         // 6. Point 4: Post-Rack APDC (`[TPluginRackModule + 0x5c]`, `0x00cf2d00`)
         self.post_rack_apdc_delay.process_in_place(buf);
@@ -1986,6 +2036,8 @@ impl MixerEngine {
                     let s_idx = slot_index as usize;
                     if t_idx < self.tracks.len() && s_idx < MAX_INSERT_SLOTS {
                         if let Some(incoming_slot) = slot.take() {
+                            self.automation_queue
+                                .invalidate_slot_dedup(track_index, slot_index);
                             let track = &mut self.tracks[t_idx];
                             if s_idx < track.slots.len() {
                                 let displaced =
@@ -2020,8 +2072,26 @@ impl MixerEngine {
                         && t_idx < self.tracks.len()
                         && s_idx < self.tracks[t_idx].slots.len()
                     {
-                        let removed = self.tracks[t_idx].slots.remove(s_idx);
-                        *recycle_slot = Some(removed);
+                        self.automation_queue
+                            .invalidate_slot_dedup(track_index, slot_index);
+                        let track = &mut self.tracks[t_idx];
+                        if s_idx + 1 == track.slots.len() {
+                            *recycle_slot = track.slots.pop();
+                        } else {
+                            // Keep later slot indices fixed (`0..9`) with 0 heap allocations:
+                            // swap a zero-sized `EmptySlotNode` into `slot_ref.plugin` and retire
+                            // the displaced plugin via `recycle_slot`.
+                            let slot_ref = &mut track.slots[s_idx];
+                            let displaced_plugin = std::mem::replace(
+                                &mut slot_ref.plugin,
+                                Box::new(crate::EmptySlotNode::new()),
+                            );
+                            slot_ref.enabled = true;
+                            slot_ref.wet_mix = 1.0;
+                            slot_ref.dry_apdc_delay.set_delay_samples(0);
+                            *recycle_slot =
+                                Some(PluginRackSlot::from_retired_plugin_rt(displaced_plugin));
+                        }
                         topology_dirty = true;
                     }
                     if let Some(gc) = &mut self.gc_producer {
@@ -2225,14 +2295,15 @@ impl MixerEngine {
                 }
                 RtGraphMutation::UpdateSampleRate { sample_rate } => {
                     let sr = sample_rate.clamp(8_000.0, 384_000.0);
-                    if (self.slicer.sample_rate - sr).abs() > 0.5 {
-                        self.slicer.sample_rate = sr;
+                    if (self.slicer.sample_rate() - sr).abs() > 0.5 {
+                        self.slicer.set_sample_rate(sr);
                         for trk in &mut self.tracks {
                             trk.reset_state();
                         }
                         for ch in &mut self.channels {
                             ch.reset_state();
                         }
+                        topology_dirty = true;
                     }
                 }
                 RtGraphMutation::SetTrackInputAndRecordArm {
@@ -2296,6 +2367,78 @@ impl MixerEngine {
                         let _ = gc.push(RetiredRtResource::StemRegions(regions));
                     }
                 }
+                RtGraphMutation::UpgradeApdcCapacity {
+                    required_samples,
+                    mut fresh_pool,
+                    mut retired_pool,
+                } => {
+                    let swap_if_smaller =
+                        |target: &mut ApdcDelayLine,
+                         fresh: &mut Vec<ApdcDelayLine>,
+                         retired: &mut Vec<ApdcDelayLine>| {
+                            if target.capacity() < required_samples
+                                && retired.len() < retired.capacity()
+                            {
+                                if let Some(mut next_dl) = fresh.pop() {
+                                    next_dl.set_delay_samples(target.delay_samples());
+                                    std::mem::swap(target, &mut next_dl);
+                                    retired.push(next_dl);
+                                }
+                            }
+                        };
+
+                    for ch in &mut self.channels {
+                        if ch.enabled {
+                            swap_if_smaller(
+                                &mut ch.channel_apdc_delay,
+                                &mut fresh_pool,
+                                &mut retired_pool,
+                            );
+                        }
+                    }
+                    for (idx, trk) in self.tracks.iter_mut().enumerate() {
+                        let is_active = idx == MASTER_TRACK_INDEX
+                            || idx == PREVIEW_TRACK_INDEX
+                            || !trk.slots.is_empty()
+                            || !trk.sends.is_empty()
+                            || trk.has_channel_input
+                            || trk.has_hw_input
+                            || trk.input_source_bus.is_some()
+                            || trk.record_armed;
+                        if !is_active {
+                            continue;
+                        }
+                        swap_if_smaller(
+                            &mut trk.input_apdc_delay,
+                            &mut fresh_pool,
+                            &mut retired_pool,
+                        );
+                        for slot in &mut trk.slots {
+                            swap_if_smaller(
+                                &mut slot.dry_apdc_delay,
+                                &mut fresh_pool,
+                                &mut retired_pool,
+                            );
+                        }
+                        swap_if_smaller(
+                            &mut trk.post_rack_apdc_delay,
+                            &mut fresh_pool,
+                            &mut retired_pool,
+                        );
+                        for send in &mut trk.sends {
+                            swap_if_smaller(
+                                &mut send.send_apdc_delay,
+                                &mut fresh_pool,
+                                &mut retired_pool,
+                            );
+                        }
+                    }
+                    topology_dirty = true;
+                    if let Some(gc) = &mut self.gc_producer {
+                        let _ = gc.push(RetiredRtResource::ApdcBuffers(fresh_pool));
+                        let _ = gc.push(RetiredRtResource::ApdcBuffers(retired_pool));
+                    }
+                }
             }
         }
 
@@ -2355,10 +2498,10 @@ impl MixerEngine {
         );
         player.continuous_mode = true;
         player.loop_enabled = loop_playback;
-        player.prepare(self.slicer.sample_rate, MAX_BLOCK_SIZE);
+        player.prepare(self.slicer.sample_rate(), MAX_BLOCK_SIZE);
 
         let mut ch = ChannelGenerator::new(900, FIRST_INSERT_TRACK_INDEX, Box::new(player));
-        ch.prepare(self.slicer.sample_rate, MAX_BLOCK_SIZE);
+        ch.prepare(self.slicer.sample_rate(), MAX_BLOCK_SIZE);
         let idx = self.channels.len();
         self.channels.push(ch);
         self.tracks[FIRST_INSERT_TRACK_INDEX].add_send(MASTER_TRACK_INDEX, 1.0, false);
@@ -2403,7 +2546,7 @@ impl MixerEngine {
                         // Keep rendering for ~6 ms while fading the master out, then stop and
                         // return the transport to the exact position where stop was requested.
                         self.stop_fade_total =
-                            ((self.slicer.sample_rate * 0.006).round() as u32).max(32);
+                            ((self.slicer.sample_rate() * 0.006).round() as u32).max(32);
                         self.stop_fade_remaining = self.stop_fade_total;
                         self.stop_request_pos =
                             (self.slicer.current_sample_pos, self.slicer.global_ppq_tick);
@@ -2416,7 +2559,9 @@ impl MixerEngine {
                     sample_pos,
                     ppq_tick,
                 } => {
+                    self.stop_request_pos = (sample_pos, ppq_tick);
                     self.slicer.seek(sample_pos, ppq_tick);
+                    self.automation_queue.clear();
                     self.release_all_voices();
                 }
                 EngineCommand::SetTrackGain {
@@ -2424,7 +2569,13 @@ impl MixerEngine {
                     gain_linear,
                 } => {
                     if let Some(t) = self.tracks.get_mut(track_index as usize) {
-                        t.gain = gain_linear;
+                        t.gain = if gain_linear.is_finite() {
+                            gain_linear.clamp(0.0, 16.0)
+                        } else {
+                            0.0
+                        };
+                        self.automation_queue
+                            .invalidate_param_dedup(track_index, 0xFF, 0);
                     }
                 }
                 EngineCommand::SetTrackPolarityInverted {
@@ -2487,14 +2638,18 @@ impl MixerEngine {
                             param_id,
                             norm_val,
                         );
-                    } else if let Some(t) = self.tracks.get_mut(trk_idx) {
-                        if slot_index == 0xFF {
-                            t.gain = norm_val;
-                        } else if let Some(s) = t.slots.get_mut(slot_index as usize) {
-                            let prev_lat = s.plugin.latency_samples();
-                            s.plugin.set_parameter_normalized(param_id, norm_val);
-                            if s.plugin.latency_samples() != prev_lat {
-                                self.recompute_apdc_rt();
+                    } else if norm_val.is_finite() {
+                        self.automation_queue
+                            .invalidate_param_dedup(track_index, slot_index, param_id);
+                        if let Some(t) = self.tracks.get_mut(trk_idx) {
+                            if slot_index == 0xFF {
+                                t.gain = norm_val.clamp(0.0, 16.0);
+                            } else if let Some(s) = t.slots.get_mut(slot_index as usize) {
+                                let prev_lat = s.plugin.latency_samples();
+                                s.plugin.set_parameter_normalized(param_id, norm_val);
+                                if s.plugin.latency_samples() != prev_lat {
+                                    self.recompute_apdc_rt();
+                                }
                             }
                         }
                     }
@@ -2530,7 +2685,7 @@ impl MixerEngine {
                     let gate = if gate_samples > 0 {
                         gate_samples
                     } else {
-                        ((self.slicer.sample_rate * 0.24).round() as u32).max(2_048)
+                        ((self.slicer.sample_rate() * 0.24).round() as u32).max(2_048)
                     };
                     let note_id = 0x8000_0000 | (self.audition_note_seq & 0x7FFF_FFFF);
                     self.audition_note_seq = self.audition_note_seq.wrapping_add(1);
@@ -2656,9 +2811,10 @@ impl MixerEngine {
         }
         let block_t0 = std::time::Instant::now();
 
-        // 1. Drain wait-free SPSC commands & zero-alloc/zero-drop graph mutations
-        self.drain_commands();
+        // 1. Drain zero-alloc/zero-drop graph mutations first so newly inserted slots/channels
+        // receive same-block parameter/transport commands immediately.
         self.drain_rt_mutations();
+        self.drain_commands();
 
         // 1b. Drain hardware Win32 MIDI Input events (`0` alloc). Each event carries its arrival
         // time; it plays at the same offset into this block as it arrived into the previous one, so
@@ -2668,9 +2824,9 @@ impl MixerEngine {
         self.midi_prev_block_ns = block_ns;
         if let Some(midi_rx) = &mut self.midi_in_consumer {
             let block_start = self.slicer.current_sample_pos;
-            let ns_to_samples = self.slicer.sample_rate / 1.0e9;
+            let ns_to_samples = self.slicer.sample_rate() / 1.0e9;
             let ctx = ProcessContext {
-                sample_rate: self.slicer.sample_rate,
+                sample_rate: self.slicer.sample_rate(),
                 current_sample_pos: block_start,
                 ppq_tick: self.slicer.global_ppq_tick,
                 bpm: self.slicer.bpm,
@@ -2779,6 +2935,7 @@ impl MixerEngine {
             }
         }
         self.hw_input_injected_this_block = false;
+        crate::apdc_engine::sanitize_stereo_slice(&mut master_out[..total_frames]);
 
         // 4x oversampled (BS.1770-4) true peak of what actually leaves the master bus.
         let mut tp_block = [0.0f32; 2];
@@ -2801,7 +2958,7 @@ impl MixerEngine {
         self.master_tp_block_lin = tp_block;
 
         // Measured DSP load: wall-clock render time relative to the real-time budget of this block.
-        let budget_s = (total_frames as f64) / self.slicer.sample_rate.max(8_000.0);
+        let budget_s = (total_frames as f64) / self.slicer.sample_rate().max(8_000.0);
         let load_pct = (block_t0.elapsed().as_secs_f64() / budget_s * 100.0) as f32;
         self.dsp_load_ema_pct = if self.dsp_load_ema_pct <= 0.0 {
             load_pct
@@ -2816,7 +2973,7 @@ impl MixerEngine {
     /// the sequencer do not keep sounding once the transport has stopped (Zero Heap Allocation).
     fn release_all_voices(&mut self) {
         let ctx = ProcessContext {
-            sample_rate: self.slicer.sample_rate,
+            sample_rate: self.slicer.sample_rate(),
             current_sample_pos: self.slicer.current_sample_pos,
             ppq_tick: self.slicer.global_ppq_tick,
             bpm: self.slicer.bpm,
@@ -2847,7 +3004,7 @@ impl MixerEngine {
     /// Transport-running render: PPQ slicer, sequencer dispatch, sample-accurate automation and the
     /// 3-phase mixer DAG (Zero Heap Allocation).
     fn render_playing_block(&mut self, total_frames: usize) {
-        let sample_rate = self.slicer.sample_rate;
+        let sample_rate = self.slicer.sample_rate();
         let ppq_res = self.slicer.ppq;
         let is_playing = true;
         let process_all = self.process_all_502_tracks;
@@ -3109,7 +3266,7 @@ impl MixerEngine {
             }
         }
         let ctx = ProcessContext {
-            sample_rate: self.slicer.sample_rate,
+            sample_rate: self.slicer.sample_rate(),
             current_sample_pos: self.slicer.current_sample_pos,
             ppq_tick: self.slicer.global_ppq_tick,
             bpm: self.slicer.bpm,
@@ -3217,6 +3374,9 @@ impl MixerEngine {
         frame.header.true_peak_db = [tp_db(self.master_tp_block_lin[0]), tp_db(self.master_tp_block_lin[1])];
         frame.header.reserved[0] = rec_word;
         frame.header.cpu_load_pct = self.dsp_load_ema_pct.clamp(0.0, 999.0);
+        let master_apdc_u32 = self.scheduler.master_output_latency_samples.min(u32::MAX as usize) as u32;
+        frame.header_align_pad[0..4].copy_from_slice(&master_apdc_u32.to_le_bytes());
+        frame.header_align_pad[4] = u8::from(self.is_playing);
         frame.track_meters.fill(silent_meter);
         // Shared plugin views rest at their floor unless a live instance exports this block.
         frame.proq4_spectrum.pre_db.fill(-120.0);

@@ -298,6 +298,7 @@ export class DawTelemetryView {
   samplePos = $state(0);
   playheadPpq = $state(0);
   tempoBpm = $state(128.0);
+  ppqResolution = $state<96 | 144 | 192 | 384 | 480 | 960>(96);
   isPlaying = $state(false);
   cpuLoadPercent = $state(0.0);
   xrunCount = $state(0);
@@ -320,6 +321,9 @@ export class DawTelemetryView {
   wasapiActiveExclusive = $state<boolean>(false);
   wasapiHardwareSampleRateHz = $state<number>(48000);
   wasapiEngineSampleRateHz = $state<number>(48000);
+  get sampleRateHz(): number {
+    return this.wasapiEngineSampleRateHz || 48000;
+  }
   wasapiHardwareChannels = $state<number>(2);
   wasapiBufferFrames = $state<number>(480);
   wasapiSampleFormat = $state<string>('Float32');
@@ -355,7 +359,17 @@ export class DawTelemetryView {
   ]);
   activeControllerId = $state(0);
   activeControllerFixed30 = $derived(
-    Math.round(Math.max(0, Math.min(1, this.evaluateTensionSplineAt(this.playheadPpq % 384))) * FIXED_POINT_30BIT_MAX)
+    Math.round(
+      Math.max(
+        0,
+        Math.min(
+          1,
+          this.evaluateTensionSplineAt(
+            this.playheadPpq % Math.max(1, this.ppqResolution * 4)
+          )
+        )
+      ) * FIXED_POINT_30BIT_MAX
+    )
   );
 
   patcherNodes = $state<PatcherNodeVisual[]>([
@@ -490,7 +504,6 @@ export class DawTelemetryView {
   fl26SelectedFxPreset = $state('Maximus: Clear Master.fst');
   fl26FxPresetInfo = $state('Maximus • Clear Master (-0.2 dB ceil, +2.5 dB drive)');
 
-  ppqResolution = $state<96 | 144 | 192 | 384 | 480 | 960>(96);
   songMode = $state(true);
   selectedPatternId = $state(1);
   pianoRollSlideTool = $state(false);
@@ -623,6 +636,7 @@ export class DawTelemetryView {
   vocalTotalFrames = $state(0);
   vocalStatusMessage = $state('pYIN Viterbi Tracker + True-Envelope Formant Shifter Ready');
   vocalBlobs = $state<VocalNoteBlobUi[]>([]);
+  private unlistenDerivedRender: (() => void) | null = null;
 
   constructor(sharedBuffer?: ArrayBuffer) {
     const buf = sharedBuffer ?? new ArrayBuffer(VISUAL_TELEMETRY_FRAME_BYTES);
@@ -636,7 +650,16 @@ export class DawTelemetryView {
     if (isTauriEnvironment()) {
       void listen<{ pendingClips: number }>('derived-render-status', (e) => {
         this.derivedRendersPending = Number(e.payload?.pendingClips ?? 0);
-      }).catch(() => {});
+      })
+        .then((unlisten) => {
+          this.unlistenDerivedRender = unlisten;
+        })
+        .catch(() => {});
+    }
+    if (import.meta.hot) {
+      import.meta.hot.dispose(() => {
+        this.dispose();
+      });
     }
     this.u8View = new Uint8Array(this.buffer);
 
@@ -732,18 +755,45 @@ export class DawTelemetryView {
     return bands;
   }
 
+  dispose(): void {
+    try {
+      this.unlistenDerivedRender?.();
+    } catch {}
+    this.unlistenDerivedRender = null;
+    this.speakerEngine.dispose();
+  }
+
   /**
    * Decodes the 64-byte `TransportAndMasterHeader` (`0x00000..0x0003F`) using `DataView`
-   * at 120 Hz without allocating objects or parsing JSON.
+   * at 120 Hz without allocating objects or parsing JSON, compensating visual playhead position
+   * by `(master_output_latency_samples + hw_output_latency_samples)` during desktop playback.
    */
   syncHeaderFromSharedMemory(): void {
     const dv = this.dataView;
     this.frameSeq = Number(dv.getBigUint64(OFFSET_HEADER + 0x00, true));
-    this.samplePos = Number(dv.getBigInt64(OFFSET_HEADER + 0x08, true));
-    this.playheadPpq = Number(dv.getBigInt64(OFFSET_HEADER + 0x10, true));
+    const rawSamplePos = Number(dv.getBigInt64(OFFSET_HEADER + 0x08, true));
+    const rawPlayheadPpq = Number(dv.getBigInt64(OFFSET_HEADER + 0x10, true));
     const bpm = dv.getFloat32(OFFSET_HEADER + 0x18, true);
     if (bpm >= 10.0 && bpm <= 999.0) {
       this.tempoBpm = bpm;
+    }
+
+    const masterApdcSamples = dv.getUint32(OFFSET_HEADER_ALIGN_PAD, true);
+    const rtPlaying = dv.getUint8(OFFSET_HEADER_ALIGN_PAD + 4) !== 0;
+    if (this.isDesktopTauri && (rtPlaying || this.isPlaying)) {
+      const engSr = Math.max(8000, this.wasapiEngineSampleRateHz || 48000);
+      const hwSr = Math.max(8000, this.wasapiHardwareSampleRateHz || engSr);
+      const hwOutEngineSamples = Math.round(Math.max(0, this.wasapiBufferFrames) * (engSr / hwSr));
+      const totalLatencySamples = masterApdcSamples + hwOutEngineSamples;
+      const samplesPerTick =
+        ((60.0 / Math.max(10.0, this.tempoBpm)) * engSr) / Math.max(96, this.ppqResolution);
+      const latencyTicks =
+        samplesPerTick > 0 ? Math.round(totalLatencySamples / samplesPerTick) : 0;
+      this.samplePos = Math.max(0, rawSamplePos - totalLatencySamples);
+      this.playheadPpq = Math.max(0, rawPlayheadPpq - latencyTicks);
+    } else {
+      this.samplePos = rawSamplePos;
+      this.playheadPpq = rawPlayheadPpq;
     }
     this.cpuLoadPercent = dv.getFloat32(OFFSET_HEADER + 0x1C, true);
     this.lufsMomentary = dv.getFloat32(OFFSET_HEADER + 0x20, true);
@@ -880,7 +930,7 @@ export class DawTelemetryView {
   private evaluateSoothe3RealReductionAt(freqHz: number, inputDb: number, localAvgDb: number): number {
     if (this.soothe3Depth <= 0.01) return 0.0;
     let scSensitivity = 0.0;
-    for (let b = 0; b < 6; b++) {
+    for (let b = 0; b < this.soothe3ScBands.length; b++) {
       const sc = this.soothe3ScBands[b];
       if (!sc || !sc.enabled) continue;
       const logDist = Math.log2(Math.max(1e-6, freqHz / Math.max(20.0, sc.freqHz)));
@@ -1057,18 +1107,18 @@ export class DawTelemetryView {
         const raw = await invoke<ArrayBuffer | Uint8Array | number[]>('cmd_poll_binary_telemetry_frame');
         if (raw instanceof ArrayBuffer && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw));
-          this.syncLogSpectrumOverlay(timestampMs);
           this.syncHeaderFromSharedMemory();
+          this.syncLogSpectrumOverlay(timestampMs);
           return;
         } else if (ArrayBuffer.isView(raw) && raw.byteLength === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
-          this.syncLogSpectrumOverlay(timestampMs);
           this.syncHeaderFromSharedMemory();
+          this.syncLogSpectrumOverlay(timestampMs);
           return;
         } else if (Array.isArray(raw) && raw.length === VISUAL_TELEMETRY_FRAME_BYTES) {
           this.u8View.set(raw);
-          this.syncLogSpectrumOverlay(timestampMs);
           this.syncHeaderFromSharedMemory();
+          this.syncLogSpectrumOverlay(timestampMs);
           return;
         }
       } catch (e) {
@@ -1152,7 +1202,7 @@ export class DawTelemetryView {
 
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
-      const freq = 20.0 * Math.pow(1000.0, normX);
+      const freq = 10.0 * Math.pow(3000.0, normX);
       const postDb = this.proq4PostDb[k];
       const neighborLeft = this.proq4PostDb[Math.max(0, k - 16)];
       const neighborRight = this.proq4PostDb[Math.min(1023, k + 16)];
@@ -1267,7 +1317,7 @@ export class DawTelemetryView {
 
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
-      const freq = 20.0 * Math.pow(1000.0, normX);
+      const freq = 10.0 * Math.pow(3000.0, normX);
       const pinkSlope = -18.0 - 12.0 * normX;
       const harmonic = 8.0 * Math.sin(normX * 28.0 + t * 3.2) + 4.5 * Math.cos(normX * 75.0 - t * 6.0);
       const fallbackPreDb = pinkSlope + harmonic;
@@ -1293,7 +1343,7 @@ export class DawTelemetryView {
 
     for (let k = 0; k < 1024; k++) {
       const normX = k / 1023.0;
-      const freq = 20.0 * Math.pow(1000.0, normX);
+      const freq = 10.0 * Math.pow(3000.0, normX);
       const postDb = this.proq4PostDb[k];
       const localAvgDb =
         0.5 * (this.proq4PostDb[Math.max(0, k - 16)] + this.proq4PostDb[Math.min(1023, k + 16)]);
@@ -1645,7 +1695,7 @@ export class DawTelemetryView {
     this.customAudioDurationFrames = 0;
     this.uvr5SeparatedStems = [];
     this.samplePos = 0;
-    this.ppqTick = 0;
+    this.playheadPpq = 0;
     this.speakerEngine.switchToPianoRollSource(this);
     if (isTauriEnvironment()) {
       try {
@@ -1677,7 +1727,7 @@ export class DawTelemetryView {
     this.tempoBpm = Math.max(10.0, Math.min(999.0, bpm));
     this.syncDspToSpeakerEngine();
     this.speakerEngine.setPlaying(this.isPlaying, this);
-    if (!this.isPlaying) {
+    if (!this.isPlaying && !isTauriEnvironment()) {
       this.synthesizeDemoTelemetryFrame(this.lastSynthTimestampMs);
       this.syncHeaderFromSharedMemory();
     }
@@ -2205,8 +2255,8 @@ export class DawTelemetryView {
           })),
         },
       });
-      if (typeof totalLatency === 'number' && this.mixerTracks[trackIdx]) {
-        this.mixerTracks[trackIdx].apdcLatencySamples = totalLatency;
+      if (typeof totalLatency === 'number' && this.mixerTracks[tIdx]) {
+        this.mixerTracks[tIdx].apdcLatencySamples = totalLatency;
       }
     } catch (e) {
       this.reportEngineError('cmd_update_patcher_graph', e);
@@ -2479,7 +2529,11 @@ export class DawTelemetryView {
                   (this.renderSampleRateHz / Math.max(8000, this.customAudioSampleRate))
               )
             )
-          : Math.round((this.renderDurationTicks / 96.0) * (60.0 / this.tempoBpm) * this.renderSampleRateHz);
+          : Math.round(
+              (this.renderDurationTicks / Math.max(1, this.ppqResolution)) *
+                (60.0 / this.tempoBpm) *
+                this.renderSampleRateHz
+            );
 
       if (isTauriEnvironment()) {
         const res = await invoke<any>('cmd_execute_offline_render', {
@@ -3668,13 +3722,207 @@ export class DawTelemetryView {
       this.vocalSelectedBlobId = this.vocalBlobs[0]?.blob_id ?? null;
     }
 
+    const findFirstPluginConfig = (pluginType: string): any | null => {
+      if (!Array.isArray(ps.mixer_tracks)) return null;
+      const focusTrk = ps.mixer_tracks[this.selectedTrackIndex];
+      const inFocus = focusTrk?.slots?.find((sl: any) => sl?.plugin?.plugin_type === pluginType);
+      if (inFocus?.plugin?.config) return inFocus.plugin.config;
+      for (const trk of ps.mixer_tracks) {
+        const hit = trk?.slots?.find((sl: any) => sl?.plugin?.plugin_type === pluginType);
+        if (hit?.plugin?.config) return hit.plugin.config;
+      }
+      return null;
+    };
+
+    // 1. FabFilter Pro-Q 4 (24 bands + global + collision reference)
+    const proqCfg = findFirstPluginConfig('ProQ4');
+    if (proqCfg) {
+      const g = proqCfg.global ?? {};
+      const pm = g.processing_mode;
+      this.proq4PhaseMode =
+        pm === 'ZeroLatency' || pm === 0
+          ? 'ZeroLatency'
+          : pm === 'LinearPhase' || pm === 2
+            ? 'LinearPhase'
+            : 'NaturalPhase';
+      const pr = g.processing_resolution;
+      this.proq4ProcessingResolution = (
+        pr === 'Low' || pr === 0
+          ? 0
+          : pr === 'High' || pr === 2
+            ? 2
+            : pr === 'VeryHigh' || pr === 3
+              ? 3
+              : pr === 'Maximum' || pr === 4
+                ? 4
+                : 1
+      ) as 0 | 1 | 2 | 3 | 4;
+      const ch = g.character;
+      this.proq4Character = (ch === 'Subtle' || ch === 1 ? 1 : ch === 'Warm' || ch === 2 ? 2 : 0) as 0 | 1 | 2;
+      if (typeof g.gain_scale === 'number') this.proq4GainScalePct = g.gain_scale * 100.0;
+      if (typeof g.output_level_db === 'number') this.proq4OutputLevelDb = g.output_level_db;
+      if (typeof g.bypass === 'boolean') this.proq4Bypass = g.bypass;
+      if (typeof g.auto_gain === 'boolean') this.proq4AutoGain = g.auto_gain;
+      if (typeof g.show_collisions === 'boolean') this.proq4ShowCollisions = g.show_collisions;
+      this.proq4CollisionRefTrack =
+        typeof proqCfg.collision_reference_track === 'number'
+          ? proqCfg.collision_reference_track
+          : null;
+
+      if (Array.isArray(proqCfg.bands)) {
+        const shapeMap: Record<string, number> = {
+          Bell: 0,
+          LowShelf: 1,
+          LowCut: 2,
+          HighShelf: 3,
+          HighCut: 4,
+          Notch: 5,
+          BandPass: 6,
+          TiltShelf: 7,
+          FlatTilt: 8,
+          AllPass: 9,
+        };
+        const nextBands = this.createInitialProQ4Bands();
+        proqCfg.bands.slice(0, 24).forEach((b: any, i: number) => {
+          const rawShape = b?.shape;
+          const mappedShape =
+            typeof rawShape === 'string'
+              ? (shapeMap[rawShape] ?? 0)
+              : Math.max(0, Math.min(9, Number(rawShape ?? 0)));
+          const dens = Number(b?.spectral_density ?? 65.0);
+          nextBands[i] = {
+            bandIdx: i,
+            used: Boolean(b?.used),
+            enabled: Boolean(b?.enabled),
+            freqHz: Number(b?.freq_hz ?? nextBands[i].freqHz),
+            gainDb: Number(b?.gain_db ?? 0.0),
+            q: Number(b?.q_ui ?? b?.q ?? 1.0),
+            shape: mappedShape,
+            slopeDbOct: b?.is_brickwall ? 96 : Math.round(Number(b?.slope_db_oct ?? 12)),
+            dynamicRangeDb: Number(b?.dyn_range_db ?? b?.dynamic_range_db ?? 0.0),
+            spectralEnabled: Boolean(b?.spectral_enabled),
+            spectralDensity: dens <= 1.0 ? Math.round(dens * 100.0) : Math.round(dens),
+          };
+        });
+        this.proq4Bands = nextBands;
+      }
+    }
+
+    // 2. oeksound Soothe3 (global + 8 SC bands + external sidechain)
+    const sootheCfg = findFirstPluginConfig('Soothe3');
+    if (sootheCfg) {
+      const sg = sootheCfg.global ?? {};
+      this.soothe3HardMode = sg.mode === 'Hard' || sg.mode === 1;
+      this.soothe3DeltaSolo = Boolean(sg.delta_solo);
+      if (typeof sg.depth === 'number') this.soothe3Depth = sg.depth;
+      if (typeof sg.detail === 'number') this.soothe3Detail = sg.detail;
+      if (typeof sg.attack === 'number') this.soothe3Attack = sg.attack;
+      if (typeof sg.release === 'number') this.soothe3Release = sg.release;
+      if (typeof sg.max_cut_db === 'number') this.soothe3MaxCutDb = sg.max_cut_db;
+      if (typeof sg.mix_pct === 'number') this.soothe3MixPct = sg.mix_pct;
+      this.soothe3LinearPhase = Boolean(sg.linear_phase);
+      this.soothe3LowLatency = Boolean(sg.low_latency);
+      const sq = sg.quality;
+      this.soothe3Quality = (
+        sq === 'Normal' || sq === 0 ? 0 : sq === 'Ultra' || sq === 2 ? 2 : 1
+      ) as 0 | 1 | 2;
+      this.soothe3ExternalScEnabled = Boolean(sg.sidechain || sg.external_sidechain_enabled);
+      if (typeof sootheCfg.external_sidechain_source_track === 'number') {
+        this.soothe3ExternalScSourceTrack = sootheCfg.external_sidechain_source_track;
+      }
+      if (Array.isArray(sootheCfg.sc_bands)) {
+        const scShapeMap: Record<string, number> = {
+          LowCut: 0,
+          LowShelf: 1,
+          Bell: 2,
+          Bandpass: 3,
+          BandReject: 4,
+          Tilt: 5,
+          HighShelf: 6,
+          HighCut: 7,
+        };
+        this.soothe3ScBands = sootheCfg.sc_bands.slice(0, 8).map((b: any, i: number) => ({
+          bandIdx: i,
+          enabled: Boolean(b?.enabled),
+          freqHz: Number(b?.freq_hz ?? 1000.0),
+          depth: Number(b?.depth ?? 0.0),
+          q: Number(b?.q ?? 1.0),
+          shape:
+            typeof b?.shape === 'string'
+              ? (scShapeMap[b.shape] ?? 2)
+              : Math.max(0, Math.min(7, Number(b?.shape ?? 2))),
+        }));
+      }
+    }
+
+    // 3. iZotope Ozone 12 Master Chain + Low End Focus + Codec Preview
+    const ozCfg =
+      ps.mixer_tracks?.[0]?.slots?.find((sl: any) => sl?.plugin?.plugin_type === 'Ozone12Master')
+        ?.plugin?.config ?? findFirstPluginConfig('Ozone12Master');
+    if (ozCfg) {
+      this.ozone12MaximizerBypass = Boolean(ozCfg.maximizer_bypass);
+      if (typeof ozCfg.maximizer_irc_mode === 'number') this.ozone12IrcMode = ozCfg.maximizer_irc_mode;
+      if (typeof ozCfg.maximizer_gain_db === 'number') this.ozone12GainDb = ozCfg.maximizer_gain_db;
+      if (typeof ozCfg.maximizer_ceiling_dbtp === 'number') this.ozone12CeilingDbtp = ozCfg.maximizer_ceiling_dbtp;
+      if (typeof ozCfg.maximizer_true_peak === 'boolean') this.ozone12TruePeak = ozCfg.maximizer_true_peak;
+      if (typeof ozCfg.maximizer_upward_comp_wet === 'number') this.ozone12UpwardCompWet = ozCfg.maximizer_upward_comp_wet;
+      if (typeof ozCfg.maximizer_soft_clip_enabled === 'boolean') this.ozone12SoftClipEnabled = ozCfg.maximizer_soft_clip_enabled;
+      if (typeof ozCfg.maximizer_soft_clip_mix === 'number') this.ozone12SoftClipMix = ozCfg.maximizer_soft_clip_mix;
+      if (typeof ozCfg.maximizer_soft_clip_mode === 'number') {
+        this.ozone12SoftClipMode = Math.max(0, Math.min(2, ozCfg.maximizer_soft_clip_mode)) as 0 | 1 | 2;
+      }
+      if (typeof ozCfg.maximizer_transient_shaping === 'number') this.ozone12TransientShaping = ozCfg.maximizer_transient_shaping;
+      this.ozone12ExciterBypass = Boolean(ozCfg.exciter_bypass);
+      if (Array.isArray(ozCfg.exciter_band_drives_pct) && ozCfg.exciter_band_drives_pct.length === 4) {
+        this.ozone12ExciterDrivesPct = ozCfg.exciter_band_drives_pct.map(Number) as [number, number, number, number];
+      }
+      if (Array.isArray(ozCfg.exciter_band_mixes) && ozCfg.exciter_band_mixes.length === 4) {
+        this.ozone12ExciterMixes = ozCfg.exciter_band_mixes.map(Number) as [number, number, number, number];
+      }
+      if (Array.isArray(ozCfg.exciter_band_modes) && ozCfg.exciter_band_modes.length === 4) {
+        this.ozone12ExciterModes = ozCfg.exciter_band_modes.map(Number) as [number, number, number, number];
+      }
+      if (Array.isArray(ozCfg.imager_band_widths_pct) && ozCfg.imager_band_widths_pct.length === 4) {
+        this.ozone12ImagerWidthsPct = ozCfg.imager_band_widths_pct.map(Number) as [number, number, number, number];
+      }
+      if (Array.isArray(ozCfg.imager_band_stereoize_pct) && ozCfg.imager_band_stereoize_pct.length === 4) {
+        this.ozone12ImagerStereoizePct = ozCfg.imager_band_stereoize_pct.map(Number) as [number, number, number, number];
+      }
+      if (typeof ozCfg.imager_stereoizer_enabled === 'boolean') this.ozone12ImagerStereoizerEnabled = ozCfg.imager_stereoizer_enabled;
+      if (typeof ozCfg.imager_stereoizer_mode === 'number') {
+        this.ozone12ImagerStereoizerMode = (ozCfg.imager_stereoizer_mode > 0 ? 1 : 0) as 0 | 1;
+      }
+      if (typeof ozCfg.stabilizer_amount_pct === 'number') this.ozone12StabilizerAmountPct = ozCfg.stabilizer_amount_pct;
+      if (typeof ozCfg.stabilizer_speed_pct === 'number') this.ozone12StabilizerSpeedPct = ozCfg.stabilizer_speed_pct;
+      if (typeof ozCfg.stabilizer_tame_transients_pct === 'number') this.ozone12StabilizerTameTransientsPct = ozCfg.stabilizer_tame_transients_pct;
+      this.ozone12StabilizerCutMode = Boolean(ozCfg.stabilizer_cut_mode);
+      if (Array.isArray(ozCfg.impact_band_amounts) && ozCfg.impact_band_amounts.length === 4) {
+        this.ozone12ImpactAmounts = ozCfg.impact_band_amounts.map(Number) as [number, number, number, number];
+      }
+      if (typeof ozCfg.clarity_amount_pct === 'number') this.ozone12ClarityAmountPct = ozCfg.clarity_amount_pct;
+      if (typeof ozCfg.clarity_tilt_db_oct === 'number') this.ozone12ClarityTiltDbOct = ozCfg.clarity_tilt_db_oct;
+      this.ozone12LefEnabled = Boolean(ozCfg.low_end_focus_enabled);
+      if (typeof ozCfg.low_end_focus_punchy === 'boolean') this.ozone12LefPunchy = ozCfg.low_end_focus_punchy;
+      if (typeof ozCfg.low_end_focus_upper_hz === 'number') this.ozone12LefUpperHz = ozCfg.low_end_focus_upper_hz;
+      if (typeof ozCfg.low_end_focus_contrast_pct === 'number') this.ozone12LefContrastPct = ozCfg.low_end_focus_contrast_pct;
+      if (typeof ozCfg.low_end_focus_gain_db === 'number') this.ozone12LefGainDb = ozCfg.low_end_focus_gain_db;
+      this.ozone12LefSolo = Boolean(ozCfg.low_end_focus_solo);
+      this.ozone12CodecEnabled = Boolean(ozCfg.codec_preview_enabled);
+      if (typeof ozCfg.codec_preview_codec === 'number') {
+        this.ozone12CodecMode = Math.max(0, Math.min(5, ozCfg.codec_preview_codec)) as 0 | 1 | 2 | 3 | 4 | 5;
+      }
+      this.ozone12CodecArtifactSolo = Boolean(ozCfg.codec_preview_artifact_solo);
+    }
+
+    // 4. Real-Time BSRNN 4-Stem Rebalance (gains + solo + mute)
     const masterSlots = ps.mixer_tracks?.[0]?.slots;
-    if (Array.isArray(masterSlots)) {
-      const bsrnnSlot = masterSlots.find(
-        (sl: any) => sl?.plugin?.plugin_type === 'RealTimeBsrnnStem'
-      );
-      const bsrnnCfg = bsrnnSlot?.plugin?.config;
-      if (bsrnnCfg && Array.isArray(bsrnnCfg.stem_gains_db)) {
+    const bsrnnCfg =
+      (Array.isArray(masterSlots)
+        ? masterSlots.find((sl: any) => sl?.plugin?.plugin_type === 'RealTimeBsrnnStem')?.plugin
+            ?.config
+        : null) ?? findFirstPluginConfig('RealTimeBsrnnStem');
+    if (bsrnnCfg) {
+      if (Array.isArray(bsrnnCfg.stem_gains_db)) {
         this.bsrnnStemGainsDb = [
           Number(bsrnnCfg.stem_gains_db[0] ?? 0),
           Number(bsrnnCfg.stem_gains_db[1] ?? 0),
@@ -3682,6 +3930,133 @@ export class DawTelemetryView {
           Number(bsrnnCfg.stem_gains_db[3] ?? 0),
         ];
       }
+      if (Array.isArray(bsrnnCfg.stem_solo)) {
+        this.bsrnnStemSolo = [
+          Boolean(bsrnnCfg.stem_solo[0]),
+          Boolean(bsrnnCfg.stem_solo[1]),
+          Boolean(bsrnnCfg.stem_solo[2]),
+          Boolean(bsrnnCfg.stem_solo[3]),
+        ];
+      }
+      if (Array.isArray(bsrnnCfg.stem_mute)) {
+        this.bsrnnStemMute = [
+          Boolean(bsrnnCfg.stem_mute[0]),
+          Boolean(bsrnnCfg.stem_mute[1]),
+          Boolean(bsrnnCfg.stem_mute[2]),
+          Boolean(bsrnnCfg.stem_mute[3]),
+        ];
+      }
+    }
+
+    // 5. Real-Time Pitcher (AutoPitchCorrector)
+    const pitcherCfg = findFirstPluginConfig('AutoPitchCorrector');
+    if (pitcherCfg) {
+      if (typeof pitcherCfg.root_key === 'number') this.pitcherRootKey = pitcherCfg.root_key;
+      if (typeof pitcherCfg.scale_index === 'number') this.pitcherScaleIndex = pitcherCfg.scale_index;
+      if (typeof pitcherCfg.retune_speed_ms === 'number') this.pitcherRetuneSpeedMs = pitcherCfg.retune_speed_ms;
+      if (typeof pitcherCfg.humanize === 'number') this.pitcherHumanize = pitcherCfg.humanize;
+      if (typeof pitcherCfg.formant_preserve === 'boolean') this.pitcherFormantPreserve = pitcherCfg.formant_preserve;
+      if (typeof pitcherCfg.formant_shift_semitones === 'number') {
+        this.pitcherFormantShiftSemitones = pitcherCfg.formant_shift_semitones;
+      }
+      if (typeof pitcherCfg.mix === 'number') this.pitcherMix = pitcherCfg.mix;
+      this.pitcherBypass = Boolean(pitcherCfg.bypass);
+    }
+
+    // 6. Interactive Patcher Canvas
+    if (Array.isArray(ps.patcher_canvases) && ps.patcher_canvases.length > 0) {
+      const cv = ps.patcher_canvases[0];
+      if (Array.isArray(cv?.nodes)) {
+        this.patcherNodes = cv.nodes.map((n: any, idx: number) => ({
+          nodeIndex: Number(n.node_index ?? idx),
+          label: String(n.label ?? `Node ${idx}`),
+          pluginKind: String(n.plugin_kind ?? 'FixedLatency'),
+          latencySamples: Number(n.latency_samples ?? 0),
+          layer: idx,
+          xPx: Number(n.x_px ?? 60 + idx * 160),
+          yPx: Number(n.y_px ?? 120),
+          cpuPct: 0.1,
+          enabled: n.enabled !== false,
+        }));
+      }
+      if (Array.isArray(cv?.edges)) {
+        this.patcherEdges = cv.edges.map((e: any) => ({
+          fromNode: Number(e.from_node ?? 0),
+          toNode: Number(e.to_node ?? 0),
+          gain: Number(e.gain ?? 1.0),
+        }));
+      }
+    }
+
+    // 7. Hosted External VST3 / CLAP Plugins (Slots + Channel Instruments)
+    if (Array.isArray(ps.mixer_tracks)) {
+      const extLoaded: LoadedExternalPluginUi[] = [];
+      for (const trk of ps.mixer_tracks) {
+        const tIdx = Number(trk.index ?? 0);
+        const inst = trk.channel_instrument;
+        if (
+          inst &&
+          (inst.plugin_type === 'ExternalClap' || inst.plugin_type === 'ExternalVst3') &&
+          inst.config
+        ) {
+          const isClap = inst.plugin_type === 'ExternalClap';
+          extLoaded.push({
+            trackIdx: tIdx,
+            slotIdx: 0xfe,
+            isClap,
+            isInstrument: true,
+            name: String(inst.config.plugin_name ?? 'External Instrument'),
+            vendor: isClap ? 'CLAP 1.2' : 'Steinberg VST3',
+            pluginId: String(inst.config.plugin_id ?? ''),
+            binaryPath: String(inst.config.binary_path ?? ''),
+            latencySamples: 0,
+            guiOpen: false,
+            parameters: Array.isArray(inst.config.param_overrides)
+              ? inst.config.param_overrides.map((pair: any) => ({
+                  id: Number(pair?.[0] ?? 0),
+                  name: `Param #${Number(pair?.[0] ?? 0)}`,
+                  default_normalized: Number(pair?.[1] ?? 0.5),
+                  current_normalized: Number(pair?.[1] ?? 0.5),
+                  automatable: true,
+                }))
+              : [],
+          });
+        }
+        if (Array.isArray(trk.slots)) {
+          trk.slots.forEach((sl: any, sIdx: number) => {
+            const p = sl?.plugin;
+            if (
+              p &&
+              (p.plugin_type === 'ExternalClap' || p.plugin_type === 'ExternalVst3') &&
+              p.config
+            ) {
+              const isClap = p.plugin_type === 'ExternalClap';
+              extLoaded.push({
+                trackIdx: tIdx,
+                slotIdx: Number(sl.slot_index ?? sIdx),
+                isClap,
+                isInstrument: false,
+                name: String(p.config.plugin_name ?? 'External FX'),
+                vendor: isClap ? 'CLAP 1.2' : 'Steinberg VST3',
+                pluginId: String(p.config.plugin_id ?? ''),
+                binaryPath: String(p.config.binary_path ?? ''),
+                latencySamples: 0,
+                guiOpen: false,
+                parameters: Array.isArray(p.config.param_overrides)
+                  ? p.config.param_overrides.map((pair: any) => ({
+                      id: Number(pair?.[0] ?? 0),
+                      name: `Param #${Number(pair?.[0] ?? 0)}`,
+                      default_normalized: Number(pair?.[1] ?? 0.5),
+                      current_normalized: Number(pair?.[1] ?? 0.5),
+                      automatable: true,
+                    }))
+                  : [],
+              });
+            }
+          });
+        }
+      }
+      this.loadedExternalPlugins = extLoaded;
     }
 
     if (Array.isArray(ps.audio_assets)) {
@@ -4475,7 +4850,7 @@ export class DawTelemetryView {
     }
   }
 
-  async toggleDiskRecording(loopLengthTicks: number | null = 384): Promise<void> {
+  async toggleDiskRecording(loopLengthTicks: number | null = 0): Promise<void> {
     const nextStart = !this.isDiskRecording;
     if (isTauriEnvironment()) {
       try {
@@ -4521,7 +4896,7 @@ export class DawTelemetryView {
           kind: 'AudioStem',
           sourceId: takeNum,
           startTick: 0,
-          durationTicks: 384,
+          durationTicks: this.ppqResolution * 4,
           clipOffsetTicks: 0,
           gain: 1.0,
           muted: false,

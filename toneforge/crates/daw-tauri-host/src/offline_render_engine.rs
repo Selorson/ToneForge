@@ -26,11 +26,11 @@ use ai_uvr5_stem_engine::{
     CascadedASPPNet, HTDemucs4, Mdx23cSeparator, SpectralEnsembleMode, SpectralEnsembler,
 };
 use daw_core_graph::{
-    AudioStemClipPlayerNode, ChannelGenerator, MASTER_TRACK_INDEX, MAX_BLOCK_SIZE,
-    MAX_MIXER_TRACKS, MixerEngine, StereoFrame,
+    AudioStemClipPlayerNode, ChannelGenerator, EMPTY_SLOT_NODE_NAME, MASTER_TRACK_INDEX,
+    MAX_BLOCK_SIZE, MAX_MIXER_TRACKS, MixerEngine, StereoFrame,
 };
 use dsp_ozone12_mastering::{LufsTruePeakMeter, MbitPlusDither, Ozone12MasterChain};
-use dsp_proq4_eq::{EqBandParams, FilterShape, ProQ4Processor};
+use dsp_proq4_eq::ProQ4Processor;
 use dsp_soothe3_spectral::Soothe3Processor;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -627,7 +627,7 @@ impl OfflineRenderEngine {
         // queued from the UI right before offline rendering begins (`[Nhóm C.4]`).
         engine.drain_commands();
 
-        engine.slicer.sample_rate = target_sr;
+        engine.slicer.set_sample_rate(target_sr);
         engine.slicer.reset();
         engine.is_playing = true;
         engine.automation_queue.clear();
@@ -832,26 +832,53 @@ impl OfflineRenderEngine {
         source_engine: &mut MixerEngine,
         config: &OfflineRenderConfig,
     ) -> io::Result<OfflineRenderResult> {
-        // Step 1: Render source mix with APDC compensation
+        // Step 1: Render pre-master source mix with APDC compensation (temporarily bypassing
+        // Master Track 0 inserts so the mix is not brickwalled twice before stem separation).
+        let saved_master_gain = source_engine.tracks[MASTER_TRACK_INDEX].gain;
+        let saved_master_enabled: Vec<bool> = source_engine.tracks[MASTER_TRACK_INDEX]
+            .slots
+            .iter()
+            .map(|s| s.enabled)
+            .collect();
+        source_engine.tracks[MASTER_TRACK_INDEX].gain = 1.0;
+        for slot in &mut source_engine.tracks[MASTER_TRACK_INDEX].slots {
+            slot.enabled = false;
+        }
+        let _ = source_engine.rebuild_graph();
+
         let mut pre_cfg = config.clone();
         pre_cfg.mode = RenderMode::Master;
         pre_cfg.output_dir = None;
-        let pre_res = Self::render_master(source_engine, &pre_cfg)?;
+        let pre_res_result = Self::render_master(source_engine, &pre_cfg);
+
+        source_engine.tracks[MASTER_TRACK_INDEX].gain = saved_master_gain;
+        for (slot, en) in source_engine.tracks[MASTER_TRACK_INDEX]
+            .slots
+            .iter_mut()
+            .zip(saved_master_enabled.into_iter())
+        {
+            slot.enabled = en;
+        }
+        let _ = source_engine.rebuild_graph();
+
+        let pre_res = pre_res_result?;
         let mix_frames = &pre_res.master_wav.frames;
 
         // Step 2: Separate into 4 Stems via RTX 4080 ONNX GPU Ensemble (Kim_Vocal_2 + Inst_HQ_3 + Ozone 12 BSRNN)
         let [vocals_stem, drums_stem, bass_stem, other_stem] =
             Self::separate_4stems_uvr5_ensemble_with_sr(mix_frames, config.sample_rate.as_u32());
 
-        // Step 3: Build the 502-Track Stem Mastering MixerEngine
+        // Step 3: Build the 502-Track Stem Mastering MixerEngine preserving the project's actual
+        // Master Bus & Insert FX chains rather than overriding with hardcoded EQ/Maximizer gains.
         let target_sr = config.sample_rate.as_f64();
         let bpm = source_engine.slicer.bpm;
         let (mut stem_engine, _cmd_prod, _telem_out) = MixerEngine::new(target_sr, bpm, 0);
 
         let stem_names: [&'static str; 4] = ["Vocals", "Drums", "Bass", "Other"];
         let stem_buffers = [vocals_stem, drums_stem, bass_stem, other_stem];
-        let eq_freqs_hz = [2800.0f32, 95.0, 62.0, 6500.0];
-        let eq_gains_db = [1.5f32, 1.8, 1.4, 1.2];
+
+        let mut borrowed_insert_slots: [Option<Vec<daw_core_graph::PluginRackSlot>>; 4] =
+            [None, None, None, None];
 
         for i in 0..4 {
             let track_idx = i + 1;
@@ -865,54 +892,81 @@ impl OfflineRenderEngine {
                 ))
                 .expect("acyclic stem generator addition");
 
-            // Insert Slot 0: FabFilter Pro-Q 4 tailored per stem
-            let mut proq4 = ProQ4Processor::new();
-            proq4.set_band_params(
-                0,
-                EqBandParams {
-                    used: true,
-                    enabled: true,
-                    shape: FilterShape::Bell,
-                    freq_hz: eq_freqs_hz[i],
-                    gain_db: eq_gains_db[i],
-                    q_ui: 1.0,
-                    ..EqBandParams::default()
-                },
-            );
-            stem_engine.tracks[track_idx]
-                .add_plugin_slot(Box::new(proq4), 1.0)
-                .unwrap();
+            stem_engine.tracks[track_idx].gain = source_engine.tracks[track_idx].gain;
+            stem_engine.tracks[track_idx].pan = source_engine.tracks[track_idx].pan;
+            stem_engine.tracks[track_idx].polarity_inverted =
+                source_engine.tracks[track_idx].polarity_inverted;
 
-            // Insert Slot 1: oeksound Soothe3 resonance suppressor tailored per stem
-            let mut soothe3 = Soothe3Processor::new(target_sr as f32);
-            soothe3.params_mut().global.depth = 3.5;
-            soothe3.params_mut().global.detail = 5.5;
-            soothe3.params_mut().global.max_cut_db = -12.0;
-            stem_engine.tracks[track_idx]
-                .add_plugin_slot(Box::new(soothe3), 0.65)
-                .unwrap();
+            let has_user_inserts = source_engine.tracks[track_idx]
+                .slots
+                .iter()
+                .any(|s| s.enabled && s.plugin.name() != EMPTY_SLOT_NODE_NAME);
+            if has_user_inserts {
+                let slots = std::mem::take(&mut source_engine.tracks[track_idx].slots);
+                stem_engine.tracks[track_idx].slots = slots;
+                borrowed_insert_slots[i] = Some(Vec::new());
+            } else {
+                // Transparent unity stem chain (0.0 dB flat Pro-Q 4 + gentle Soothe3 resonance guard)
+                let proq4 = ProQ4Processor::new();
+                stem_engine.tracks[track_idx]
+                    .add_plugin_slot(Box::new(proq4), 1.0)
+                    .unwrap();
+
+                let mut soothe3 = Soothe3Processor::new(target_sr as f32);
+                soothe3.params_mut().global.depth = 0.0;
+                stem_engine.tracks[track_idx]
+                    .add_plugin_slot(Box::new(soothe3), 0.0)
+                    .unwrap();
+            }
 
             stem_engine.tracks[track_idx].add_send(MASTER_TRACK_INDEX, 1.0, false);
         }
 
-        // Master Track 0: iZotope Ozone 12 Master Chain with -1.0 dBTP True-Peak Ceiling + Neural Unlimiter backend ready
-        let mut ozone12 = Ozone12MasterChain::new(target_sr);
-        if let Ok(delimit_proc) = ai_uvr5_stem_engine::OzoneDelimitOnnxProcessor::from_default_assets() {
-            ozone12.set_unlimiter_neural_backend(Box::new(delimit_proc));
+        // Preserve user's actual Master Track 0 chain & fader state when configured;
+        // fall back to a unity-gain Ozone 12 ceiling limiter (-1.0 dBTP) only if Master is empty.
+        stem_engine.tracks[MASTER_TRACK_INDEX].gain = source_engine.tracks[MASTER_TRACK_INDEX].gain;
+        stem_engine.tracks[MASTER_TRACK_INDEX].pan = source_engine.tracks[MASTER_TRACK_INDEX].pan;
+        stem_engine.tracks[MASTER_TRACK_INDEX].polarity_inverted =
+            source_engine.tracks[MASTER_TRACK_INDEX].polarity_inverted;
+
+        let has_user_master = source_engine.tracks[MASTER_TRACK_INDEX]
+            .slots
+            .iter()
+            .any(|s| s.enabled && s.plugin.name() != EMPTY_SLOT_NODE_NAME);
+        if has_user_master {
+            stem_engine.tracks[MASTER_TRACK_INDEX].slots =
+                std::mem::take(&mut source_engine.tracks[MASTER_TRACK_INDEX].slots);
+        } else {
+            let mut ozone12 = Ozone12MasterChain::new(target_sr);
+            ozone12.maximizer.ceiling_dbtp = -1.0;
+            ozone12.maximizer.gain_db = 0.0;
+            stem_engine.tracks[MASTER_TRACK_INDEX]
+                .add_plugin_slot(Box::new(ozone12), 1.0)
+                .unwrap();
         }
-        ozone12.maximizer.ceiling_dbtp = -1.0;
-        ozone12.maximizer.gain_db = 2.0;
-        stem_engine.tracks[MASTER_TRACK_INDEX]
-            .add_plugin_slot(Box::new(ozone12), 1.0)
-            .unwrap();
 
         stem_engine.rebuild_graph().unwrap();
 
-        // Step 4: Bounce Master + all 4 Stem Tracks simultaneously (in-memory first so stem labels match disk filenames)
+        // Step 4: Bounce Master + all 4 Stem Tracks simultaneously, then always restore borrowed slots
         let mut split_cfg = config.clone();
         split_cfg.split_track_indices = vec![1, 2, 3, 4];
         split_cfg.output_dir = None;
-        let mut res = Self::render_split_mixer_tracks(&mut stem_engine, &split_cfg)?;
+        let render_outcome = Self::render_split_mixer_tracks(&mut stem_engine, &split_cfg);
+
+        for i in 0..4 {
+            if borrowed_insert_slots[i].is_some() {
+                let track_idx = i + 1;
+                source_engine.tracks[track_idx].slots =
+                    std::mem::take(&mut stem_engine.tracks[track_idx].slots);
+            }
+        }
+        if has_user_master {
+            source_engine.tracks[MASTER_TRACK_INDEX].slots =
+                std::mem::take(&mut stem_engine.tracks[MASTER_TRACK_INDEX].slots);
+        }
+        let _ = source_engine.rebuild_graph();
+
+        let mut res = render_outcome?;
         res.config = config.clone();
         res.config.mode = RenderMode::StemMastering;
         res.master_wav.label = format!("{}_Master", config.file_prefix);
@@ -970,14 +1024,16 @@ impl OfflineRenderEngine {
             return gru_sep.separate_4stems(mix, sample_rate_hz.clamp(8_000, 384_000));
         }
 
+        let sr = sample_rate_hz.clamp(8_000, 384_000);
         let demucs = HTDemucs4::new(512, 128, 16, 4, 2);
-        let [demucs_drums, demucs_bass, _demucs_other, demucs_vocals] = demucs.separate_4stems(mix);
+        let [demucs_drums, demucs_bass, _demucs_other, demucs_vocals] =
+            demucs.separate_4stems(mix, sr);
 
         let mdx = Mdx23cSeparator::new(512, 128, 1024, 0.5);
-        let (mdx_vocals, _) = mdx.separate_offline(mix);
+        let (mdx_vocals, _) = mdx.separate_offline(mix, sr);
 
         let vr = CascadedASPPNet::new(512, 128, 0.05);
-        let (vr_vocals, _) = vr.separate_vocal_instrumental(mix);
+        let (vr_vocals, _) = vr.separate_vocal_instrumental(mix, sr);
 
         let mut ensembler = SpectralEnsembler::new(512, 128, SpectralEnsembleMode::Weighted);
         ensembler.phase_denoise_strength = 0.25;

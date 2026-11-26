@@ -940,7 +940,8 @@ impl IrcVMaximizerCore {
         cand: f32,
         ceiling: f32,
     ) -> f32 {
-        let hard_tp_limit = ceiling * 0.996;
+        let cand_clean = if cand.is_finite() { cand } else { 0.0 };
+        let hard_tp_limit = (if ceiling.is_finite() { ceiling.max(1e-5) } else { 1.0 }) * 0.996;
         let mut lo = -hard_tp_limit;
         let mut hi = hard_tp_limit;
 
@@ -949,6 +950,9 @@ impl IrcVMaximizerCore {
             let mut rest = 0.0_f32;
             for m in 1..12 {
                 rest += phase[m] * past[m - 1];
+            }
+            if !rest.is_finite() {
+                continue;
             }
             if c0.abs() > 1.0e-7 {
                 let b1 = (-hard_tp_limit - rest) / c0;
@@ -961,7 +965,7 @@ impl IrcVMaximizerCore {
         }
 
         if lo <= hi {
-            cand.clamp(lo, hi)
+            cand_clean.clamp(lo, hi)
         } else {
             (0.5 * (lo + hi)).clamp(-hard_tp_limit, hard_tp_limit)
         }
@@ -1005,11 +1009,17 @@ impl IrcVMaximizerCore {
         let mut trans = [0.0f32; 2];
         let mut sust = [0.0f32; 2];
         for c in 0..2 {
-            let p = peaks[c];
+            let p = if peaks[c].is_finite() { peaks[c].max(0.0) } else { 0.0 };
             let cf = if p > self.env_fast[c] { a_fast } else { r_fast };
             let cs = if p > self.env_slow[c] { a_slow } else { r_slow };
             self.env_fast[c] = cf * self.env_fast[c] + (1.0 - cf) * p;
             self.env_slow[c] = cs * self.env_slow[c] + (1.0 - cs) * p;
+            if !self.env_fast[c].is_finite() {
+                self.env_fast[c] = 0.0;
+            }
+            if !self.env_slow[c].is_finite() {
+                self.env_slow[c] = 0.0;
+            }
             sust[c] = self.env_slow[c];
             trans[c] = (self.env_fast[c] - self.env_slow[c]).max(0.0);
         }
@@ -1130,11 +1140,17 @@ impl IrcVMaximizerCore {
         let mut trans = [0.0f32; 2];
         let mut sust = [0.0f32; 2];
         for c in 0..2 {
-            let p = peaks[c];
+            let p = if peaks[c].is_finite() { peaks[c].max(0.0) } else { 0.0 };
             let cf = if p > self.env_fast[c] { a_fast } else { r_fast };
             let cs = if p > self.env_slow[c] { a_slow } else { r_slow };
             self.env_fast[c] = cf * self.env_fast[c] + (1.0 - cf) * p;
             self.env_slow[c] = cs * self.env_slow[c] + (1.0 - cs) * p;
+            if !self.env_fast[c].is_finite() {
+                self.env_fast[c] = 0.0;
+            }
+            if !self.env_slow[c].is_finite() {
+                self.env_slow[c] = 0.0;
+            }
             sust[c] = self.env_slow[c];
             trans[c] = (self.env_fast[c] - self.env_slow[c]).max(0.0);
         }
@@ -1223,11 +1239,21 @@ impl UnifiedDspNode for IrcVMaximizerCore {
     }
 
     fn latency_samples(&self) -> usize {
-        if self.prevent_intersample_clipping {
-            self.lookahead_buf.len() + TP_PREDICTIVE_WINDOW
+        let sc_lat = if self.soft_clip_mix > 1.0e-7 && self.soft_clip_oversample_4x {
+            if self.soft_clip_oversampler.factor() == OversampleFactor::X4 {
+                self.soft_clip_oversampler.latency_host_samples()
+            } else {
+                crate::oversampler::KAISER_FIR_4X_BRANCH_TAPS - 1
+            }
         } else {
-            self.lookahead_buf.len()
-        }
+            0
+        };
+        let tp_lat = if self.prevent_intersample_clipping {
+            TP_PREDICTIVE_WINDOW
+        } else {
+            0
+        };
+        sc_lat + self.lookahead_buf.len() + tp_lat
     }
 
     fn prepare(&mut self, sample_rate: f64, _max_block_size: usize) {
@@ -1404,11 +1430,12 @@ impl IrcVMultiBandMaximizer {
     }
 
     /// Processes a single stereo frame `[L, R]` through the complete Multi-Band IRC I–V +
-    /// `4x` $C^5$ Soft-Clipper + `4x`/`9x` Cubic True-Peak pipeline (`0` heap allocations).
+    /// `4x` $C^5$ Soft-Clipper + `4x`/`9x` Cubic True-Peak pipeline without running the internal
+    /// `LufsTruePeakMeter` (used by `Ozone12MasterChain` which runs its post-chain meter once).
     #[inline]
-    pub fn step_frame(&mut self, frame: StereoFrame) -> StereoFrame {
+    pub fn step_frame_unmetered(&mut self, frame: StereoFrame) -> StereoFrame {
         if self.bypass {
-            self.meter.push_frame(frame[0], frame[1], 0.0);
+            self.last_gr_db = 0.0;
             return frame;
         }
         self.sync_core_parameters();
@@ -1416,6 +1443,8 @@ impl IrcVMultiBandMaximizer {
         let sr = self.sample_rate as f32;
         let ceiling_lin = self.final_core.ceiling_linear;
         let gain_lin = 10.0f32.powf(self.gain_db / 20.0);
+        let in_l = if frame[0].is_finite() { frame[0] } else { 0.0 };
+        let in_r = if frame[1].is_finite() { frame[1] } else { 0.0 };
 
         let pre_final = if self.irc_mode.is_multiband() {
             let (rel_char_scale, trans_preserve) = self.character_mode.ballistics_factors();
@@ -1428,7 +1457,7 @@ impl IrcVMultiBandMaximizer {
             let a_slow = (-1.0 / (0.0050 * sr)).exp();
             let r_slow = (-1.0 / (0.0500 * rel_scale * sr)).exp();
 
-            let driven = [(frame[0] * gain_lin) as f64, (frame[1] * gain_lin) as f64];
+            let driven = [(in_l * gain_lin) as f64, (in_r * gain_lin) as f64];
             let split = self.crossover.split_frame_f64(driven);
 
             let band_ceilings = [
@@ -1461,7 +1490,7 @@ impl IrcVMultiBandMaximizer {
             }
             [sum_l, sum_r]
         } else {
-            frame
+            [in_l, in_r]
         };
 
         let (out_l, out_r, gr_db) =
@@ -1469,8 +1498,16 @@ impl IrcVMultiBandMaximizer {
                 .step_stereo_with_dither(pre_final[0], pre_final[1], sr, &mut self.dither);
 
         self.last_gr_db = gr_db;
-        self.meter.push_frame(out_l, out_r, gr_db);
         [out_l, out_r]
+    }
+
+    /// Processes a single stereo frame `[L, R]` through the complete Multi-Band IRC I–V +
+    /// `4x` $C^5$ Soft-Clipper + `4x`/`9x` Cubic True-Peak pipeline (`0` heap allocations).
+    #[inline]
+    pub fn step_frame(&mut self, frame: StereoFrame) -> StereoFrame {
+        let out = self.step_frame_unmetered(frame);
+        self.meter.push_frame(out[0], out[1], self.last_gr_db);
+        out
     }
 }
 
@@ -1513,7 +1550,24 @@ impl OzoneDspModule for IrcVMultiBandMaximizer {
         if self.bypass {
             0
         } else {
-            self.final_core.latency_samples()
+            let sc_lat = if self.enable_soft_clip
+                && self.soft_clip_mix > 1.0e-7
+                && self.soft_clip_oversample_4x
+            {
+                if self.final_core.soft_clip_oversampler.factor() == OversampleFactor::X4 {
+                    self.final_core.soft_clip_oversampler.latency_host_samples()
+                } else {
+                    crate::oversampler::KAISER_FIR_4X_BRANCH_TAPS - 1
+                }
+            } else {
+                0
+            };
+            let tp_lat = if self.prevent_intersample_clipping {
+                TP_PREDICTIVE_WINDOW
+            } else {
+                0
+            };
+            sc_lat + self.final_core.lookahead_buf.len() + tp_lat
         }
     }
 }

@@ -305,7 +305,7 @@ pub fn apply_ozone12_dto_to_chain(chain: &mut Ozone12MasterChain, oz_dto: &Ozone
             9,
             ((oz_dto.maximizer_transient_shaping + 1.0) * 0.5).clamp(0.0, 1.0),
         ),
-        (65, (oz_dto.maximizer_irc_mode.min(8) as f32) / 8.0),
+        (65, (oz_dto.maximizer_irc_mode.min(5) as f32) / 5.0),
         (66, if oz_dto.maximizer_true_peak { 1.0 } else { 0.0 }),
         (10, if oz_dto.exciter_bypass { 1.0 } else { 0.0 }),
         (33, if oz_dto.imager_stereoizer_enabled { 1.0 } else { 0.0 }),
@@ -818,11 +818,7 @@ fn sync_in_place_plugin_params(
                     })?;
                 }
             }
-            if old_ps.global.processing_mode != new_ps.global.processing_mode
-                || old_ps.global.processing_resolution != new_ps.global.processing_resolution
-            {
-                let _ = app_state.push_command(EngineCommand::RefreshApdc);
-            }
+            let _ = app_state.push_command(EngineCommand::RefreshApdc);
         }
         (PluginConfigDto::Soothe3(old_s3), PluginConfigDto::Soothe3(new_s3)) => {
             let old_ps = old_s3.to_parameter_set();
@@ -840,15 +836,11 @@ fn sync_in_place_plugin_params(
                     })?;
                 }
             }
+            let _ = app_state.push_command(EngineCommand::RefreshApdc);
         }
-        (PluginConfigDto::Ozone12Master(old_oz), PluginConfigDto::Ozone12Master(new_oz)) => {
+        (PluginConfigDto::Ozone12Master(_old_oz), PluginConfigDto::Ozone12Master(new_oz)) => {
             cmd_update_ozone12_master(app_state, track_idx, slot_idx, new_oz)?;
-            if old_oz.codec_preview_enabled != new_oz.codec_preview_enabled
-                || old_oz.maximizer_bypass != new_oz.maximizer_bypass
-                || old_oz.unlimiter_enabled != new_oz.unlimiter_enabled
-            {
-                let _ = app_state.push_command(EngineCommand::RefreshApdc);
-            }
+            let _ = app_state.push_command(EngineCommand::RefreshApdc);
         }
         (
             PluginConfigDto::RealTimeBsrnnStem(_),

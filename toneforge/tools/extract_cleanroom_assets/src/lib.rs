@@ -1014,14 +1014,14 @@ mod tests {
     #[test]
     fn test_real_onnx_and_npz_tensor_signatures() {
         let assets = Path::new(r"f:\FL studio\toneforge\assets");
-        let delimit = assets.join("models/bsrnn_realtime/delimit_exp009_ep080_fixed2.onnx");
+        let delimit = assets.join("ozone12/models/delimit_exp009_ep080_fixed2.onnx");
         if delimit.exists() {
             let bytes = fs::read(&delimit).unwrap();
             let sig = parse_onnx_model_signature("delimit.onnx", &bytes).unwrap();
             assert!(!sig.inputs.is_empty());
             assert!(!sig.outputs.is_empty());
         }
-        let gparams = assets.join("models/assistant_cnn/gparamsBN8.0.npz");
+        let gparams = assets.join("ozone12/models/gparamsBN8.0.npz");
         if gparams.exists() {
             let bytes = fs::read(&gparams).unwrap();
             let arch = parse_npz_archive_tensors("gparamsBN8.0.npz", &bytes).unwrap();

@@ -204,6 +204,7 @@ impl DelimitStreamingWorkspace {
 /// dedicated background worker thread for lock-free zero-allocation real-time playback.
 pub struct OzoneDelimitOnnxProcessor {
     session: Session,
+    shrink_run_opts: Option<ort::session::RunOptions>,
     active_tier: GpuExecutionTier,
     fft_forward: Arc<dyn RealToComplex<f32>>,
     fft_inverse: Arc<dyn ComplexToReal<f32>>,
@@ -237,6 +238,11 @@ impl OzoneDelimitOnnxProcessor {
     pub fn from_model_path(model_path: &Path) -> Result<Self, String> {
         let rt = GpuRuntimeManager::global();
         let (session, active_tier) = rt.create_session(model_path)?;
+        let shrink_run_opts = if active_tier == GpuExecutionTier::CudaTensorCore {
+            GpuRuntimeManager::gpu_arena_shrink_run_options()
+        } else {
+            None
+        };
 
         let mut planner = RealFftPlanner::<f32>::new();
         let fft_forward = planner.plan_fft_forward(DELIMIT_FFT_SIZE);
@@ -246,6 +252,7 @@ impl OzoneDelimitOnnxProcessor {
 
         Ok(Self {
             session,
+            shrink_run_opts,
             active_tier,
             fft_forward,
             fft_inverse,
@@ -543,7 +550,37 @@ impl OzoneDelimitOnnxProcessor {
             let g = 1.0 + alpha * r_pos;
             out[i] = [clipped[i][0] * g, clipped[i][1] * g];
         }
+        self.shrink_gpu_arena();
         Ok(out)
+    }
+
+    /// Shrinks ORT's CUDA `BFCArena` workspace right before idle release / offline completion
+    /// without stalling real-time streaming hops.
+    pub fn shrink_gpu_arena(&mut self) {
+        let Some(ref opts) = self.shrink_run_opts else {
+            return;
+        };
+        self.input_spec_buf.fill(0.0);
+        self.states_stream.fill(0.0);
+        if let (Ok(t_spec), Ok(t_states)) = (
+            TensorRef::from_array_view((
+                [1usize, 1, DELIMIT_FREQ_BINS, 2, 2],
+                self.input_spec_buf.as_slice(),
+            )),
+            TensorRef::from_array_view((
+                [1usize, 2, 2, 1, 13, 128],
+                self.states_stream.as_slice(),
+            )),
+        ) {
+            let _ = self.session.run_with_options(
+                ort::inputs![
+                    "input_spectrogram" => t_spec,
+                    "input_states" => t_states,
+                ],
+                opts,
+            );
+        }
+        self.reset();
     }
 }
 
@@ -651,6 +688,7 @@ pub struct RealtimeDelimitOnnxWorker {
     pub underflow_samples: u64,
     sample_rate_bits: Arc<AtomicU64>,
     stop_flag: Arc<AtomicBool>,
+    worker_busy: Arc<AtomicBool>,
     active_tier: GpuExecutionTier,
     join_handle: Option<JoinHandle<()>>,
 }
@@ -660,25 +698,50 @@ unsafe impl Send for RealtimeDelimitOnnxWorker {}
 unsafe impl Sync for RealtimeDelimitOnnxWorker {}
 
 impl RealtimeDelimitOnnxWorker {
-    /// Spawns the lock-free real-time worker loading `delimit_exp009_ep080_fixed2.onnx` from default assets.
+    /// Spawns the lock-free real-time worker lazily loading `delimit_exp009_ep080_fixed2.onnx`
+    /// on first active `Unlimiter` block (`0 MB` startup VRAM while `Unlimiter` is disabled).
     pub fn from_default_assets(initial_sample_rate: f64) -> Result<Self, String> {
-        let processor = OzoneDelimitOnnxProcessor::from_default_assets()?;
-        Self::from_processor(processor, initial_sample_rate)
+        let model_path = resolve_ozone_delimit_onnx_path().ok_or_else(|| {
+            "Could not locate delimit_exp009_ep080_fixed2.onnx in assets/ozone12/models".to_string()
+        })?;
+        Self::from_model_path(&model_path, initial_sample_rate)
     }
 
-    /// Spawns the lock-free real-time worker loading `delimit_exp009_ep080_fixed2.onnx` from `model_path`.
+    /// Spawns the lock-free real-time worker lazily loading `delimit_exp009_ep080_fixed2.onnx` from `model_path`.
     pub fn from_model_path(model_path: &Path, initial_sample_rate: f64) -> Result<Self, String> {
-        let processor = OzoneDelimitOnnxProcessor::from_model_path(model_path)?;
-        Self::from_processor(processor, initial_sample_rate)
+        let _ = crate::bsrnn_streaming::OnnxModelDescriptor::from_onnx_file(model_path)?;
+        let rt = GpuRuntimeManager::global();
+        if rt.environment().is_none() {
+            return Err(rt
+                .init_error()
+                .unwrap_or("ONNX Runtime environment unavailable")
+                .to_string());
+        }
+        Self::spawn_worker_inner(
+            None,
+            Some(model_path.to_path_buf()),
+            rt.tier(),
+            initial_sample_rate,
+        )
     }
 
     /// Spawns the lock-free real-time worker taking ownership of an initialized `OzoneDelimitOnnxProcessor`.
     pub fn from_processor(
-        mut processor: OzoneDelimitOnnxProcessor,
+        processor: OzoneDelimitOnnxProcessor,
+        initial_sample_rate: f64,
+    ) -> Result<Self, String> {
+        let active_tier = processor.active_tier();
+        let fallback_path = resolve_ozone_delimit_onnx_path();
+        Self::spawn_worker_inner(Some(processor), fallback_path, active_tier, initial_sample_rate)
+    }
+
+    fn spawn_worker_inner(
+        mut initial_processor: Option<OzoneDelimitOnnxProcessor>,
+        model_path: Option<std::path::PathBuf>,
+        active_tier: GpuExecutionTier,
         initial_sample_rate: f64,
     ) -> Result<Self, String> {
         let sr = initial_sample_rate.max(8_000.0);
-        let active_tier = processor.active_tier();
 
         let (in_tx, mut in_rx) = RingBuffer::<f32>::new(RT_RING_CAPACITY);
         let (mut out_tx, out_rx) = RingBuffer::<f32>::new(RT_RING_CAPACITY);
@@ -686,40 +749,56 @@ impl RealtimeDelimitOnnxWorker {
         let sample_rate_bits = Arc::new(AtomicU64::new(sr.to_bits()));
         let reset_epoch = Arc::new(AtomicU64::new(1));
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let worker_busy = Arc::new(AtomicBool::new(false));
         let ready_barrier = Arc::new(Barrier::new(2));
 
         let sr_clone = Arc::clone(&sample_rate_bits);
         let epoch_clone = Arc::clone(&reset_epoch);
         let stop_clone = Arc::clone(&stop_flag);
+        let busy_clone = Arc::clone(&worker_busy);
         let ready_clone = Arc::clone(&ready_barrier);
 
         let join_handle = std::thread::Builder::new()
             .name("toneforge-delimit-onnx".to_string())
             .stack_size(4 * 1024 * 1024)
             .spawn(move || {
-                // Pre-warm CUDA / DirectML / CPU kernels on this worker thread outside RT audio!
-                let warm_in = [0.0f32; DELIMIT_HOP_SIZE];
-                let mut warm_out = [0.0f32; DELIMIT_HOP_SIZE];
-                let _ = processor.process_delimit_envelope(&warm_in, sr, &mut warm_out);
-                processor.reset();
+                let mut processor = initial_processor.take();
+                if let Some(proc_ref) = processor.as_mut() {
+                    let warm_in = [0.0f32; DELIMIT_HOP_SIZE];
+                    let mut warm_out = [0.0f32; DELIMIT_HOP_SIZE];
+                    let _ = proc_ref.process_delimit_envelope(&warm_in, sr, &mut warm_out);
+                    proc_ref.reset();
+                }
                 ready_clone.wait();
 
                 let mut local_epoch = 1u64;
                 let mut in_chunk = [0.0f32; 512];
                 let mut out_chunk = [0.0f32; 512];
                 let mut idle_spins = 0u32;
+                let mut idle_since: Option<std::time::Instant> = None;
 
                 while !stop_clone.load(Ordering::Acquire) {
                     let target_epoch = epoch_clone.load(Ordering::Acquire);
                     if target_epoch != local_epoch {
                         while in_rx.pop().is_ok() {}
-                        processor.reset();
+                        if let Some(proc_ref) = processor.as_mut() {
+                            proc_ref.reset();
+                        }
                         local_epoch = target_epoch;
                     }
 
                     let avail = in_rx.slots().min(in_chunk.len());
                     if avail > 0 && out_tx.slots() >= avail {
+                        busy_clone.store(true, Ordering::Release);
                         idle_spins = 0;
+                        idle_since = None;
+                        if processor.is_none()
+                            && let Some(ref p) = model_path
+                            && let Ok(mut loaded) = OzoneDelimitOnnxProcessor::from_model_path(p)
+                        {
+                            loaded.reset();
+                            processor = Some(loaded);
+                        }
                         let mut popped = 0usize;
                         while popped < avail {
                             if let Ok(v) = in_rx.pop() {
@@ -728,17 +807,23 @@ impl RealtimeDelimitOnnxWorker {
                                     if popped > 0 {
                                         let cur_sr = f64::from_bits(sr_clone.load(Ordering::Relaxed))
                                             .max(8_000.0);
-                                        let ok = processor.process_delimit_envelope(
-                                            &in_chunk[..popped],
-                                            cur_sr,
-                                            &mut out_chunk[..popped],
-                                        );
+                                        let ok = if let Some(proc_ref) = processor.as_mut() {
+                                            proc_ref.process_delimit_envelope(
+                                                &in_chunk[..popped],
+                                                cur_sr,
+                                                &mut out_chunk[..popped],
+                                            )
+                                        } else {
+                                            false
+                                        };
                                         for &o in &out_chunk[..popped] {
                                             let _ = out_tx.push(if ok { o } else { 0.0 });
                                         }
                                         popped = 0;
                                     }
-                                    processor.reset();
+                                    if let Some(proc_ref) = processor.as_mut() {
+                                        proc_ref.reset();
+                                    }
                                     continue;
                                 }
                                 in_chunk[popped] = v;
@@ -749,21 +834,34 @@ impl RealtimeDelimitOnnxWorker {
                         }
                         if popped > 0 {
                             let cur_sr = f64::from_bits(sr_clone.load(Ordering::Relaxed)).max(8_000.0);
-                            let ok = processor.process_delimit_envelope(
-                                &in_chunk[..popped],
-                                cur_sr,
-                                &mut out_chunk[..popped],
-                            );
+                            let ok = if let Some(proc_ref) = processor.as_mut() {
+                                proc_ref.process_delimit_envelope(
+                                    &in_chunk[..popped],
+                                    cur_sr,
+                                    &mut out_chunk[..popped],
+                                )
+                            } else {
+                                false
+                            };
                             for &v in &out_chunk[..popped] {
                                 let _ = out_tx.push(if ok { v } else { 0.0 });
                             }
                         }
+                        busy_clone.store(false, Ordering::Release);
                     } else {
                         idle_spins = idle_spins.saturating_add(1);
                         if idle_spins < 256 {
                             std::hint::spin_loop();
                         } else {
-                            std::thread::sleep(std::time::Duration::from_micros(100));
+                            let since = *idle_since.get_or_insert_with(std::time::Instant::now);
+                            if processor.is_some()
+                                && since.elapsed() >= crate::idle_release::IDLE_RELEASE
+                            {
+                                if let Some(mut proc_owned) = processor.take() {
+                                    proc_owned.shrink_gpu_arena();
+                                }
+                            }
+                            std::thread::sleep(std::time::Duration::from_micros(250));
                         }
                     }
                 }
@@ -781,8 +879,8 @@ impl RealtimeDelimitOnnxWorker {
             cushion_remaining: DELIMIT_RT_CUSHION_SAMPLES,
             underflow_samples: 0,
             sample_rate_bits,
-            
             stop_flag,
+            worker_busy,
             active_tier,
             join_handle: Some(join_handle),
         })
@@ -797,7 +895,9 @@ impl RealtimeDelimitOnnxWorker {
     /// currently queued input samples (up to `timeout`). Never called on the RT audio thread.
     pub fn wait_for_worker_drain(&self, timeout: std::time::Duration) {
         let start = std::time::Instant::now();
-        while self.in_tx.slots() < RT_RING_CAPACITY && start.elapsed() < timeout {
+        while (self.in_tx.slots() < RT_RING_CAPACITY || self.worker_busy.load(Ordering::Acquire))
+            && start.elapsed() < timeout
+        {
             std::thread::sleep(std::time::Duration::from_micros(200));
         }
         // Allow one brief final slice for the worker to push `out_chunk`

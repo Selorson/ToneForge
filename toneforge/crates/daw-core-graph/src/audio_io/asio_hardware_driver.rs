@@ -823,273 +823,268 @@ fn run_asio_sta_thread(
     };
 
     let sys_hwnd = create_hidden_asio_sys_hwnd();
-    let mut iasio_ptr: *mut c_void = std::ptr::null_mut();
-    let create_hr = unsafe {
-        CoCreateInstance(
-            &clsid_guid,
-            std::ptr::null_mut(),
-            CLSCTX_INPROC_SERVER,
-            &clsid_guid,
-            &mut iasio_ptr,
-        )
-    };
+    let mut reset_retries = 0u32;
 
-    if create_hr < 0 || iasio_ptr.is_null() {
-        control.meta.write().2 = format!("CoCreateInstance(IASIO) returned 0x{create_hr:08X}");
-        if !sys_hwnd.is_null() {
-            unsafe {
-                let _ = DestroyWindow(sys_hwnd);
+    'reopen: loop {
+        if control.shutdown.load(Ordering::Acquire) {
+            break 'reopen;
+        }
+        ASIO_RESET_REQUESTED.store(false, Ordering::Release);
+
+        let mut iasio_ptr: *mut c_void = std::ptr::null_mut();
+        let create_hr = unsafe {
+            CoCreateInstance(
+                &clsid_guid,
+                std::ptr::null_mut(),
+                CLSCTX_INPROC_SERVER,
+                &clsid_guid,
+                &mut iasio_ptr,
+            )
+        };
+
+        if create_hr < 0 || iasio_ptr.is_null() {
+            control.meta.write().2 = format!("CoCreateInstance(IASIO) returned 0x{create_hr:08X}");
+            break 'reopen;
+        }
+
+        let mut reopen_requested = false;
+        unsafe {
+            let vtbl = *(iasio_ptr as *const *const IASIOVtbl);
+            let init_ok = ((*vtbl).init)(iasio_ptr, sys_hwnd);
+            if init_ok == ASIO_FALSE {
+                let mut err_buf = [0 as c_char; 128];
+                ((*vtbl).get_error_message)(iasio_ptr, err_buf.as_mut_ptr());
+                let msg = CStr::from_ptr(err_buf.as_ptr()).to_string_lossy().into_owned();
+                control.meta.write().2 = format!("IASIO::init failed: {msg}");
+                let _ = ((*vtbl).release)(iasio_ptr);
+                break 'reopen;
+            }
+
+            let mut num_in = 0i32;
+            let mut num_out = 0i32;
+            let _ = ((*vtbl).get_channels)(iasio_ptr, &mut num_in, &mut num_out);
+
+            let mut min_sz = 64i32;
+            let mut max_sz = 2048i32;
+            let mut pref_sz = 256i32;
+            let mut gran = 0i32;
+            let _ = ((*vtbl).get_buffer_size)(
+                iasio_ptr,
+                &mut min_sz,
+                &mut max_sz,
+                &mut pref_sz,
+                &mut gran,
+            );
+            let chosen_buf = pref_sz.clamp(32, crate::MAX_BLOCK_SIZE as i32) as usize;
+
+            if ((*vtbl).can_sample_rate)(iasio_ptr, preferred_sr) == ASE_OK {
+                let _ = ((*vtbl).set_sample_rate)(iasio_ptr, preferred_sr);
+            }
+            let mut actual_sr = preferred_sr;
+            let _ = ((*vtbl).get_sample_rate)(iasio_ptr, &mut actual_sr);
+            if !(actual_sr > 8_000.0) {
+                actual_sr = preferred_sr;
+            }
+            // The engine keeps its own sample rate (all plugins, assets and tempo maths are prepared for
+            // it); a driver running at another rate is bridged by high-quality SRC in both directions.
+            let engine_sr = engine.slicer.sample_rate();
+            let needs_src = (actual_sr - engine_sr).abs() > 0.5;
+
+            let use_in = (num_in.max(0) as usize).min(2);
+            let use_out = (num_out.max(0) as usize).min(2);
+            let total_ch = use_in + use_out;
+
+            let mut buf_infos = [ASIOBufferInfo {
+                is_input: 0,
+                channel_num: 0,
+                buffers: [std::ptr::null_mut(); 2],
+            }; 4];
+            let mut sample_types = [ASIOST_INT32_LSB; 4];
+
+            for c in 0..use_in {
+                buf_infos[c] = ASIOBufferInfo {
+                    is_input: ASIO_TRUE,
+                    channel_num: c as i32,
+                    buffers: [std::ptr::null_mut(); 2],
+                };
+                let mut ch_info: ASIOChannelInfo = std::mem::zeroed();
+                ch_info.channel = c as i32;
+                ch_info.is_input = ASIO_TRUE;
+                if ((*vtbl).get_channel_info)(iasio_ptr, &mut ch_info) == ASE_OK {
+                    sample_types[c] = ch_info.sample_type;
+                }
+            }
+            for c in 0..use_out {
+                let slot = use_in + c;
+                buf_infos[slot] = ASIOBufferInfo {
+                    is_input: ASIO_FALSE,
+                    channel_num: c as i32,
+                    buffers: [std::ptr::null_mut(); 2],
+                };
+                let mut ch_info: ASIOChannelInfo = std::mem::zeroed();
+                ch_info.channel = c as i32;
+                ch_info.is_input = ASIO_FALSE;
+                if ((*vtbl).get_channel_info)(iasio_ptr, &mut ch_info) == ASE_OK {
+                    sample_types[slot] = ch_info.sample_type;
+                }
+            }
+
+            if total_ch == 0 {
+                control.meta.write().2 = "ASIO driver reported 0 audio channels".to_string();
+                let _ = ((*vtbl).release)(iasio_ptr);
+                break 'reopen;
+            }
+
+            let cb_rc = ((*vtbl).create_buffers)(
+                iasio_ptr,
+                buf_infos.as_mut_ptr(),
+                total_ch as i32,
+                chosen_buf as i32,
+                &ASIO_CALLBACKS_STATIC,
+            );
+            if cb_rc != ASE_OK {
+                control.meta.write().2 = format!("IASIO::createBuffers failed ({cb_rc})");
+                let _ = ((*vtbl).release)(iasio_ptr);
+                break 'reopen;
+            }
+
+            let mut lat_in = 0i32;
+            let mut lat_out = 0i32;
+            let _ = ((*vtbl).get_latencies)(iasio_ptr, &mut lat_in, &mut lat_out);
+
+            control
+                .sample_rate_hz
+                .store(actual_sr.round() as u32, Ordering::Relaxed);
+            control
+                .buffer_frames
+                .store(chosen_buf as u32, Ordering::Relaxed);
+            control
+                .input_channels
+                .store(use_in as u32, Ordering::Relaxed);
+            control
+                .output_channels
+                .store(use_out as u32, Ordering::Relaxed);
+            control
+                .input_latency
+                .store(lat_in.max(0) as u32, Ordering::Relaxed);
+            control
+                .output_latency
+                .store(lat_out.max(0) as u32, Ordering::Relaxed);
+
+            let (out_resampler, input_tx) = if needs_src {
+                let rs = Box::new(crate::audio_io::WasapiStreamingResampler::new(
+                    engine_sr.round() as u32,
+                    actual_sr.round() as u32,
+                ));
+                let tx = if use_in > 0 {
+                    let (tx, rx) = rtrb::RingBuffer::<StereoFrame>::new(32_768);
+                    engine.hw_capture_bridge = Some((
+                        rx,
+                        crate::audio_io::AdaptiveDllDriftResampler::new_clock_locked(
+                            actual_sr,
+                            engine_sr,
+                            chosen_buf,
+                        ),
+                    ));
+                    Some(tx)
+                } else {
+                    None
+                };
+                (Some(rs), tx)
+            } else {
+                (None, None)
+            };
+            let mut rt_ctx = Box::new(AsioRtContext {
+                engine,
+                iasio_ptr,
+                buf_infos,
+                sample_types,
+                num_in_ch: use_in,
+                num_out_ch: use_out,
+                buffer_frames: chosen_buf,
+                scratch_in: vec![[0.0; 2]; chosen_buf.max(256)],
+                scratch_out: vec![[0.0; 2]; chosen_buf.max(256)],
+                control: Arc::clone(&control),
+                out_resampler,
+                input_tx,
+            });
+            control
+                .output_ready_supported
+                .store(((*vtbl).output_ready)(iasio_ptr) == ASE_OK, Ordering::Relaxed);
+            let ctx_raw = (&mut *rt_ctx) as *mut AsioRtContext;
+            ACTIVE_ASIO_CTX.store(ctx_raw as u64, Ordering::Release);
+
+            let start_rc = ((*vtbl).start)(iasio_ptr);
+            if start_rc == ASE_OK {
+                reset_retries = 0;
+                control.stream_running.store(true, Ordering::Release);
+                control.meta.write().2 = format!(
+                    "ASIO Active ({} Hz, {} smp, {} in / {} out){}",
+                    actual_sr.round() as u32,
+                    chosen_buf,
+                    use_in,
+                    use_out,
+                    if needs_src {
+                        format!(
+                            " — SRC {} Hz ↔ engine {} Hz",
+                            actual_sr.round(),
+                            engine_sr.round()
+                        )
+                    } else {
+                        String::new()
+                    }
+                );
+
+                while !control.shutdown.load(Ordering::Acquire) {
+                    if ASIO_RESET_REQUESTED.swap(false, Ordering::AcqRel) {
+                        control.meta.write().2 =
+                            "ASIO driver requested reset — reopening stream...".to_string();
+                        reopen_requested = true;
+                        break;
+                    }
+                    let mut msg: MSG = std::mem::zeroed();
+                    while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                    thread::sleep(Duration::from_millis(8));
+                }
+                let _ = ((*vtbl).stop)(iasio_ptr);
+            } else {
+                control.meta.write().2 = format!("IASIO::start returned {start_rc}");
+            }
+
+            control.stream_running.store(false, Ordering::Release);
+            ACTIVE_ASIO_CTX.store(0, Ordering::Release);
+            let _ = ((*vtbl).dispose_buffers)(iasio_ptr);
+            let _ = ((*vtbl).release)(iasio_ptr);
+
+            let AsioRtContext {
+                engine: recovered_eng,
+                input_tx,
+                ..
+            } = *rt_ctx;
+            engine = recovered_eng;
+            if input_tx.is_some() {
+                engine.hw_capture_bridge = None;
             }
         }
-        *recovered_slot.lock() = Some(engine);
-        if com_inited {
-            unsafe { CoUninitialize() };
+
+        if reopen_requested && !control.shutdown.load(Ordering::Acquire) && reset_retries < 8 {
+            reset_retries += 1;
+            thread::sleep(Duration::from_millis(20));
+            continue 'reopen;
         }
-        return;
+        break 'reopen;
     }
 
-    unsafe {
-        let vtbl = *(iasio_ptr as *const *const IASIOVtbl);
-        let init_ok = ((*vtbl).init)(iasio_ptr, sys_hwnd);
-        if init_ok == ASIO_FALSE {
-            let mut err_buf = [0 as c_char; 128];
-            ((*vtbl).get_error_message)(iasio_ptr, err_buf.as_mut_ptr());
-            let msg = CStr::from_ptr(err_buf.as_ptr()).to_string_lossy().into_owned();
-            control.meta.write().2 = format!("IASIO::init failed: {msg}");
-            let _ = ((*vtbl).release)(iasio_ptr);
-            if !sys_hwnd.is_null() {
-                let _ = DestroyWindow(sys_hwnd);
-            }
-            *recovered_slot.lock() = Some(engine);
-            if com_inited {
-                CoUninitialize();
-            }
-            return;
-        }
-
-        let mut num_in = 0i32;
-        let mut num_out = 0i32;
-        let _ = ((*vtbl).get_channels)(iasio_ptr, &mut num_in, &mut num_out);
-
-        let mut min_sz = 64i32;
-        let mut max_sz = 2048i32;
-        let mut pref_sz = 256i32;
-        let mut gran = 0i32;
-        let _ = ((*vtbl).get_buffer_size)(
-            iasio_ptr,
-            &mut min_sz,
-            &mut max_sz,
-            &mut pref_sz,
-            &mut gran,
-        );
-        let chosen_buf = pref_sz.clamp(32, crate::MAX_BLOCK_SIZE as i32) as usize;
-
-        if ((*vtbl).can_sample_rate)(iasio_ptr, preferred_sr) == ASE_OK {
-            let _ = ((*vtbl).set_sample_rate)(iasio_ptr, preferred_sr);
-        }
-        let mut actual_sr = preferred_sr;
-        let _ = ((*vtbl).get_sample_rate)(iasio_ptr, &mut actual_sr);
-        if !(actual_sr > 8_000.0) {
-            actual_sr = preferred_sr;
-        }
-        // The engine keeps its own sample rate (all plugins, assets and tempo maths are prepared for
-        // it); a driver running at another rate is bridged by high-quality SRC in both directions.
-        let engine_sr = engine.slicer.sample_rate;
-        let needs_src = (actual_sr - engine_sr).abs() > 0.5;
-
-        let use_in = (num_in.max(0) as usize).min(2);
-        let use_out = (num_out.max(0) as usize).min(2);
-        let total_ch = use_in + use_out;
-
-        let mut buf_infos = [ASIOBufferInfo {
-            is_input: 0,
-            channel_num: 0,
-            buffers: [std::ptr::null_mut(); 2],
-        }; 4];
-        let mut sample_types = [ASIOST_INT32_LSB; 4];
-
-        for c in 0..use_in {
-            buf_infos[c] = ASIOBufferInfo {
-                is_input: ASIO_TRUE,
-                channel_num: c as i32,
-                buffers: [std::ptr::null_mut(); 2],
-            };
-            let mut ch_info: ASIOChannelInfo = std::mem::zeroed();
-            ch_info.channel = c as i32;
-            ch_info.is_input = ASIO_TRUE;
-            if ((*vtbl).get_channel_info)(iasio_ptr, &mut ch_info) == ASE_OK {
-                sample_types[c] = ch_info.sample_type;
-            }
-        }
-        for c in 0..use_out {
-            let slot = use_in + c;
-            buf_infos[slot] = ASIOBufferInfo {
-                is_input: ASIO_FALSE,
-                channel_num: c as i32,
-                buffers: [std::ptr::null_mut(); 2],
-            };
-            let mut ch_info: ASIOChannelInfo = std::mem::zeroed();
-            ch_info.channel = c as i32;
-            ch_info.is_input = ASIO_FALSE;
-            if ((*vtbl).get_channel_info)(iasio_ptr, &mut ch_info) == ASE_OK {
-                sample_types[slot] = ch_info.sample_type;
-            }
-        }
-
-        if total_ch == 0 {
-            control.meta.write().2 = "ASIO driver reported 0 audio channels".to_string();
-            let _ = ((*vtbl).release)(iasio_ptr);
-            if !sys_hwnd.is_null() {
-                let _ = DestroyWindow(sys_hwnd);
-            }
-            *recovered_slot.lock() = Some(engine);
-            if com_inited {
-                CoUninitialize();
-            }
-            return;
-        }
-
-        let cb_rc = ((*vtbl).create_buffers)(
-            iasio_ptr,
-            buf_infos.as_mut_ptr(),
-            total_ch as i32,
-            chosen_buf as i32,
-            &ASIO_CALLBACKS_STATIC,
-        );
-        if cb_rc != ASE_OK {
-            control.meta.write().2 = format!("IASIO::createBuffers failed ({cb_rc})");
-            let _ = ((*vtbl).release)(iasio_ptr);
-            if !sys_hwnd.is_null() {
-                let _ = DestroyWindow(sys_hwnd);
-            }
-            *recovered_slot.lock() = Some(engine);
-            if com_inited {
-                CoUninitialize();
-            }
-            return;
-        }
-
-        let mut lat_in = 0i32;
-        let mut lat_out = 0i32;
-        let _ = ((*vtbl).get_latencies)(iasio_ptr, &mut lat_in, &mut lat_out);
-
-        control
-            .sample_rate_hz
-            .store(actual_sr.round() as u32, Ordering::Relaxed);
-        control
-            .buffer_frames
-            .store(chosen_buf as u32, Ordering::Relaxed);
-        control
-            .input_channels
-            .store(use_in as u32, Ordering::Relaxed);
-        control
-            .output_channels
-            .store(use_out as u32, Ordering::Relaxed);
-        control
-            .input_latency
-            .store(lat_in.max(0) as u32, Ordering::Relaxed);
-        control
-            .output_latency
-            .store(lat_out.max(0) as u32, Ordering::Relaxed);
-
-        let (out_resampler, input_tx) = if needs_src {
-            let rs = Box::new(crate::audio_io::WasapiStreamingResampler::new(
-                engine_sr.round() as u32,
-                actual_sr.round() as u32,
-            ));
-            let tx = if use_in > 0 {
-                let (tx, rx) = rtrb::RingBuffer::<StereoFrame>::new(32_768);
-                // Input and output share the ASIO sample clock (same bufferSwitch), so the input
-                // uses the fixed-ratio clock-locked bridge (minimum cushion, constant latency)
-                // instead of a drift-tracking DLL with a 2048-frame queue.
-                engine.hw_capture_bridge = Some((
-                    rx,
-                    crate::audio_io::AdaptiveDllDriftResampler::new_clock_locked(
-                        actual_sr,
-                        engine_sr,
-                        chosen_buf,
-                    ),
-                ));
-                Some(tx)
-            } else {
-                None
-            };
-            (Some(rs), tx)
-        } else {
-            (None, None)
-        };
-        let mut rt_ctx = Box::new(AsioRtContext {
-            engine,
-            iasio_ptr,
-            buf_infos,
-            sample_types,
-            num_in_ch: use_in,
-            num_out_ch: use_out,
-            buffer_frames: chosen_buf,
-            scratch_in: vec![[0.0; 2]; chosen_buf.max(256)],
-            scratch_out: vec![[0.0; 2]; chosen_buf.max(256)],
-            control: Arc::clone(&control),
-            out_resampler,
-            input_tx,
-        });
-        control
-            .output_ready_supported
-            .store(((*vtbl).output_ready)(iasio_ptr) == ASE_OK, Ordering::Relaxed);
-        ASIO_RESET_REQUESTED.store(false, Ordering::Release);
-        let ctx_raw = (&mut *rt_ctx) as *mut AsioRtContext;
-        ACTIVE_ASIO_CTX.store(ctx_raw as u64, Ordering::Release);
-
-        let start_rc = ((*vtbl).start)(iasio_ptr);
-        if start_rc == ASE_OK {
-            control.stream_running.store(true, Ordering::Release);
-            control.meta.write().2 = format!(
-                "ASIO Active ({} Hz, {} smp, {} in / {} out){}",
-                actual_sr.round() as u32,
-                chosen_buf,
-                use_in,
-                use_out,
-                if needs_src {
-                    format!(" — SRC {} Hz ↔ engine {} Hz", actual_sr.round(), engine_sr.round())
-                } else {
-                    String::new()
-                }
-            );
-
-            while !control.shutdown.load(Ordering::Acquire) {
-                if ASIO_RESET_REQUESTED.load(Ordering::Acquire) {
-                    control.meta.write().2 =
-                        "ASIO driver requested a reset (buffer size / format changed) — reselect the driver to reopen it"
-                            .to_string();
-                    break;
-                }
-                let mut msg: MSG = std::mem::zeroed();
-                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-                thread::sleep(Duration::from_millis(8));
-            }
-            let _ = ((*vtbl).stop)(iasio_ptr);
-        } else {
-            control.meta.write().2 = format!("IASIO::start returned {start_rc}");
-        }
-
-        control.stream_running.store(false, Ordering::Release);
-        ACTIVE_ASIO_CTX.store(0, Ordering::Release);
-        let _ = ((*vtbl).dispose_buffers)(iasio_ptr);
-        let _ = ((*vtbl).release)(iasio_ptr);
-
-        if !sys_hwnd.is_null() {
+    if !sys_hwnd.is_null() {
+        unsafe {
             let _ = DestroyWindow(sys_hwnd);
         }
-        let AsioRtContext { mut engine, input_tx, .. } = *rt_ctx;
-        if input_tx.is_some() {
-            // Detach the driver-rate input bridge that only existed for this ASIO session.
-            engine.hw_capture_bridge = None;
-        }
-        *recovered_slot.lock() = Some(engine);
-        if com_inited {
-            CoUninitialize();
-        }
+    }
+    *recovered_slot.lock() = Some(engine);
+    if com_inited {
+        unsafe { CoUninitialize() };
     }
 }

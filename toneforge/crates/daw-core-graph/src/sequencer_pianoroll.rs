@@ -978,34 +978,62 @@ impl PlaylistSequencer {
         }
 
         // 2. Dispatch Piano Roll Pattern Notes (Song Mode vs Pattern Mode)
+        let loop_wrapped =
+            self.loop_enabled && self.loop_length_ticks > 0 && ppq_tick > 0 && effective_tick == 0;
+
         if self.song_mode && self.clip_count > 0 {
             for c_idx in 0..self.clip_count {
                 let clip = &self.clips[c_idx];
                 if clip.muted || clip.kind != PlaylistClipKind::Pattern {
                     continue;
                 }
+                let Some(pattern) = self.find_pattern(clip.source_id) else {
+                    continue;
+                };
+
+                // Release any still-sounding notes when a clip reaches its exact end boundary
+                // (or when the Playlist loop wraps at `clip.end_tick() >= loop_length_ticks`).
+                if effective_tick == clip.end_tick()
+                    || (loop_wrapped && clip.end_tick() >= self.loop_length_ticks)
+                {
+                    let end_tick_local = if loop_wrapped && clip.end_tick() >= self.loop_length_ticks
+                    {
+                        self.loop_length_ticks - clip.start_tick + clip.clip_offset_ticks
+                    } else {
+                        clip.duration_ticks.max(1) + clip.clip_offset_ticks
+                    };
+                    self.dispatch_clip_end_note_offs(
+                        pattern,
+                        end_tick_local,
+                        clip.pitch_semitones,
+                        ppq_tick,
+                        tick_sample_pos,
+                        channels,
+                    );
+                }
+
                 if effective_tick < clip.start_tick || effective_tick >= clip.end_tick() {
                     continue;
                 }
                 let rel_tick = effective_tick - clip.start_tick + clip.clip_offset_ticks;
-                if let Some(pattern) = self.find_pattern(clip.source_id) {
-                    let pat_tick = if pattern.length_ticks > 0 {
-                        rel_tick.rem_euclid(pattern.length_ticks)
-                    } else {
-                        rel_tick
-                    };
-                    self.dispatch_pattern_at_tick(
-                        pattern,
-                        pat_tick,
-                        effective_tick == clip.end_tick() - 1,
-                        clip.gain,
-                        clip.pitch_semitones,
-                        ppq_tick,
-                        tick_sample_pos,
-                        samples_per_tick,
-                        channels,
-                    );
-                }
+                let pat_tick = if pattern.length_ticks > 0 {
+                    rel_tick.rem_euclid(pattern.length_ticks)
+                } else {
+                    rel_tick
+                };
+                let pat_wrapped =
+                    pattern.length_ticks > 0 && effective_tick > clip.start_tick && pat_tick == 0;
+                self.dispatch_pattern_at_tick(
+                    pattern,
+                    pat_tick,
+                    pat_wrapped,
+                    clip.gain,
+                    clip.pitch_semitones,
+                    ppq_tick,
+                    tick_sample_pos,
+                    samples_per_tick,
+                    channels,
+                );
             }
         } else if let Some(pattern) = self.find_pattern(self.active_pattern_id) {
             let pat_tick = if pattern.length_ticks > 0 {
@@ -1013,10 +1041,11 @@ impl PlaylistSequencer {
             } else {
                 effective_tick
             };
+            let pat_wrapped = pattern.length_ticks > 0 && ppq_tick > 0 && pat_tick == 0;
             self.dispatch_pattern_at_tick(
                 pattern,
                 pat_tick,
-                false,
+                pat_wrapped,
                 1.0,
                 0.0,
                 ppq_tick,
@@ -1028,12 +1057,58 @@ impl PlaylistSequencer {
     }
 
     #[inline]
+    fn dispatch_clip_end_note_offs(
+        &self,
+        pattern: &PianoRollPattern,
+        end_rel_tick: i64,
+        clip_pitch_semitones: f32,
+        global_ppq_tick: i64,
+        tick_sample_pos: i64,
+        channels: &mut [crate::mixer_dag::ChannelGenerator],
+    ) {
+        let notes = pattern.active_notes();
+        if notes.is_empty() || end_rel_tick <= 0 {
+            return;
+        }
+        let pat_len = pattern.length_ticks;
+        let end_pat_tick = if pat_len > 0 {
+            let r = end_rel_tick.rem_euclid(pat_len);
+            if r == 0 { pat_len } else { r }
+        } else {
+            end_rel_tick
+        };
+        let semi_round = clip_pitch_semitones.round() as i32;
+        let semi_frac_cents = (clip_pitch_semitones - semi_round as f32) * 100.0;
+        for note in notes {
+            if !note.is_slide && note.start_tick < end_pat_tick && note.end_tick() >= end_pat_tick {
+                let transposed_key = (note.key as i32 + semi_round).clamp(0, 127) as u8;
+                let ev = SequencerVoiceEvent {
+                    sample_pos: tick_sample_pos,
+                    ppq_tick: global_ppq_tick,
+                    channel_id: pattern.target_channel_id,
+                    note_id: note.id,
+                    kind: VoiceEventKind::NoteOff,
+                    key: transposed_key,
+                    velocity: 0.0,
+                    pan: note.pan,
+                    fine_pitch_cents: (note.fine_pitch_cents + semi_frac_cents)
+                        .clamp(-1200.0, 1200.0),
+                    slide_duration_ticks: 0,
+                    slide_duration_samples: 0,
+                    color_group: note.color_group,
+                };
+                Self::deliver_event_to_channels(&ev, channels);
+            }
+        }
+    }
+
+    #[inline]
     #[allow(clippy::too_many_arguments)]
     fn dispatch_pattern_at_tick(
         &self,
         pattern: &PianoRollPattern,
         pat_tick: i64,
-        clip_ending_next_tick: bool,
+        pattern_wrapped: bool,
         clip_gain: f32,
         clip_pitch_semitones: f32,
         global_ppq_tick: i64,
@@ -1047,10 +1122,13 @@ impl PlaylistSequencer {
         }
         let semi_round = clip_pitch_semitones.round() as i32;
         let semi_frac_cents = (clip_pitch_semitones - semi_round as f32) * 100.0;
+        let pat_len = pattern.length_ticks;
 
-        // First pass: NoteOff events at `pat_tick`
+        // First pass: NoteOff events at `pat_tick` (plus notes ending at `>= pat_len` when wrapping to tick 0)
         for note in notes {
-            if !note.is_slide && (note.end_tick() == pat_tick || clip_ending_next_tick) {
+            let ends_now = note.end_tick() == pat_tick
+                || (pattern_wrapped && pat_len > 0 && note.end_tick() >= pat_len);
+            if !note.is_slide && ends_now {
                 let transposed_key = (note.key as i32 + semi_round).clamp(0, 127) as u8;
                 let ev = SequencerVoiceEvent {
                     sample_pos: tick_sample_pos,
@@ -1316,6 +1394,7 @@ pub struct PolyphonicSynthGeneratorNode {
     sample_rate: f64,
     voices: [SynthVoice; MAX_SYNTH_VOICES],
     stolen_tails: [StolenVoiceTail; MAX_SYNTH_VOICES],
+    channel_pitch_bend_cents: [f32; 16],
     event_queue: Vec<SequencerVoiceEvent>,
     event_count: usize,
     sampler_pcm: Vec<StereoFrame>,
@@ -1343,6 +1422,7 @@ impl PolyphonicSynthGeneratorNode {
             sample_rate: sample_rate.max(8000.0),
             voices: [SynthVoice::default(); MAX_SYNTH_VOICES],
             stolen_tails: [StolenVoiceTail::default(); MAX_SYNTH_VOICES],
+            channel_pitch_bend_cents: [0.0; 16],
             event_queue: vec![SequencerVoiceEvent::default(); MAX_GENERATOR_VOICE_EVENTS],
             event_count: 0,
             sampler_pcm: Vec::new(),
@@ -1567,6 +1647,19 @@ impl PolyphonicSynthGeneratorNode {
                 }
             }
             VoiceEventKind::SlotEnable => {}
+            VoiceEventKind::PitchBend => {
+                let ch = (ev.color_group & 0x0F) as usize;
+                let prev_bend = self.channel_pitch_bend_cents[ch];
+                let new_bend = ev.fine_pitch_cents.clamp(-2400.0, 2400.0);
+                let delta_semi = (new_bend - prev_bend) * 0.01;
+                self.channel_pitch_bend_cents[ch] = new_bend;
+                for v in &mut self.voices {
+                    if v.active && (v.color_group as usize) == ch {
+                        v.current_pitch_semitones += delta_semi;
+                        v.slide_target_pitch += delta_semi;
+                    }
+                }
+            }
         }
     }
 
@@ -1795,6 +1888,7 @@ impl UnifiedDspNode for PolyphonicSynthGeneratorNode {
     fn reset_state(&mut self) {
         self.voices = [SynthVoice::default(); MAX_SYNTH_VOICES];
         self.stolen_tails = [StolenVoiceTail::default(); MAX_SYNTH_VOICES];
+        self.channel_pitch_bend_cents = [0.0; 16];
         self.event_count = 0;
         self.lookahead_delay.reset();
     }

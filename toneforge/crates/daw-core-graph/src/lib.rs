@@ -120,6 +120,12 @@ pub trait UnifiedDspNode: Send {
         false
     }
 
+    /// Optional unique live instance identifier for hosted external VST3/CLAP plug-ins so the GUI
+    /// STA thread can close any attached live `HWND` editor *before* the retired node is dropped.
+    fn hosted_instance_id(&self) -> Option<u64> {
+        None
+    }
+
     /// Processes a real-time audio slice (Zero Heap Allocation).
     fn process_slice(
         &mut self,
@@ -133,7 +139,7 @@ pub trait UnifiedDspNode: Send {
 // Re-export primary public API types at the crate root
 pub use apdc_engine::{
     ApdcDelayLine, BasicDelay32FS, DelayedAutomationEvent, DelayedVoiceEvent, PluginRackSlot,
-    SampleAccurateAutomationQueue, VoiceEventKind,
+    SampleAccurateAutomationQueue, VoiceEventKind, apdc_capacity_clamp_count, sanitize_stereo_slice,
 };
 pub use audio_io::{
     ASIO_INT32_SCALE_F32, AdaptiveDllDriftResampler, AsioDriverInfo, AsioHardwareStream,

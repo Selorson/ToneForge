@@ -72,8 +72,8 @@ struct PartitionedTier {
     active_partitions: [usize; 2],
     r2c: Arc<dyn RealToComplex<f32>>,
     c2r: Arc<dyn ComplexToReal<f32>>,
-    /// Dual-IR frequency-domain filter banks: `ir_spectra[bank][part_idx][bin]`
-    ir_spectra: [Vec<Vec<Complex32>>; 2],
+    /// Dual-IR per-channel frequency-domain filter banks: `ir_spectra[ch][bank][part_idx][bin]`
+    ir_spectra: [[Vec<Vec<Complex32>>; 2]; 2],
     /// Input Frequency-Domain Delay Line per channel: `fdl[ch][slot][bin]`
     fdl: [Vec<Vec<Complex32>>; 2],
     fdl_cursor: usize,
@@ -116,7 +116,10 @@ impl PartitionedTier {
             active_partitions: [0, 0],
             r2c,
             c2r,
-            ir_spectra: [make_ir_bank(), make_ir_bank()],
+            ir_spectra: [
+                [make_ir_bank(), make_ir_bank()],
+                [make_ir_bank(), make_ir_bank()],
+            ],
             fdl: [make_fdl(), make_fdl()],
             fdl_cursor: 0,
             in_window: [vec![0.0; fft_size], vec![0.0; fft_size]],
@@ -151,29 +154,31 @@ impl PartitionedTier {
         self.write_pos = 0;
     }
 
-    /// Number of `P`-sample partitions `ir_slice` occupies in this tier.
+    /// Number of `P`-sample partitions `ir_len` occupies in this tier.
     #[inline]
     fn partitions_for(&self, ir_len: usize) -> usize {
         ir_len.div_ceil(self.part_size).min(self.max_partitions)
     }
 
-    /// Forward-FFTs partition `m` of `ir_slice` into `bank` (Zero Heap Allocation).
-    fn load_ir_partition(&mut self, bank: usize, ir_slice: &[f32], m: usize) {
+    /// Forward-FFTs partition `m` of `(ir_l, ir_r)` into `bank` (Zero Heap Allocation).
+    fn load_dual_ir_partition(&mut self, bank: usize, ir_l: &[f32], ir_r: &[f32], m: usize) {
         let p = self.part_size;
         let inv_fft = 1.0 / (self.fft_size as f32);
         let start = m * p;
-        let end = (start + p).min(ir_slice.len());
-        self.fft_time_scratch.fill(0.0);
-        if start < end {
-            self.fft_time_scratch[..end - start].copy_from_slice(&ir_slice[start..end]);
-        }
-        let _ = self.r2c.process_with_scratch(
-            &mut self.fft_time_scratch,
-            &mut self.ir_spectra[bank][m],
-            &mut self.r2c_scratch,
-        );
-        for c in &mut self.ir_spectra[bank][m] {
-            *c *= inv_fft;
+        for (ch, ir_slice) in [ir_l, ir_r].into_iter().enumerate() {
+            let end = (start + p).min(ir_slice.len());
+            self.fft_time_scratch.fill(0.0);
+            if start < end {
+                self.fft_time_scratch[..end - start].copy_from_slice(&ir_slice[start..end]);
+            }
+            let _ = self.r2c.process_with_scratch(
+                &mut self.fft_time_scratch,
+                &mut self.ir_spectra[ch][bank][m],
+                &mut self.r2c_scratch,
+            );
+            for c in &mut self.ir_spectra[ch][bank][m] {
+                *c *= inv_fft;
+            }
         }
     }
 
@@ -182,37 +187,44 @@ impl PartitionedTier {
     fn finish_ir_load(&mut self, bank: usize, ir_len: usize) {
         let needed_parts = self.partitions_for(ir_len);
         self.active_partitions[bank] = needed_parts;
-        for m in needed_parts..self.max_partitions {
-            self.ir_spectra[bank][m].fill(Complex32::new(0.0, 0.0));
+        for ch in 0..2 {
+            for m in needed_parts..self.max_partitions {
+                self.ir_spectra[ch][bank][m].fill(Complex32::new(0.0, 0.0));
+            }
         }
     }
 
-    /// Precomputes the forward FFT of each `P`-sample partition from `ir_slice` (starting at `start_tap = P`)
+    /// Precomputes the forward FFT of each `P`-sample partition from `(ir_l, ir_r)` (starting at `start_tap = P`)
     /// into `bank` (`0` or `1`) and immediately populates `out_block[ch][bank]` from the latest FDL slot
     /// with Zero Heap Allocation.
-    fn load_ir_into_bank(&mut self, bank: usize, ir_slice: &[f32]) {
+    fn load_dual_ir_into_bank(&mut self, bank: usize, ir_l: &[f32], ir_r: &[f32]) {
         let p = self.part_size;
         let inv_fft = 1.0 / (self.fft_size as f32);
-        let needed_parts = ir_slice.len().div_ceil(p).min(self.max_partitions);
+        let max_slice_len = ir_l.len().max(ir_r.len());
+        let needed_parts = max_slice_len.div_ceil(p).min(self.max_partitions);
         self.active_partitions[bank] = needed_parts;
 
-        for m in 0..needed_parts {
-            let start = m * p;
-            let end = (start + p).min(ir_slice.len());
-            let count = end - start;
-            self.fft_time_scratch.fill(0.0);
-            self.fft_time_scratch[..count].copy_from_slice(&ir_slice[start..end]);
-            let _ = self.r2c.process_with_scratch(
-                &mut self.fft_time_scratch,
-                &mut self.ir_spectra[bank][m],
-                &mut self.r2c_scratch,
-            );
-            for c in &mut self.ir_spectra[bank][m] {
-                *c *= inv_fft;
+        for (ch, ir_slice) in [ir_l, ir_r].into_iter().enumerate() {
+            for m in 0..needed_parts {
+                let start = m * p;
+                let end = (start + p).min(ir_slice.len());
+                self.fft_time_scratch.fill(0.0);
+                if start < end {
+                    let count = end - start;
+                    self.fft_time_scratch[..count].copy_from_slice(&ir_slice[start..end]);
+                }
+                let _ = self.r2c.process_with_scratch(
+                    &mut self.fft_time_scratch,
+                    &mut self.ir_spectra[ch][bank][m],
+                    &mut self.r2c_scratch,
+                );
+                for c in &mut self.ir_spectra[ch][bank][m] {
+                    *c *= inv_fft;
+                }
             }
-        }
-        for m in needed_parts..self.max_partitions {
-            self.ir_spectra[bank][m].fill(Complex32::new(0.0, 0.0));
+            for m in needed_parts..self.max_partitions {
+                self.ir_spectra[ch][bank][m].fill(Complex32::new(0.0, 0.0));
+            }
         }
 
         // Immediately synthesize `out_block[ch][bank]` from the most recently committed FDL slot
@@ -237,7 +249,7 @@ impl PartitionedTier {
             for m in 0..num_parts {
                 let slot = (last_slot + fdl_len - m) % fdl_len;
                 let x_spec = &self.fdl[ch][slot];
-                let h_spec = &self.ir_spectra[bank][m];
+                let h_spec = &self.ir_spectra[ch][bank][m];
                 for k in 0..self.num_bins {
                     self.fft_accum_spec[k] += x_spec[k] * h_spec[k];
                 }
@@ -321,7 +333,7 @@ impl PartitionedTier {
                 for m in 0..num_parts {
                     let slot = (cur_slot + fdl_len - m) % fdl_len;
                     let x_spec = &self.fdl[ch][slot];
-                    let h_spec = &self.ir_spectra[bank][m];
+                    let h_spec = &self.ir_spectra[ch][bank][m];
                     for k in 0..self.num_bins {
                         self.fft_accum_spec[k] += x_spec[k] * h_spec[k];
                     }
@@ -345,10 +357,10 @@ impl PartitionedTier {
 }
 
 /// Recursive Non-Uniform Partitioned Overlap-Save Convolver (`0x1801A0120`: `64 -> 512 -> 4096 -> 32768`)
-/// with Dual-IR Crossfading (`0x1801A15B0`).
+/// with Dual-IR Crossfading (`0x1801A15B0`) and independent dual-channel (`L/R` or `M/S`) FIR banks.
 pub struct NonUniformPartitionedConvolver {
-    /// Direct 64-tap head FIR `[bank][0..64]` for zero additional block latency
-    head_taps: [[f32; 64]; 2],
+    /// Direct 64-tap head FIR `[ch][bank][0..64]` for zero additional block latency
+    head_taps: [[[f32; 64]; 2]; 2],
     head_ring: [[f32; 64]; 2],
     head_cursor: usize,
     /// 4 Non-Uniform Partitioned Overlap-Save Tiers (`64`, `512`, `4096`, `32768`)
@@ -366,9 +378,9 @@ pub struct NonUniformPartitionedConvolver {
     synth_c2r_32768: Arc<dyn ComplexToReal<f32>>,
     synth_c2r_65536: Arc<dyn ComplexToReal<f32>>,
     synth_c2r_131072: Arc<dyn ComplexToReal<f32>>,
-    synth_spec_buf: Vec<Complex32>,
+    synth_spec_buf: [Vec<Complex32>; 2],
     synth_scratch: Vec<Complex32>,
-    synth_time_buf: Vec<f32>,
+    synth_time_buf: [Vec<f32>; 2],
     synth_window_buf: Vec<f32>,
     /// Length of the Kaiser window currently cached in `synth_window_buf` (`0` = none).
     window_cached_n: usize,
@@ -389,7 +401,7 @@ struct IrDesignState {
     exact_limit: usize,
     /// Interpolated upper-band anchor walk (phase B, `n > 16384`).
     anchor_k0: usize,
-    anchor_m0: f32,
+    anchor_m0: [f32; 2],
     step: usize,
     /// Finalisation stage once every bin is known: `0` IFFT, `1` window + head/tier 0/1,
     /// `2` tier 2, `3` tier 3, `4` refresh inactive-bank output blocks and start the crossfade.
@@ -441,7 +453,7 @@ impl NonUniformPartitionedConvolver {
 
         let alloc_len = max_len.max(131072);
         let mut conv = Self {
-            head_taps: [[0.0; 64]; 2],
+            head_taps: [[[0.0; 64]; 2]; 2],
             head_ring: [[0.0; 64]; 2],
             head_cursor: 0,
             tiers: [tier_64, tier_512, tier_4096, tier_32768],
@@ -457,17 +469,22 @@ impl NonUniformPartitionedConvolver {
             synth_c2r_32768,
             synth_c2r_65536,
             synth_c2r_131072,
-            synth_spec_buf: vec![Complex32::new(0.0, 0.0); alloc_len / 2 + 1],
+            synth_spec_buf: [
+                vec![Complex32::new(0.0, 0.0); alloc_len / 2 + 1],
+                vec![Complex32::new(0.0, 0.0); alloc_len / 2 + 1],
+            ],
             synth_scratch: vec![Complex32::new(0.0, 0.0); max_scratch],
-            synth_time_buf: vec![0.0; alloc_len],
+            synth_time_buf: [vec![0.0; alloc_len], vec![0.0; alloc_len]],
             synth_window_buf: vec![0.0; alloc_len],
             window_cached_n: 0,
             design: IrDesignState::default(),
         };
 
         // Initialize with a unity delta impulse at the center of a 4096-tap FIR (`tau = 2048`)
-        conv.synth_time_buf.fill(0.0);
-        conv.synth_time_buf[2048] = 1.0;
+        conv.synth_time_buf[0].fill(0.0);
+        conv.synth_time_buf[1].fill(0.0);
+        conv.synth_time_buf[0][2048] = 1.0;
+        conv.synth_time_buf[1][2048] = 1.0;
         conv.load_ir_into_bank(0, 4096);
         conv.is_primed = true;
         conv
@@ -513,61 +530,72 @@ impl NonUniformPartitionedConvolver {
         }
     }
 
-    /// Loads part of `synth_time_buf[..fir_len]` into `bank`: stage `1` = 64-tap head + tiers 0/1,
+    /// Loads part of `synth_time_buf[0..2][..fir_len]` into `bank`: stage `1` = 64-tap head + tiers 0/1,
     /// stage `2` = tier 2 (`4096..32768`), stage `3` = tier 3 (`32768..`).
     fn load_ir_stage(&mut self, bank: usize, fir_len: usize, stage: u8) {
         let len = fir_len.min(self.max_fir_len).max(64);
         self.current_fir_len = len;
-        let ir = &self.synth_time_buf[..len];
+        let ir_l = &self.synth_time_buf[0][..len];
+        let ir_r = &self.synth_time_buf[1][..len];
         match stage {
             1 => {
                 // Direct 64-tap head `ir[0..64]`
-                self.head_taps[bank].fill(0.0);
                 let head_len = len.min(64);
-                self.head_taps[bank][..head_len].copy_from_slice(&ir[..head_len]);
+                for (ch, ir) in [ir_l, ir_r].into_iter().enumerate() {
+                    self.head_taps[ch][bank].fill(0.0);
+                    self.head_taps[ch][bank][..head_len].copy_from_slice(&ir[..head_len]);
+                }
                 // Tier 0 (`P_0 = 64`): `ir[64 .. 512]`
                 if len > 64 {
                     let end = len.min(512);
-                    self.tiers[0].load_ir_into_bank(bank, &ir[64..end]);
+                    self.tiers[0].load_dual_ir_into_bank(bank, &ir_l[64..end], &ir_r[64..end]);
                 } else {
-                    self.tiers[0].load_ir_into_bank(bank, &[]);
+                    self.tiers[0].load_dual_ir_into_bank(bank, &[], &[]);
                 }
                 // Tier 1 (`P_1 = 512`): `ir[512 .. 4096]`
                 if len > 512 {
                     let end = len.min(4096);
-                    self.tiers[1].load_ir_into_bank(bank, &ir[512..end]);
+                    self.tiers[1].load_dual_ir_into_bank(bank, &ir_l[512..end], &ir_r[512..end]);
                 } else {
-                    self.tiers[1].load_ir_into_bank(bank, &[]);
+                    self.tiers[1].load_dual_ir_into_bank(bank, &[], &[]);
                 }
             }
             2 => {
                 // Tier 2 (`P_2 = 4096`): `ir[4096 .. 32768]`
                 if len > 4096 {
                     let end = len.min(32768);
-                    self.tiers[2].load_ir_into_bank(bank, &ir[4096..end]);
+                    self.tiers[2].load_dual_ir_into_bank(bank, &ir_l[4096..end], &ir_r[4096..end]);
                 } else {
-                    self.tiers[2].load_ir_into_bank(bank, &[]);
+                    self.tiers[2].load_dual_ir_into_bank(bank, &[], &[]);
                 }
             }
             _ => {
                 // Tier 3 (`P_3 = 32768`): `ir[32768 .. len]`
                 if len > 32768 {
-                    self.tiers[3].load_ir_into_bank(bank, &ir[32768..len]);
+                    self.tiers[3].load_dual_ir_into_bank(bank, &ir_l[32768..len], &ir_r[32768..len]);
                 } else {
-                    self.tiers[3].load_ir_into_bank(bank, &[]);
+                    self.tiers[3].load_dual_ir_into_bank(bank, &[], &[]);
                 }
             }
         }
     }
 
-    /// Updates the impulse response from an arbitrary slice `ir`.
+    /// Updates both channels of the impulse response from an arbitrary slice `ir`.
     /// When `smooth_crossfade` is true, loads into the inactive bank and initiates a
     /// sample-accurate Dual-IR Crossfade (`0x1801A15B0`) with Zero Heap Allocation.
     pub fn set_impulse_response(&mut self, ir: &[f32], smooth_crossfade: bool) {
-        let len = ir.len().clamp(64, self.max_fir_len);
-        self.synth_time_buf[..len].fill(0.0);
-        let copy_len = ir.len().min(len);
-        self.synth_time_buf[..copy_len].copy_from_slice(&ir[..copy_len]);
+        self.set_dual_impulse_response(ir, ir, smooth_crossfade);
+    }
+
+    /// Updates Left/Mid (`ir_l`) and Right/Side (`ir_r`) impulse responses independently.
+    pub fn set_dual_impulse_response(&mut self, ir_l: &[f32], ir_r: &[f32], smooth_crossfade: bool) {
+        let len = ir_l.len().max(ir_r.len()).clamp(64, self.max_fir_len);
+        self.synth_time_buf[0][..len].fill(0.0);
+        self.synth_time_buf[1][..len].fill(0.0);
+        let copy_l = ir_l.len().min(len);
+        let copy_r = ir_r.len().min(len);
+        self.synth_time_buf[0][..copy_l].copy_from_slice(&ir_l[..copy_l]);
+        self.synth_time_buf[1][..copy_r].copy_from_slice(&ir_r[..copy_r]);
 
         if !self.is_primed || !smooth_crossfade {
             self.load_ir_into_bank(self.active_bank, len);
@@ -592,12 +620,15 @@ impl NonUniformPartitionedConvolver {
         fir_len: usize,
         sample_rate: f64,
         smooth_crossfade: bool,
-        mag_fn: F,
+        mut mag_fn: F,
     ) where
         F: FnMut(f64) -> f32,
     {
         self.begin_ir_design(fir_len, sample_rate, smooth_crossfade);
-        let _ = self.continue_ir_design(usize::MAX, mag_fn);
+        let _ = self.continue_dual_ir_design(usize::MAX, |f| {
+            let m = mag_fn(f);
+            [m, m]
+        });
     }
 
     /// Starts (or restarts) a linear-phase IR synthesis without evaluating any bins yet.
@@ -624,7 +655,7 @@ impl NonUniformPartitionedConvolver {
                 2048.min(num_bins - 1)
             },
             anchor_k0: 0,
-            anchor_m0: 0.0,
+            anchor_m0: [0.0, 0.0],
             step: (n / 8192).max(2),
             finalize_stage: 0,
             target_bank: 0,
@@ -645,13 +676,24 @@ impl NonUniformPartitionedConvolver {
         self.is_primed
     }
 
-    /// Advances the pending IR design by at most `max_evals` magnitude evaluations. When every bin
-    /// is known, runs the inverse FFT, applies the cached 60 dB Kaiser window and loads the IR (with a
-    /// dual-bank crossfade when requested). Returns `true` when the new IR has been loaded.
-    /// Zero Heap Allocation; bounded work per call so it is safe on the real-time thread.
+    /// Single-magnitude wrapper around [`Self::continue_dual_ir_design`].
     pub fn continue_ir_design<F>(&mut self, max_evals: usize, mut mag_fn: F) -> bool
     where
         F: FnMut(f64) -> f32,
+    {
+        self.continue_dual_ir_design(max_evals, |f| {
+            let m = mag_fn(f);
+            [m, m]
+        })
+    }
+
+    /// Advances the pending dual-channel (`[ch0, ch1]`) IR design by at most `max_evals` magnitude
+    /// evaluations. When every bin is known, runs the inverse FFTs, applies the cached 60 dB Kaiser
+    /// window and loads both channels' IRs (with a dual-bank crossfade when requested). Returns `true`
+    /// when the new IR has been loaded. Zero Heap Allocation; bounded work per call on the RT thread.
+    pub fn continue_dual_ir_design<F>(&mut self, max_evals: usize, mut mag_lr_fn: F) -> bool
+    where
+        F: FnMut(f64) -> [f32; 2],
     {
         if !self.design.active {
             return false;
@@ -666,10 +708,11 @@ impl NonUniformPartitionedConvolver {
         // Phase A: exact per-bin evaluation.
         let mut k = d.next_bin;
         while k <= d.exact_limit && evals < max_evals {
-            let mag = mag_fn((k as f64) * d.df) * inv_n;
+            let [m_l, m_r] = mag_lr_fn((k as f64) * d.df);
             // Linear-phase shift `e^{-j * pi * k}` = `(-1)^k` centres the impulse at `tau = N / 2`
-            let sign = if (k & 1) == 0 { 1.0 } else { -1.0 };
-            self.synth_spec_buf[k] = Complex32::new(mag * sign, 0.0);
+            let sign = if (k & 1) == 0 { inv_n } else { -inv_n };
+            self.synth_spec_buf[0][k] = Complex32::new(m_l * sign, 0.0);
+            self.synth_spec_buf[1][k] = Complex32::new(m_r * sign, 0.0);
             k += 1;
             evals += 1;
         }
@@ -682,20 +725,26 @@ impl NonUniformPartitionedConvolver {
         if d.exact_limit < num_bins - 1 {
             if self.design.anchor_k0 == 0 {
                 self.design.anchor_k0 = d.exact_limit;
-                self.design.anchor_m0 = self.synth_spec_buf[d.exact_limit].re.abs();
+                self.design.anchor_m0 = [
+                    self.synth_spec_buf[0][d.exact_limit].re.abs(),
+                    self.synth_spec_buf[1][d.exact_limit].re.abs(),
+                ];
             }
             let mut k0 = self.design.anchor_k0;
             let mut m0 = self.design.anchor_m0;
             while k0 < half && evals < max_evals {
                 let k1 = (k0 + d.step).min(half);
-                let m1 = mag_fn((k1 as f64) * d.df) * inv_n;
+                let raw_m1 = mag_lr_fn((k1 as f64) * d.df);
+                let m1 = [raw_m1[0] * inv_n, raw_m1[1] * inv_n];
                 evals += 1;
                 let span = (k1 - k0) as f32;
                 for kk in (k0 + 1)..=k1 {
                     let t = ((kk - k0) as f32) / span;
-                    let mag = m0 + t * (m1 - m0);
                     let sign = if (kk & 1) == 0 { 1.0 } else { -1.0 };
-                    self.synth_spec_buf[kk] = Complex32::new(mag * sign, 0.0);
+                    let mag0 = m0[0] + t * (m1[0] - m0[0]);
+                    let mag1 = m0[1] + t * (m1[1] - m0[1]);
+                    self.synth_spec_buf[0][kk] = Complex32::new(mag0 * sign, 0.0);
+                    self.synth_spec_buf[1][kk] = Complex32::new(mag1 * sign, 0.0);
                 }
                 k0 = k1;
                 m0 = m1;
@@ -721,8 +770,6 @@ impl NonUniformPartitionedConvolver {
                         self.active_bank = 1 - self.active_bank;
                         self.crossfade_remaining = 0;
                     }
-                    let spec = &mut self.synth_spec_buf[..num_bins];
-                    let time_out = &mut self.synth_time_buf[..n];
                     let plan = match n {
                         4096 => &self.synth_c2r_4096,
                         8192 => &self.synth_c2r_8192,
@@ -731,7 +778,11 @@ impl NonUniformPartitionedConvolver {
                         65536 => &self.synth_c2r_65536,
                         _ => &self.synth_c2r_131072,
                     };
-                    let _ = plan.process_with_scratch(spec, time_out, &mut self.synth_scratch);
+                    for ch in 0..2 {
+                        let spec = &mut self.synth_spec_buf[ch][..num_bins];
+                        let time_out = &mut self.synth_time_buf[ch][..n];
+                        let _ = plan.process_with_scratch(spec, time_out, &mut self.synth_scratch);
+                    }
                     self.design.target_bank = if !self.is_primed || !d.smooth {
                         self.active_bank
                     } else {
@@ -745,15 +796,18 @@ impl NonUniformPartitionedConvolver {
                         compute_kaiser_60db_window(&mut self.synth_window_buf[..n]);
                         self.window_cached_n = n;
                     }
-                    for i in 0..n {
-                        self.synth_time_buf[i] *= self.synth_window_buf[i];
-                    }
                     let bank = self.design.target_bank;
                     let len = n.min(self.max_fir_len).max(64);
                     self.current_fir_len = len;
-                    self.head_taps[bank].fill(0.0);
                     let head_len = len.min(64);
-                    self.head_taps[bank][..head_len].copy_from_slice(&self.synth_time_buf[..head_len]);
+                    for ch in 0..2 {
+                        for i in 0..n {
+                            self.synth_time_buf[ch][i] *= self.synth_window_buf[i];
+                        }
+                        self.head_taps[ch][bank].fill(0.0);
+                        self.head_taps[ch][bank][..head_len]
+                            .copy_from_slice(&self.synth_time_buf[ch][..head_len]);
+                    }
                     self.design.load_tier = 0;
                     self.design.load_part = 0;
                     self.design.finalize_stage = 2;
@@ -777,8 +831,9 @@ impl NonUniformPartitionedConvolver {
                             }
                             budget -= cost;
                             let m = self.design.load_part;
-                            let ir = &self.synth_time_buf[lo..hi];
-                            self.tiers[t].load_ir_partition(bank, ir, m);
+                            let ir_l = &self.synth_time_buf[0][lo..hi];
+                            let ir_r = &self.synth_time_buf[1][lo..hi];
+                            self.tiers[t].load_dual_ir_partition(bank, ir_l, ir_r, m);
                             self.design.load_part += 1;
                         } else {
                             self.tiers[t].finish_ir_load(bank, hi - lo);
@@ -836,13 +891,11 @@ impl NonUniformPartitionedConvolver {
             let idx = (c + 64 - k) & 63;
             let xl = self.head_ring[0][idx];
             let xr = self.head_ring[1][idx];
-            let ha = self.head_taps[0][k];
-            y_a[0] += xl * ha;
-            y_a[1] += xr * ha;
+            y_a[0] += xl * self.head_taps[0][0][k];
+            y_a[1] += xr * self.head_taps[1][0][k];
             if crossfading || act == 1 {
-                let hb = self.head_taps[1][k];
-                y_b[0] += xl * hb;
-                y_b[1] += xr * hb;
+                y_b[0] += xl * self.head_taps[0][1][k];
+                y_b[1] += xr * self.head_taps[1][1][k];
             }
         }
         self.head_cursor = (c + 1) & 63;

@@ -460,9 +460,62 @@ fn cmd_poll_binary_telemetry_frame(state: State<'_, SharedDawController>) -> tau
     }
     let mut streamer = state.telemetry_streamer.lock();
     let bytes = daw_tauri_host::cmd_poll_binary_telemetry_frame(&mut streamer);
-    if bytes.len() >= 24 {
-        let tick = i64::from_le_bytes(bytes[16..24].try_into().unwrap_or([0; 8]));
-        state.transport_tick_clock.store(tick, Ordering::Relaxed);
+    if bytes.len() >= daw_tauri_host::OFFSET_HEADER_ALIGN_PAD + 8 {
+        let raw_tick = i64::from_le_bytes(bytes[16..24].try_into().unwrap_or([0; 8]));
+        let bpm = f32::from_le_bytes(bytes[24..28].try_into().unwrap_or([0; 4])).clamp(10.0, 999.0);
+        let pad_off = daw_tauri_host::OFFSET_HEADER_ALIGN_PAD;
+        let master_apdc =
+            u32::from_le_bytes(bytes[pad_off..pad_off + 4].try_into().unwrap_or([0; 4]));
+        let is_playing = bytes[pad_off + 4] != 0;
+
+        let compensated_tick = if is_playing {
+            let eng_sr = state.engine_sample_rate.max(8_000.0);
+            let eng_sr_u32 = eng_sr.round() as u32;
+            let hw_out_engine = state
+                .audio_driver
+                .try_lock()
+                .and_then(|g| {
+                    g.as_ref().map(|drv| match drv {
+                        ActiveHardwareAudioDriver::Asio(s) => {
+                            let a = s.status_snapshot();
+                            let hw_sr = a.sample_rate_hz.max(8_000);
+                            let out_hw = a.output_latency_samples.max(a.buffer_frames);
+                            (out_hw as f64) * (eng_sr / (hw_sr as f64))
+                                + AdaptiveDllDriftResampler::output_src_alignment_engine_frames(
+                                    hw_sr, eng_sr_u32,
+                                )
+                        }
+                        ActiveHardwareAudioDriver::Wasapi(s) => {
+                            let w = s.status_snapshot();
+                            let hw_sr = w.hardware_sample_rate_hz.max(8_000);
+                            let out_hw = w.buffer_frames.max(1);
+                            (out_hw as f64) * (eng_sr / (hw_sr as f64))
+                                + AdaptiveDllDriftResampler::output_src_alignment_engine_frames(
+                                    hw_sr, eng_sr_u32,
+                                )
+                        }
+                    })
+                })
+                .unwrap_or(0.0);
+            let ppq = state
+                .project_state
+                .try_lock()
+                .map(|ps| ps.ppq_resolution.max(96) as f64)
+                .unwrap_or(96.0);
+            let samples_per_tick = (60.0 / (bpm as f64)) * eng_sr / ppq;
+            let total_lat_samples = (master_apdc as f64) + hw_out_engine;
+            let lat_ticks = if samples_per_tick > 0.0 {
+                (total_lat_samples / samples_per_tick).round() as i64
+            } else {
+                0
+            };
+            (raw_tick - lat_ticks).max(0)
+        } else {
+            raw_tick
+        };
+        state
+            .transport_tick_clock
+            .store(compensated_tick, Ordering::Relaxed);
     }
     tauri::ipc::Response::new(bytes.to_vec())
 }
@@ -1467,19 +1520,13 @@ async fn cmd_vocal_analyze_pitch_blobs(
         return Err(NO_AUDIO_FOR_VOCAL_EDIT.to_string());
     };
 
-    // Cap analysis window to 30 seconds for snappy interactive UI response
-    let max_len = (sr as usize) * 30;
-    let capped_frames = if frames.len() > max_len {
-        frames[..max_len].to_vec()
-    } else {
-        frames
-    };
-
-    *state.vocal_source_pcm.lock() = capped_frames.clone();
+    // Preserve 100% of the vocal recording in `vocal_source_pcm` so `Commit Pitch Edits`
+    // never truncates vocals longer than 30 seconds!
+    *state.vocal_source_pcm.lock() = frames.clone();
     *state.vocal_source_sr.lock() = sr;
 
     let dto = tauri::async_runtime::spawn_blocking(move || {
-        analyze_vocal_pitch_blobs_dsp(capped_frames, sr)
+        analyze_vocal_pitch_blobs_dsp(frames, sr)
     })
     .await
     .map_err(|e| format!("Vocal pYIN worker join error: {e}"))?;
@@ -3042,6 +3089,16 @@ async fn cmd_open_project(
     state.plugin_gui_worker.unregister_live_editors_blocking(None);
     let old = state.project_state.lock().clone();
     state.asset_cache.lock().clear();
+    state.completed_takes.lock().clear();
+    state.vocal_source_pcm.lock().clear();
+    state.vocal_blobs.lock().clear();
+    state.custom_audio_pcm.lock().clear();
+    *state.custom_audio_path.lock() = None;
+    state.custom_audio_wav_cache.lock().clear();
+    *state.bounced_stems_pcm.lock() = None;
+    *state.uvr5_stem_wavs.lock() = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    *state.active_sample_kit_query.lock() = None;
+
     daw_tauri_host::cmd_set_transport(&state.app_state, false, loaded.bpm)?;
     daw_tauri_host::sync_project_state_diff_to_rt(&old, &loaded, &state.app_state, Some(&state.collision_bus))?;
     state.sync_asset_players(&ToneForgeProjectState { audio_assets: Vec::new(), ..old.clone() }, &loaded)?;
@@ -3066,6 +3123,62 @@ async fn cmd_open_project(
         )?;
         daw_tauri_host::mirror_fl26_preset_into_slot(&mut loaded, p.track_idx, p.slot_idx, &applied)?;
     }
+
+    // Repopulate session-level PCM caches (`custom_audio_pcm`, `bounced_stems_pcm`, `vocal_source_pcm`,
+    // `vocal_blobs`) from `loaded.audio_assets` so UVR5, Ozone AI Master Assistant, and NewTone
+    // operate immediately on the opened project's audio without stale data from the previous session!
+    let eng_sr_hz = state.engine_sr_hz();
+    if let Some(custom_asset) = loaded
+        .audio_assets
+        .iter()
+        .find(|a| a.kind == daw_tauri_host::KIND_CUSTOM_AUDIO)
+        && let Ok(frames) = state.asset_frames(custom_asset)
+    {
+        *state.custom_audio_pcm.lock() = frames.as_ref().clone();
+        *state.custom_audio_sr.lock() = eng_sr_hz;
+        *state.custom_audio_path.lock() = Some(PathBuf::from(&custom_asset.file_path));
+        *state.vocal_source_pcm.lock() = frames.as_ref().clone();
+        *state.vocal_source_sr.lock() = eng_sr_hz;
+    }
+
+    let uvr5_assets: Vec<&daw_tauri_host::AudioAssetDto> = loaded
+        .audio_assets
+        .iter()
+        .filter(|a| a.kind == daw_tauri_host::KIND_UVR5_STEM)
+        .collect();
+    if !uvr5_assets.is_empty() {
+        let mut stems_arr: [Vec<StereoFrame>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for a in uvr5_assets {
+            let slot = if a.asset_id >= daw_tauri_host::ASSET_ID_UVR5_BASE
+                && a.asset_id < daw_tauri_host::ASSET_ID_UVR5_BASE + 4
+            {
+                (a.asset_id - daw_tauri_host::ASSET_ID_UVR5_BASE) as usize
+            } else {
+                a.target_track.saturating_sub(1).min(3) as usize
+            };
+            if let Ok(frames) = state.asset_frames(a) {
+                stems_arr[slot] = frames.as_ref().clone();
+            }
+        }
+        if !stems_arr[0].is_empty() {
+            *state.vocal_source_pcm.lock() = stems_arr[0].clone();
+            *state.vocal_source_sr.lock() = eng_sr_hz;
+        }
+        *state.bounced_stems_pcm.lock() = Some(stems_arr);
+    }
+
+    if state.vocal_source_pcm.lock().is_empty()
+        && let Some(voc_asset) = loaded.audio_assets.iter().find(|a| {
+            a.kind == daw_tauri_host::KIND_NEWTONE_COMMIT
+                || a.kind == daw_tauri_host::KIND_RECORDED_TAKE
+        })
+        && let Ok(frames) = state.asset_frames(voc_asset)
+    {
+        *state.vocal_source_pcm.lock() = frames.as_ref().clone();
+        *state.vocal_source_sr.lock() = eng_sr_hz;
+    }
+    *state.vocal_blobs.lock() = loaded.vocal_note_blobs.clone();
+
     *state.project_state.lock() = loaded.clone();
     state.custom_audio_active.store(
         loaded.audio_assets.iter().any(|a| a.continuous),
@@ -3126,6 +3239,33 @@ fn clean_webview_cache() {
 }
 
 fn main() {
+    // Crash-isolated out-of-process plugin probe fallback (`ToneForge_Studio.exe --probe <path>`):
+    // exits immediately with JSON on stdout before initializing WebView2 or audio drivers.
+    {
+        let mut args = std::env::args().skip(1);
+        while let Some(arg) = args.next() {
+            if arg == "--probe" {
+                let Some(target) = args.next() else {
+                    eprintln!("Missing <plugin_binary_path> after --probe");
+                    std::process::exit(2);
+                };
+                match daw_plugin_host::probe_single_binary_in_process(std::path::Path::new(&target))
+                {
+                    Ok(entries) => {
+                        let json =
+                            serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string());
+                        println!("{json}");
+                        std::process::exit(0);
+                    }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+    }
+
     clean_webview_cache();
 
     let (controller, rt_gc) = std::thread::Builder::new()
@@ -3307,7 +3447,7 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Failed to build ToneForge Studio Tauri application");
 
-    app.run(move |_app_handle, event| {
+    app.run(move |app_handle, event| {
         if let RunEvent::Exit = event {
             // Tắt app là tắt hẳn (đợt tối ưu tài nguyên 2026-11-14): một lần đo, cửa sổ đã đóng mà tiến trình
             // kẹt ở bước thoát, giữ 2,4 GB RAM. Kẹt trong lúc dọn → luồng canh kết thúc sau 5 s; dọn xong →
@@ -3318,6 +3458,15 @@ fn main() {
             });
             if let Some(mut stream) = audio_driver_exit.lock().take() {
                 stream.shutdown();
+            }
+            if let Some(ctrl) = app_handle.try_state::<SharedDawController>() {
+                let _ = ctrl.capture_stream.lock().take();
+                let _ = ctrl.midi_input_port.lock().take();
+                if let Some(recorder) = ctrl.disk_recorder.lock().take() {
+                    // Flush BufWriter & finalize WAV RIFF/data byte sizes at offsets 4 & 40!
+                    let _ = recorder.finish_and_collect_takes();
+                }
+                ctrl.plugin_gui_worker.unregister_live_editors_blocking(None);
             }
             clean_webview_cache();
             terminate_self();

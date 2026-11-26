@@ -417,12 +417,22 @@ impl LufsTruePeakMeter {
     /// Zero Heap Allocation.
     #[inline]
     pub fn push_frame(&mut self, l: f32, r: f32, gr_db: f32) {
+        let l = if l.is_finite() { l } else { 0.0 };
+        let r = if r.is_finite() { r } else { 0.0 };
+        let gr_db = if gr_db.is_finite() { gr_db } else { 0.0 };
+
         // 1. Update 4x oversampled True-Peak detector
         let _ = self.true_peak_detector.step_stereo(l, r);
 
         // 2. K-Weighting IIR filter + mean-square accumulation
         let [kl, kr] = self.k_filter.step_stereo(l as f64, r as f64);
-        let frame_power = kl * kl + kr * kr;
+        let frame_power_raw = kl * kl + kr * kr;
+        let frame_power = if frame_power_raw.is_finite() {
+            frame_power_raw
+        } else {
+            self.k_filter.reset();
+            0.0
+        };
         self.subblock_energy_sum += frame_power;
         self.subblock_sample_count += 1;
         self.total_energy_sum += frame_power;

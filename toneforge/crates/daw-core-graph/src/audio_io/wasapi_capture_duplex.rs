@@ -882,6 +882,18 @@ pub unsafe fn unpack_hardware_capture_to_stereo(
                 dst[i] = [l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0)];
             }
         }
+        WasapiSampleFormat::UInt8 => {
+            let s = unsafe { std::slice::from_raw_parts(src_bytes, n * channels) };
+            for i in 0..n {
+                let l = ((s[i * channels] as f32) - 128.0) / 128.0;
+                let r = if channels >= 2 {
+                    ((s[i * channels + 1] as f32) - 128.0) / 128.0
+                } else {
+                    l
+                };
+                dst[i] = [l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0)];
+            }
+        }
     }
 }
 
@@ -1128,21 +1140,33 @@ mod win32_capture {
             return (48_000, 2, WasapiSampleFormat::Float32);
         }
         unsafe {
-            let sr = (*wf).nSamplesPerSec;
-            let ch = (*wf).nChannels;
-            let bits = (*wf).wBitsPerSample;
-            let tag = (*wf).wFormatTag;
+            let wf_val = std::ptr::read_unaligned(wf);
+            let sr = wf_val.nSamplesPerSec;
+            let ch = wf_val.nChannels;
+            let bits = wf_val.wBitsPerSample;
+            let tag = wf_val.wFormatTag;
             let fmt = if tag == 0x0003 {
                 WasapiSampleFormat::Float32
-            } else if tag == 0xFFFE {
-                let ext = &*(wf as *const WAVEFORMATEXTENSIBLE);
-                let sub = ext.SubFormat;
-                if sub.data1 == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_GUID.data1 && bits == 32 {
+            } else if tag == 0xFFFE && wf_val.cbSize >= 22 {
+                let ext_ptr = wf as *const WAVEFORMATEXTENSIBLE;
+                let sub = std::ptr::addr_of!((*ext_ptr).SubFormat).read_unaligned();
+                let valid_bits = std::ptr::addr_of!((*ext_ptr).Samples.wValidBitsPerSample)
+                    .read_unaligned();
+                if sub.data1 == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_GUID.data1
+                    && sub.data2 == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_GUID.data2
+                    && sub.data3 == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_GUID.data3
+                    && sub.data4 == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT_GUID.data4
+                    && bits == 32
+                {
                     WasapiSampleFormat::Float32
+                } else if bits == 32 && valid_bits == 24 {
+                    WasapiSampleFormat::Int24In32
                 } else if bits == 32 {
                     WasapiSampleFormat::Int32
                 } else if bits == 24 {
                     WasapiSampleFormat::Int24Packed
+                } else if bits == 8 {
+                    WasapiSampleFormat::UInt8
                 } else {
                     WasapiSampleFormat::Int16
                 }
@@ -1150,6 +1174,8 @@ mod win32_capture {
                 WasapiSampleFormat::Int32
             } else if bits == 24 {
                 WasapiSampleFormat::Int24Packed
+            } else if bits == 8 {
+                WasapiSampleFormat::UInt8
             } else {
                 WasapiSampleFormat::Int16
             };
@@ -1431,20 +1457,32 @@ mod win32_capture {
                                             &mut qpc_pos,
                                         ) >= 0
                                         {
-                                            let n = (frames_to_read as usize)
-                                                .min(decode_scratch.len());
                                             let silent =
                                                 (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
-                                            unpack_hardware_capture_to_stereo(
-                                                data_ptr,
-                                                n,
-                                                ch as usize,
-                                                fmt,
-                                                silent,
-                                                &mut decode_scratch[..n],
-                                            );
-                                            for &f in &decode_scratch[..n] {
-                                                let _ = frame_tx.push(f);
+                                            let total_pkt_frames = frames_to_read as usize;
+                                            let frame_stride_bytes =
+                                                (ch as usize) * fmt.bytes_per_sample();
+                                            let mut frame_cursor = 0usize;
+                                            while frame_cursor < total_pkt_frames {
+                                                let chunk = (total_pkt_frames - frame_cursor)
+                                                    .min(decode_scratch.len());
+                                                let chunk_ptr = if silent || data_ptr.is_null() {
+                                                    std::ptr::null()
+                                                } else {
+                                                    data_ptr.add(frame_cursor * frame_stride_bytes)
+                                                };
+                                                unpack_hardware_capture_to_stereo(
+                                                    chunk_ptr,
+                                                    chunk,
+                                                    ch as usize,
+                                                    fmt,
+                                                    silent,
+                                                    &mut decode_scratch[..chunk],
+                                                );
+                                                for &f in &decode_scratch[..chunk] {
+                                                    let _ = frame_tx.push(f);
+                                                }
+                                                frame_cursor += chunk;
                                             }
                                             let _ = ((*(*cap_client).vtbl).release_buffer)(
                                                 cap_client,

@@ -18,38 +18,100 @@ import mixerMetersWgsl from './shaders/mixer_meters.wgsl?raw';
 
 export type ViewportShaderMode = 'proq4' | 'soothe3' | 'mixer_meters';
 
+let sharedGpuDevice: any = null;
+let sharedGpuFormat: string | null = null;
+let sharedGpuInitPromise: Promise<{ device: any; format: string } | null> | null = null;
+
+async function acquireSharedGpuDevice(): Promise<{ device: any; format: string } | null> {
+  if (sharedGpuDevice && sharedGpuFormat) {
+    return { device: sharedGpuDevice, format: sharedGpuFormat };
+  }
+  if (sharedGpuInitPromise) {
+    return sharedGpuInitPromise;
+  }
+  sharedGpuInitPromise = (async () => {
+    try {
+      const gpu = (navigator as any).gpu;
+      const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (!adapter) return null;
+      const device = await adapter.requestDevice();
+      const format = gpu.getPreferredCanvasFormat();
+      device.lost?.then(() => {
+        if (sharedGpuDevice === device) {
+          sharedGpuDevice = null;
+          sharedGpuFormat = null;
+          sharedGpuInitPromise = null;
+        }
+      });
+      sharedGpuDevice = device;
+      sharedGpuFormat = format;
+      return { device, format };
+    } catch {
+      sharedGpuInitPromise = null;
+      return null;
+    }
+  })();
+  const res = await sharedGpuInitPromise;
+  if (!res) {
+    sharedGpuInitPromise = null;
+  }
+  return res;
+}
+
 export class WebGpu120FpsRenderer {
   private canvas: HTMLCanvasElement;
   private mode: ViewportShaderMode;
   private device: any = null;
   private context: any = null;
   private pipeline: any = null;
-  private computePipeline: any = null;
   private bindGroup: any = null;
-  private computeBindGroup: any = null;
   private uniformBuffer: any = null;
   private storageBufferA: any = null;
   private storageBufferB: any = null;
-  private storageBufferC: any = null;
   private isWebGpuReady = false;
+  private disposed = false;
 
   constructor(canvas: HTMLCanvasElement, mode: ViewportShaderMode) {
     this.canvas = canvas;
     this.mode = mode;
   }
 
+  destroy(): void {
+    this.disposed = true;
+    this.isWebGpuReady = false;
+    try {
+      this.uniformBuffer?.destroy?.();
+    } catch {}
+    try {
+      this.storageBufferA?.destroy?.();
+    } catch {}
+    try {
+      this.storageBufferB?.destroy?.();
+    } catch {}
+    this.uniformBuffer = null;
+    this.storageBufferA = null;
+    this.storageBufferB = null;
+    this.bindGroup = null;
+    this.pipeline = null;
+    try {
+      this.context?.unconfigure?.();
+    } catch {}
+    this.context = null;
+  }
+
   async initialize(): Promise<boolean> {
-    if (typeof navigator === 'undefined' || !('gpu' in navigator)) {
+    if (this.disposed || typeof navigator === 'undefined' || !('gpu' in navigator)) {
       this.isWebGpuReady = false;
       return false;
     }
     try {
-      const gpu = (navigator as any).gpu;
-      const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
-      if (!adapter) return false;
-      this.device = await adapter.requestDevice();
-
-      const format = gpu.getPreferredCanvasFormat();
+      const shared = await acquireSharedGpuDevice();
+      if (!shared || this.disposed) {
+        this.isWebGpuReady = false;
+        return false;
+      }
+      this.device = shared.device;
+      const format = shared.format;
 
       const GPUBufferUsage = (globalThis as any).GPUBufferUsage ?? {
         COPY_DST: 0x0008,
@@ -65,26 +127,6 @@ export class WebGpu120FpsRenderer {
         this.storageBufferA = this.device.createBuffer({
           size: 16384, // ProQ4SpectrumFrame (0x03000..0x07000)
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        });
-        this.storageBufferB = this.device.createBuffer({
-          size: 8192, // out_magnitude_db[2048]
-          usage: GPUBufferUsage.STORAGE,
-        });
-        this.storageBufferC = this.device.createBuffer({
-          size: 8192, // out_phase_rad[2048]
-          usage: GPUBufferUsage.STORAGE,
-        });
-        this.computePipeline = this.device.createComputePipeline({
-          layout: 'auto',
-          compute: { module, entryPoint: 'cs_eval_proq4_curve' },
-        });
-        this.computeBindGroup = this.device.createBindGroup({
-          layout: this.computePipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: { buffer: this.uniformBuffer } },
-            { binding: 2, resource: { buffer: this.storageBufferB } },
-            { binding: 3, resource: { buffer: this.storageBufferC } },
-          ],
         });
         this.pipeline = this.device.createRenderPipeline({
           layout: 'auto',
@@ -173,9 +215,10 @@ export class WebGpu120FpsRenderer {
    * (with automatic Canvas2D fallback when WebGPU is unavailable).
    */
   renderFrame(telemetry: DawTelemetryView): void {
+    if (this.disposed) return;
     if (this.isWebGpuReady && this.device && this.context && this.pipeline) {
       if (this.mode === 'proq4') {
-        const cascadeUniforms = telemetry.packProQ4BiquadCascadeUniforms(48000.0);
+        const cascadeUniforms = telemetry.packProQ4BiquadCascadeUniforms(telemetry.sampleRateHz);
         this.device.queue.writeBuffer(this.uniformBuffer, 0, cascadeUniforms.buffer);
         this.device.queue.writeBuffer(
           this.storageBufferA,
@@ -242,13 +285,6 @@ export class WebGpu120FpsRenderer {
       }
 
       const encoder = this.device.createCommandEncoder();
-      if (this.mode === 'proq4' && this.computePipeline && this.computeBindGroup) {
-        const cpass = encoder.beginComputePass();
-        cpass.setPipeline(this.computePipeline);
-        cpass.setBindGroup(0, this.computeBindGroup);
-        cpass.dispatchWorkgroups(32);
-        cpass.end();
-      }
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {

@@ -247,6 +247,12 @@ impl<T: FftNum> Fft<T> for MixedRadixPow2Fft<T> {
     }
 
     fn process_with_scratch(&self, buffer: &mut [Complex<T>], scratch: &mut [Complex<T>]) {
+        debug_assert!(
+            scratch.len() >= self.len,
+            "MixedRadixPow2Fft scratch too small ({} < {})",
+            scratch.len(),
+            self.len
+        );
         if scratch.len() >= self.len {
             let work = &mut scratch[..self.len];
             for chunk in buffer.chunks_exact_mut(self.len) {
@@ -353,6 +359,12 @@ impl<T: FftNum> Fft<T> for BluesteinFft<T> {
     }
 
     fn process_with_scratch(&self, buffer: &mut [Complex<T>], scratch: &mut [Complex<T>]) {
+        debug_assert!(
+            scratch.len() >= self.conv_len,
+            "BluesteinFft scratch too small ({} < {})",
+            scratch.len(),
+            self.conv_len
+        );
         if scratch.len() >= self.conv_len {
             let work = &mut scratch[..self.conv_len];
             for chunk in buffer.chunks_exact_mut(self.len) {

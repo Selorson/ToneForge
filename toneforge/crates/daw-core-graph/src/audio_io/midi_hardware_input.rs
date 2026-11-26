@@ -5,6 +5,7 @@
 use crate::apdc_engine::VoiceEventKind;
 use crate::sequencer_pianoroll::SequencerVoiceEvent;
 use serde::{Deserialize, Serialize};
+use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -154,17 +155,41 @@ pub fn decode_raw_midi_short_message(
             slide_duration_samples: 0,
             color_group: midi_ch,
         }),
+        0xE0 => {
+            let bend14 = ((d2 as i32) << 7) | (d1 as i32);
+            let cents = (((bend14 - 8192) as f32) / 8192.0) * 200.0;
+            Some(SequencerVoiceEvent {
+                sample_pos,
+                ppq_tick: 0,
+                channel_id: target_channel_id,
+                note_id: 0,
+                kind: VoiceEventKind::PitchBend,
+                key: 0,
+                velocity: 0.0,
+                pan: 0.0,
+                fine_pitch_cents: cents,
+                slide_duration_ticks: 0,
+                slide_duration_samples: 0,
+                color_group: midi_ch,
+            })
+        }
         _ => None,
     }
 }
 
 struct MidiCallbackContext {
-    tx: rtrb::Producer<SequencerVoiceEvent>,
+    tx: UnsafeCell<rtrb::Producer<SequencerVoiceEvent>>,
     active: AtomicBool,
     target_channel_id: AtomicU32,
-    pitch_bend_cents_bits: AtomicU32,
+    pitch_bend_cents_bits: [AtomicU32; 16],
     received_messages: AtomicU64,
 }
+
+// SAFETY: `tx` is accessed exclusively inside `win32_midi_in_proc` (which WinMM serializes per
+// `HMIDIIN` handle while `active == true`) and is never touched from any other thread until after
+// `midiInStop` + `midiInReset` + `midiInClose` return in `Win32MidiInputPort::drop`. All other
+// fields are atomic, and `win32_midi_in_proc` only ever creates a shared `&MidiCallbackContext`.
+unsafe impl Sync for MidiCallbackContext {}
 
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn win32_midi_in_proc(
@@ -177,32 +202,36 @@ unsafe extern "system" fn win32_midi_in_proc(
     if w_msg != MIM_DATA || dw_instance == 0 {
         return;
     }
-    // SAFETY: `dw_instance` points to a pinned `MidiCallbackContext` kept alive until AFTER
-    // `midiInStop` + `midiInReset` + `midiInClose` return in `Win32MidiInputPort::drop`.
-    let ctx = unsafe { &mut *(dw_instance as *mut MidiCallbackContext) };
+    // SAFETY: Shared `&MidiCallbackContext` only — never `&mut MidiCallbackContext`, preserving
+    // LLVM `noalias` soundness while the UI/Host thread concurrently accesses atomic fields.
+    let ctx = unsafe { &*(dw_instance as *const MidiCallbackContext) };
     if !ctx.active.load(Ordering::Acquire) {
         return;
     }
     ctx.received_messages.fetch_add(1, Ordering::Relaxed);
     let raw_msg = dw_param1 as u32;
-    let status_cmd = (raw_msg & 0xF0) as u8;
+    let status = (raw_msg & 0xFF) as u8;
+    let status_cmd = status & 0xF0;
+    let midi_ch = (status & 0x0F) as usize;
+    let arrival_ns = midi_arrival_clock_ns();
+    let target_ch = ctx.target_channel_id.load(Ordering::Relaxed);
+
     if status_cmd == 0xE0 {
-        // 14-bit PitchBend (`8192` = center, `±200 cents` standard ±2 semitone range)
-        let lsb = ((raw_msg >> 8) & 0x7F) as i32;
-        let msb = ((raw_msg >> 16) & 0x7F) as i32;
-        let bend14 = (msb << 7) | lsb;
-        let cents = (((bend14 - 8192) as f32) / 8192.0) * 200.0;
-        ctx.pitch_bend_cents_bits
-            .store(cents.to_bits(), Ordering::Relaxed);
+        if let Some(ev) = decode_raw_midi_short_message(raw_msg, arrival_ns, target_ch, 0.0) {
+            ctx.pitch_bend_cents_bits[midi_ch]
+                .store(ev.fine_pitch_cents.to_bits(), Ordering::Relaxed);
+            // SAFETY: WinMM serializes `MIM_DATA` callbacks for a single `HMIDIIN`.
+            let tx = unsafe { &mut *ctx.tx.get() };
+            let _ = tx.push(ev);
+        }
         return;
     }
 
-    let bend_cents = f32::from_bits(ctx.pitch_bend_cents_bits.load(Ordering::Relaxed));
-    // `sample_pos` carries the arrival time until the engine converts it to a block offset.
-    let arrival_ns = midi_arrival_clock_ns();
-    let target_ch = ctx.target_channel_id.load(Ordering::Relaxed);
+    let bend_cents = f32::from_bits(ctx.pitch_bend_cents_bits[midi_ch].load(Ordering::Relaxed));
     if let Some(ev) = decode_raw_midi_short_message(raw_msg, arrival_ns, target_ch, bend_cents) {
-        let _ = ctx.tx.push(ev);
+        // SAFETY: WinMM serializes `MIM_DATA` callbacks for a single `HMIDIIN`.
+        let tx = unsafe { &mut *ctx.tx.get() };
+        let _ = tx.push(ev);
     }
 }
 
@@ -223,11 +252,12 @@ impl Win32MidiInputPort {
         ring_capacity: usize,
     ) -> Result<(Self, rtrb::Consumer<SequencerVoiceEvent>), String> {
         let (tx, rx) = rtrb::RingBuffer::new(ring_capacity.max(256));
+        let zero_bits = 0.0_f32.to_bits();
         let boxed_ctx = Box::new(MidiCallbackContext {
-            tx,
+            tx: UnsafeCell::new(tx),
             active: AtomicBool::new(true),
             target_channel_id: AtomicU32::new(initial_target_channel_id),
-            pitch_bend_cents_bits: AtomicU32::new(0.0_f32.to_bits()),
+            pitch_bend_cents_bits: std::array::from_fn(|_| AtomicU32::new(zero_bits)),
             received_messages: AtomicU64::new(0),
         });
         let ctx_ptr = Box::into_raw(boxed_ctx);
@@ -329,5 +359,44 @@ impl Drop for Win32MidiInputPort {
             }
             self.cb_ctx = std::ptr::null_mut();
         }
+    }
+}
+
+#[cfg(test)]
+mod midi_decode_tests {
+    use super::*;
+    use crate::apdc_engine::VoiceEventKind;
+
+    #[test]
+    fn test_decode_win32_midi_pitch_bend_14bit_and_note_on_zero_velocity() {
+        // Center pitch bend: LSB = 0x00, MSB = 0x40 -> 0x2000 -> 0.0 cents
+        let center_word = 0xE2u32 | (0x00u32 << 8) | (0x40u32 << 16);
+        let ev_center = decode_raw_midi_short_message(center_word, 7, 1, 0.0).unwrap();
+        assert_eq!(ev_center.kind, VoiceEventKind::PitchBend);
+        assert_eq!(ev_center.color_group, 2);
+        assert!(ev_center.fine_pitch_cents.abs() < 1e-4);
+
+        // Max upward pitch bend: LSB = 0x7F, MSB = 0x7F -> 16383 -> +200.0 cents
+        let up_word = 0xE0u32 | (0x7Fu32 << 8) | (0x7Fu32 << 16);
+        let ev_up = decode_raw_midi_short_message(up_word, 7, 1, 0.0).unwrap();
+        assert_eq!(ev_up.kind, VoiceEventKind::PitchBend);
+        assert!((ev_up.fine_pitch_cents - 200.0).abs() < 0.05);
+
+        // Max downward pitch bend: LSB = 0x00, MSB = 0x00 -> 0 -> -200.0 cents
+        let down_word = 0xE0u32;
+        let ev_down = decode_raw_midi_short_message(down_word, 7, 1, 0.0).unwrap();
+        assert_eq!(ev_down.kind, VoiceEventKind::PitchBend);
+        assert!((ev_down.fine_pitch_cents + 200.0).abs() < 1e-3);
+
+        // NoteOn carries current channel pitch bend cents; velocity 0 -> NoteOff
+        let note_on_word = 0x90u32 | (60u32 << 8) | (100u32 << 16);
+        let ev_on = decode_raw_midi_short_message(note_on_word, 1, 1, -75.0).unwrap();
+        assert_eq!(ev_on.kind, VoiceEventKind::NoteOn);
+        assert!((ev_on.fine_pitch_cents + 75.0).abs() < 1e-5);
+
+        let note_off_word = 0x90u32 | (60u32 << 8);
+        let ev_off = decode_raw_midi_short_message(note_off_word, 1, 1, 0.0).unwrap();
+        assert_eq!(ev_off.kind, VoiceEventKind::NoteOff);
+        assert_eq!(ev_off.key, 60);
     }
 }

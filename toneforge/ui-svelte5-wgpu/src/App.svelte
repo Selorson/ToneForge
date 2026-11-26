@@ -208,7 +208,7 @@
 
       <button
         class={telemetry.isDiskRecording ? 'rec-btn active' : 'rec-btn'}
-        onclick={() => telemetry.toggleDiskRecording(384)}
+        onclick={() => telemetry.toggleDiskRecording(0)}
         title="Thu âm trực tiếp Microphone / Nhạc cụ vào Track đang chọn với Tự động bù độ trễ phần cứng & Loop Take Comping"
       >
         {telemetry.isDiskRecording
