@@ -23,7 +23,8 @@ use ort::{
 use serde::{Deserialize, Serialize};
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Active hardware execution tier for ONNX neural inference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,12 +82,81 @@ pub struct NvidiaCudaDeviceProbe {
     pub device_count: i32,
 }
 
+/// Required CUDA 12 + cuDNN 9 + ONNX Runtime GPU DLLs inside `gpu_runtime/cuda/`.
+pub const REQUIRED_CUDA12_DLLS: &[&str] = &[
+    "cudart64_12.dll",
+    "cublasLt64_12.dll",
+    "cublas64_12.dll",
+    "cufft64_11.dll",
+    "curand64_10.dll",
+    "nvrtc64_120_0.dll",
+    "cudnn64_9.dll",
+    "onnxruntime_providers_shared.dll",
+    "onnxruntime_providers_cuda.dll",
+    "onnxruntime.dll",
+];
+
+/// Required DirectML + ONNX Runtime DLLs inside `gpu_runtime/directml/`.
+pub const REQUIRED_DIRECTML_DLLS: &[&str] = &[
+    "DirectML.dll",
+    "onnxruntime.dll",
+];
+
+/// Persistent per-user directory for downloadable ToneForge Add-on Packs (`gpu_runtime/`, `assets/`):
+/// `%LOCALAPPDATA%\ToneForgeStudio\addons` on Windows (survives app updates and needs no Admin UAC).
+pub fn toneforge_user_addons_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            return Some(PathBuf::from(local).join("ToneForgeStudio").join("addons"));
+        }
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            return Some(
+                PathBuf::from(profile)
+                    .join("AppData")
+                    .join("Local")
+                    .join("ToneForgeStudio")
+                    .join("addons"),
+            );
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(".local/share/ToneForgeStudio/addons"))
+    }
+}
+
+/// Checks whether `cuda_dir` contains all mandatory CUDA 12 + cuDNN 9 + ORT GPU DLLs.
+pub fn has_complete_cuda12_runtime_dlls(cuda_dir: &Path) -> bool {
+    REQUIRED_CUDA12_DLLS.iter().all(|req| {
+        cuda_dir
+            .join(req)
+            .metadata()
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
+/// Checks whether `dml_dir` contains `DirectML.dll` and `onnxruntime.dll`.
+pub fn has_complete_directml_runtime_dlls(dml_dir: &Path) -> bool {
+    REQUIRED_DIRECTML_DLLS.iter().all(|req| {
+        dml_dir
+            .join(req)
+            .metadata()
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
 /// Ordered candidate root directories:
 /// 1. `std::env::current_exe()` parent + ancestors (MANDATORY #1 priority for standalone `.exe`)
-/// 2. `CARGO_MANIFEST_DIR` + ancestors (compile-time workspace fallback for dev/tests)
-/// 3. `std::env::current_dir()` + ancestors (last-resort working directory fallback)
+/// 2. `%LOCALAPPDATA%\ToneForgeStudio\addons` (per-user downloadable Add-on Packs)
+/// 3. `CARGO_MANIFEST_DIR` + ancestors (compile-time workspace fallback for dev/tests)
+/// 4. `std::env::current_dir()` + ancestors (last-resort working directory fallback)
 pub fn candidate_toneforge_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::with_capacity(16);
+    let mut roots = Vec::with_capacity(18);
     let mut push_unique = |p: PathBuf| {
         if !roots.iter().any(|existing| existing == &p) {
             roots.push(p);
@@ -108,7 +178,12 @@ pub fn candidate_toneforge_roots() -> Vec<PathBuf> {
         }
     }
 
-    // Priority 2: CARGO_MANIFEST_DIR and ancestors
+    // Priority 2: Per-user downloadable Add-on Packs directory (`%LOCALAPPDATA%\ToneForgeStudio\addons`)
+    if let Some(addons_dir) = toneforge_user_addons_dir() {
+        push_unique(addons_dir);
+    }
+
+    // Priority 3: CARGO_MANIFEST_DIR and ancestors
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     {
         let mut cur = Some(manifest_dir.as_path());
@@ -124,7 +199,7 @@ pub fn candidate_toneforge_roots() -> Vec<PathBuf> {
         }
     }
 
-    // Priority 3: current_dir() and ancestors
+    // Priority 4: current_dir() and ancestors
     if let Ok(cwd) = std::env::current_dir() {
         let mut cur = Some(cwd.as_path());
         let mut depth = 0usize;
@@ -142,8 +217,40 @@ pub fn candidate_toneforge_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Resolves `<toneforge_root>/gpu_runtime` prioritizing `current_exe()` parent first.
+/// Resolves `<root>/gpu_runtime/cuda` containing a complete CUDA 12 ORT runtime.
+pub fn resolve_cuda_runtime_dir() -> Option<PathBuf> {
+    for root in candidate_toneforge_roots() {
+        let cand = root.join("gpu_runtime").join("cuda");
+        if has_complete_cuda12_runtime_dlls(&cand) {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Resolves `<root>/gpu_runtime/directml` containing a complete DirectML ORT runtime.
+pub fn resolve_directml_runtime_dir() -> Option<PathBuf> {
+    for root in candidate_toneforge_roots() {
+        let cand = root.join("gpu_runtime").join("directml");
+        if has_complete_directml_runtime_dlls(&cand) {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Resolves `<toneforge_root>/gpu_runtime` prioritizing populated runtime directories first.
 pub fn resolve_gpu_runtime_dir() -> Option<PathBuf> {
+    if let Some(cuda) = resolve_cuda_runtime_dir() {
+        if let Some(parent) = cuda.parent() {
+            return Some(parent.to_path_buf());
+        }
+    }
+    if let Some(dml) = resolve_directml_runtime_dir() {
+        if let Some(parent) = dml.parent() {
+            return Some(parent.to_path_buf());
+        }
+    }
     for root in candidate_toneforge_roots() {
         let cand = root.join("gpu_runtime");
         if cand.is_dir() {
@@ -554,12 +661,50 @@ pub struct GpuRuntimeManager {
     status: GpuAcceleratorStatus,
 }
 
-static GLOBAL_GPU_RUNTIME: OnceLock<GpuRuntimeManager> = OnceLock::new();
+static LOCKED_ORT_RUNTIME: OnceLock<GpuRuntimeManager> = OnceLock::new();
+static PURE_RUST_FALLBACK_RUNTIME: OnceLock<GpuRuntimeManager> = OnceLock::new();
+static ADDON_PROBE_EPOCH: AtomicU64 = AtomicU64::new(1);
+static LAST_FALLBACK_EPOCH: AtomicU64 = AtomicU64::new(0);
+static GPU_RUNTIME_INIT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Notifies the runtime manager that downloadable Add-on Packs changed on disk so a fresh install
+/// (previously in `PureRustFallback` with no ORT DLL loaded yet) can upgrade live without restart.
+pub fn notify_addon_packs_changed() {
+    ADDON_PROBE_EPOCH.fetch_add(1, Ordering::AcqRel);
+}
 
 impl GpuRuntimeManager {
-    /// Returns (or initializes once outside RT thread) the singleton `GpuRuntimeManager`.
+    /// Returns (or initializes/upgrades outside RT thread) the singleton `GpuRuntimeManager`.
     pub fn global() -> &'static Self {
-        GLOBAL_GPU_RUNTIME.get_or_init(Self::initialize_three_tier)
+        if let Some(locked) = LOCKED_ORT_RUNTIME.get() {
+            return locked;
+        }
+        let cur_epoch = ADDON_PROBE_EPOCH.load(Ordering::Acquire);
+        if LAST_FALLBACK_EPOCH.load(Ordering::Acquire) == cur_epoch {
+            if let Some(fb) = PURE_RUST_FALLBACK_RUNTIME.get() {
+                return fb;
+            }
+        }
+
+        let _guard = GPU_RUNTIME_INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(locked) = LOCKED_ORT_RUNTIME.get() {
+            return locked;
+        }
+        let cur_epoch = ADDON_PROBE_EPOCH.load(Ordering::Acquire);
+        if LAST_FALLBACK_EPOCH.load(Ordering::Acquire) == cur_epoch {
+            if let Some(fb) = PURE_RUST_FALLBACK_RUNTIME.get() {
+                return fb;
+            }
+        }
+
+        let candidate = Self::initialize_three_tier();
+        if candidate.environment.is_some() {
+            let _ = LOCKED_ORT_RUNTIME.set(candidate);
+            return LOCKED_ORT_RUNTIME.get().expect("LOCKED_ORT_RUNTIME initialized");
+        }
+        let fb = PURE_RUST_FALLBACK_RUNTIME.get_or_init(|| candidate);
+        LAST_FALLBACK_EPOCH.store(cur_epoch, Ordering::Release);
+        fb
     }
 
     pub fn status(&self) -> &GpuAcceleratorStatus {
@@ -638,10 +783,15 @@ impl GpuRuntimeManager {
         );
         let skip_all_ort_dlls = matches!(forced_tier.as_str(), "pure_rust" | "tier3b");
 
-        let gpu_rt_root = if skip_all_ort_dlls {
+        let cuda_rt_dir = if skip_all_ort_dlls {
             None
         } else {
-            resolve_gpu_runtime_dir()
+            resolve_cuda_runtime_dir()
+        };
+        let dml_rt_dir = if skip_all_ort_dlls {
+            None
+        } else {
+            resolve_directml_runtime_dir()
         };
         let nv_probe = probe_nvidia_cuda_driver();
         let mut tier1_fallback_note: Option<String> = None;
@@ -650,11 +800,10 @@ impl GpuRuntimeManager {
         // TIER 1: NVIDIA CUDA 12 + cuDNN 9 (`gpu_runtime/cuda/onnxruntime.dll`)
         // =====================================================================
         if !skip_tier1_cuda {
-            if let (Some(rt_root), Some(probe)) = (&gpu_rt_root, &nv_probe) {
-                let cuda_dir = rt_root.join("cuda");
+            if let (Some(cuda_dir), Some(probe)) = (&cuda_rt_dir, &nv_probe) {
                 let ort_dll = cuda_dir.join("onnxruntime.dll");
                 if ort_dll.is_file() {
-                    match preload_cuda12_runtime_dlls(&cuda_dir)
+                    match preload_cuda12_runtime_dlls(cuda_dir)
                         .and_then(|cnt| preflight_probe_cuda_ort_dll(&ort_dll).map(|()| cnt))
                     {
                         Ok(preloaded_cnt) => {
@@ -744,11 +893,10 @@ impl GpuRuntimeManager {
         // =====================================================================
         // TIER 2: Universal Windows DirectX 12 (`gpu_runtime/directml/onnxruntime.dll`)
         // =====================================================================
-        if let Some(rt_root) = &gpu_rt_root {
-            let dml_dir = rt_root.join("directml");
+        if let Some(dml_dir) = &dml_rt_dir {
             let ort_dll = dml_dir.join("onnxruntime.dll");
             if ort_dll.is_file() {
-                let preloaded_cnt = preload_directml_dlls(&dml_dir).unwrap_or(0);
+                let preloaded_cnt = preload_directml_dlls(dml_dir).unwrap_or(0);
                 if let Ok(builder) = ort::init_from(&ort_dll) {
                     if let Ok(env) = builder
                         .with_name("ToneForgeStudioDml")

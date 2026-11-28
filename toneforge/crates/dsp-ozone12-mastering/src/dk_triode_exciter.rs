@@ -1230,6 +1230,11 @@ fn candidate_lut_directories() -> Vec<PathBuf> {
             }
         }
     }
+    if let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") {
+        let addons = PathBuf::from(local_appdata).join("ToneForgeStudio").join("addons");
+        dirs.push(addons.join("assets").join("exciter_luts"));
+        dirs.push(addons.join("assets").join("ozone12").join("luts"));
+    }
     dirs.push(PathBuf::from(r"f:\FL studio\toneforge\assets\exciter_luts"));
     dirs.push(PathBuf::from(r"f:\FL studio\toneforge\assets\ozone12\luts"));
     dirs.push(PathBuf::from("assets/exciter_luts"));

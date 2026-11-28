@@ -66,9 +66,12 @@ pub use npz_gru_legacy::{
 };
 pub use onnx_gpu_runtime::{
     GpuAcceleratorStatus, GpuExecutionTier, GpuRuntimeManager, NvidiaCudaDeviceProbe,
-    candidate_toneforge_roots, probe_nvidia_cuda_driver, resolve_asset_file, resolve_assets_dir,
-    resolve_gpu_runtime_dir, resolve_ozone_bsrnn_onnx_path, resolve_ozone_delimit_onnx_path,
-    resolve_uvr5_inst_hq3_onnx_path, resolve_uvr5_kim_vocal2_onnx_path,
+    REQUIRED_CUDA12_DLLS, REQUIRED_DIRECTML_DLLS, candidate_toneforge_roots,
+    has_complete_cuda12_runtime_dlls, has_complete_directml_runtime_dlls,
+    notify_addon_packs_changed, probe_nvidia_cuda_driver, resolve_asset_file, resolve_assets_dir,
+    resolve_cuda_runtime_dir, resolve_directml_runtime_dir, resolve_gpu_runtime_dir,
+    resolve_ozone_bsrnn_onnx_path, resolve_ozone_delimit_onnx_path, resolve_uvr5_inst_hq3_onnx_path,
+    resolve_uvr5_kim_vocal2_onnx_path, toneforge_user_addons_dir,
 };
 pub use spectral_ensemble::{
     SpectralEnsembleMode, SpectralEnsembler, combine_complex_spectrogram_frame,

@@ -412,7 +412,7 @@
         ['uvr5', 'UVR5 Stem Studio'],
         ['render', 'Offline Render & Bounce'],
         ['handbook', '📖 Cẩm nang (Hướng dẫn người mới)'],
-        ['update', '⬆ Cập nhật'],
+        ['update', 'ⓘ Giới thiệu & Cập nhật'],
       ] as [tabKey, label]}
         <button
           class="{activeTab === tabKey ? 'active' : ''} {tabKey === 'handbook' ? 'handbook-tab' : ''}"
@@ -437,7 +437,11 @@
     {/if}
 
     {#if activeTab === 'update'}
-      <UpdaterView isRecording={telemetry.isDiskRecording} isDesktopTauri={telemetry.isDesktopTauri} />
+      <UpdaterView
+        isRecording={telemetry.isDiskRecording}
+        isDesktopTauri={telemetry.isDesktopTauri}
+        onPacksChanged={() => telemetry.refreshGpuAcceleratorStatus()}
+      />
     {/if}
 
     {#if activeTab === 'all' || activeTab === 'playlist'}

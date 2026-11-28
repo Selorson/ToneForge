@@ -55,6 +55,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, RunEvent, State};
 
+mod addon_packs;
 mod derived_renders;
 use daw_core_graph::StemClipRegion;
 use daw_tauri_host::audio_assets as aa;
@@ -2216,6 +2217,40 @@ async fn cmd_query_gpu_accelerator_status() -> Result<GpuAcceleratorStatus, Stri
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn cmd_inspect_addon_packs() -> Result<addon_packs::AddonSystemOverviewDto, String> {
+    tauri::async_runtime::spawn_blocking(addon_packs::inspect_addon_system)
+        .await
+        .map_err(|e| format!("Lỗi kiểm tra gói bổ sung: {e}"))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_install_addon_pack(
+    app: tauri::AppHandle,
+    pack_id: String,
+) -> Result<addon_packs::AddonSystemOverviewDto, String> {
+    addon_packs::install_addon_pack(app, pack_id).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_cancel_addon_download() {
+    addon_packs::request_cancel_addon_download();
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cmd_uninstall_addon_pack(
+    pack_id: String,
+) -> Result<addon_packs::AddonSystemOverviewDto, String> {
+    tauri::async_runtime::spawn_blocking(move || addon_packs::uninstall_addon_pack(&pack_id))
+        .await
+        .map_err(|e| format!("Lỗi gỡ gói bổ sung: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cmd_open_addons_folder() -> Result<String, String> {
+    addon_packs::open_addons_folder_in_explorer()
+}
+
+#[tauri::command(rename_all = "camelCase")]
 fn cmd_begin_custom_audio_upload(
     state: State<'_, SharedDawController>,
     sample_rate: u32,
@@ -3268,6 +3303,8 @@ fn main() {
 
     clean_webview_cache();
 
+    addon_packs::sweep_pending_addon_trash();
+
     let (controller, rt_gc) = std::thread::Builder::new()
         .name("toneforge-init".to_string())
         .stack_size(16 * 1024 * 1024)
@@ -3410,6 +3447,11 @@ fn main() {
             cmd_fetch_loaded_custom_audio_wav,
             cmd_pick_directory_native,
             cmd_query_gpu_accelerator_status,
+            cmd_inspect_addon_packs,
+            cmd_install_addon_pack,
+            cmd_cancel_addon_download,
+            cmd_uninstall_addon_pack,
+            cmd_open_addons_folder,
             cmd_begin_custom_audio_upload,
             cmd_append_custom_audio_chunk,
             cmd_finalize_custom_audio_upload,
