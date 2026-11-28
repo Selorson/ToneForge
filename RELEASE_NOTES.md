@@ -1,3 +1,11 @@
+## ToneForge Studio v0.1.2 — Vá đợt kiểm toán liên thông (REM-16)
+
+### Sửa lỗi
+- **Hoàn tác / Mở dự án:** plugin ngoài khôi phục lại luôn ở trạng thái cửa sổ đóng, khớp với lõi (lõi đóng mọi cửa sổ plugin khi Hoàn tác/Mở). Hết cảnh nút "đang mở" mà không thấy cửa sổ.
+- Thêm kiểm tra bố cục ABI cho `IMidiMappingVtbl` để bắt sớm lệch giao tiếp VST3.
+
+---
+
 ## ToneForge Studio v0.1.1 — Vá lỗi Toàn diện DSP/FFI/WebGPU & Tối ưu RAM/VRAM
 
 ### 1. Ổn định lõi FFI/ABI, MIDI & Luồng Âm thanh Thời gian thực (Real-Time Safety)

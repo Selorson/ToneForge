@@ -13,13 +13,14 @@ use crate::vst3_abi::{
     IComponentVtbl, IConnectionPointVtbl, IEditControllerVtbl, IEventListVtbl,
     IHostApplicationVtbl, IID_FUNKNOWN, IID_IAUDIO_PROCESSOR, IID_IBSTREAM, IID_ICOMPONENT,
     IID_ICOMPONENT_HANDLER, IID_ICONNECTION_POINT, IID_IEDIT_CONTROLLER, IID_IEVENT_LIST,
-    IID_IHOST_APPLICATION, IID_IPARAM_VALUE_QUEUE, IID_IPARAMETER_CHANGES, IID_IPLUG_FRAME,
-    IParamValueQueueVtbl, IParameterChangesVtbl, IPlugFrameVtbl, IPlugViewVtbl,
-    IPluginFactoryVtbl, K_AUDIO, K_EVENT, K_INPUT, K_INVALID_ARGUMENT, K_NO_INTERFACE,
-    K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT, K_NOT_IMPLEMENTED, K_OUTPUT, K_REALTIME, K_RESULT_FALSE,
-    K_RESULT_OK, K_SAMPLE_32, NoteOffEvent, NoteOnEvent, PClassInfo, PFactoryInfo, ParamID,
-    ParamValue, ParameterInfo, ProcessContextVst3, ProcessData, ProcessSetup, TUID,
-    VST3_PLATFORM_TYPE_HWND, VST3_VIEW_TYPE_EDITOR, ViewRect, Vst3Event, Vst3EventPayload, tresult,
+    IID_IHOST_APPLICATION, IID_IMIDI_MAPPING, IID_IPARAM_VALUE_QUEUE, IID_IPARAMETER_CHANGES,
+    IID_IPLUG_FRAME, IMidiMappingVtbl, IParamValueQueueVtbl, IParameterChangesVtbl, IPlugFrameVtbl,
+    IPlugViewVtbl, IPluginFactoryVtbl, K_AUDIO, K_EVENT, K_INPUT, K_INVALID_ARGUMENT,
+    K_NO_INTERFACE, K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT, K_NOT_IMPLEMENTED, K_OUTPUT, K_PITCH_BEND,
+    K_REALTIME, K_RESULT_FALSE, K_RESULT_OK, K_SAMPLE_32, NoteOffEvent, NoteOnEvent, PClassInfo,
+    PFactoryInfo, ParamID, ParamValue, ParameterInfo, ProcessContextVst3, ProcessData,
+    ProcessSetup, TUID, VST3_PLATFORM_TYPE_HWND, VST3_VIEW_TYPE_EDITOR, ViewRect, Vst3Event,
+    Vst3EventPayload, tresult,
 };
 use daw_core_graph::{
     MAX_BLOCK_SIZE, ProcessContext, SequencerVoiceEvent, StereoFrame, UnifiedDspNode,
@@ -876,6 +877,7 @@ struct Vst3RtArena {
     staged_param_points: [(ParamID, i32, ParamValue); MAX_VST3_RT_EVENTS],
     staged_param_point_count: usize,
     param_ids: Box<[ParamID]>,
+    pitch_bend_param_ids: [Option<ParamID>; 16],
 }
 
 impl Vst3RtArena {
@@ -899,6 +901,7 @@ impl Vst3RtArena {
             staged_param_points: [(0, 0, 0.0); MAX_VST3_RT_EVENTS],
             staged_param_point_count: 0,
             param_ids: Box::new([]),
+            pitch_bend_param_ids: [None; 16],
         });
         b.in_ptrs[0] = b.in_left.as_mut_ptr();
         b.in_ptrs[1] = b.in_right.as_mut_ptr();
@@ -1747,6 +1750,7 @@ impl Vst3HostedPluginNode {
             .map(|p| p.id)
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        rt_arena.pitch_bend_param_ids = unsafe { query_pitch_bend_mappings(controller_ptr) };
 
         let sr = sample_rate.max(8_000.0);
         let mbs = max_block_size.clamp(1, MAX_BLOCK_SIZE);
@@ -2166,7 +2170,13 @@ impl UnifiedDspNode for Vst3HostedPluginNode {
                     });
                 }
             }
-            VoiceEventKind::SlotEnable | VoiceEventKind::PitchBend => {}
+            VoiceEventKind::PitchBend => {
+                if let Some(pid) = self.rt_arena.pitch_bend_param_ids[ch as usize] {
+                    let norm = ((event.fine_pitch_cents as f64 / 400.0) + 0.5).clamp(0.0, 1.0);
+                    self.rt_arena.push_staged_param_point(pid, offset, norm);
+                }
+            }
+            VoiceEventKind::SlotEnable => {}
         }
     }
 
@@ -2447,5 +2457,133 @@ unsafe fn set_view_content_scale(view_ptr: *mut c_void, factor: f32) -> bool {
         let ok = ((*svtbl).setContentScaleFactor)(scale_ptr, factor) == K_RESULT_OK;
         com_release(scale_ptr);
         ok
+    }
+}
+
+/// Queries `IMidiMapping::getMidiControllerAssignment(0, ch, K_PITCH_BEND, &mut pid)` for all
+/// 16 MIDI channels on `controller_ptr` so the RT thread can emit pitch bend parameter points
+/// with zero COM queries or heap allocations.
+unsafe fn query_pitch_bend_mappings(controller_ptr: *mut c_void) -> [Option<ParamID>; 16] {
+    let mut mappings = [None; 16];
+    if controller_ptr.is_null() {
+        return mappings;
+    }
+    unsafe {
+        let midi_map_ptr = com_query(controller_ptr, &IID_IMIDI_MAPPING);
+        if midi_map_ptr.is_null() {
+            return mappings;
+        }
+        let mvtbl = *(midi_map_ptr as *const *const IMidiMappingVtbl);
+        for (ch_idx, slot) in mappings.iter_mut().enumerate() {
+            let mut pid: ParamID = 0;
+            let rc = ((*mvtbl).getMidiControllerAssignment)(
+                midi_map_ptr,
+                0,
+                ch_idx as i16,
+                K_PITCH_BEND,
+                &mut pid,
+            );
+            if rc == K_RESULT_OK {
+                *slot = Some(pid);
+            }
+        }
+        com_release(midi_map_ptr);
+    }
+    mappings
+}
+
+#[cfg(test)]
+mod pitch_bend_tests {
+    use super::*;
+
+    #[repr(C)]
+    struct MockMidiMapController {
+        vtbl: *const IMidiMappingVtbl,
+        released: bool,
+    }
+
+    unsafe extern "system" fn mock_qi(
+        this: *mut c_void,
+        iid: *const TUID,
+        obj: *mut *mut c_void,
+    ) -> tresult {
+        unsafe {
+            if obj.is_null() || iid.is_null() {
+                return K_INVALID_ARGUMENT;
+            }
+            if *iid == IID_FUNKNOWN || *iid == IID_IMIDI_MAPPING {
+                *obj = this;
+                K_RESULT_OK
+            } else {
+                *obj = std::ptr::null_mut();
+                K_NO_INTERFACE
+            }
+        }
+    }
+
+    unsafe extern "system" fn mock_add_ref(_this: *mut c_void) -> u32 {
+        2
+    }
+
+    unsafe extern "system" fn mock_release(this: *mut c_void) -> u32 {
+        unsafe {
+            (*(this as *mut MockMidiMapController)).released = true;
+        }
+        1
+    }
+
+    unsafe extern "system" fn mock_get_midi_assignment(
+        _this: *mut c_void,
+        bus_index: i32,
+        channel: i16,
+        midi_controller_number: crate::vst3_abi::CtrlNumber,
+        id: *mut ParamID,
+    ) -> tresult {
+        if bus_index == 0
+            && midi_controller_number == K_PITCH_BEND
+            && (0..16).contains(&channel)
+            && !id.is_null()
+        {
+            unsafe {
+                *id = 1000 + channel as u32;
+            }
+            K_RESULT_OK
+        } else {
+            K_RESULT_FALSE
+        }
+    }
+
+    static MOCK_MIDI_MAP_VTBL: IMidiMappingVtbl = IMidiMappingVtbl {
+        base: FUnknownVtbl {
+            queryInterface: mock_qi,
+            addRef: mock_add_ref,
+            release: mock_release,
+        },
+        getMidiControllerAssignment: mock_get_midi_assignment,
+    };
+
+    #[test]
+    fn test_query_pitch_bend_mappings_and_rt_staging() {
+        let mut mock = MockMidiMapController {
+            vtbl: &MOCK_MIDI_MAP_VTBL,
+            released: false,
+        };
+        let ptr = (&mut mock) as *mut MockMidiMapController as *mut c_void;
+        let mappings = unsafe { query_pitch_bend_mappings(ptr) };
+        assert!(mock.released);
+        for ch in 0..16 {
+            assert_eq!(mappings[ch], Some(1000 + ch as u32));
+        }
+
+        let mut arena = Vst3RtArena::new_boxed();
+        arena.pitch_bend_param_ids = mappings;
+        if let Some(pid) = arena.pitch_bend_param_ids[3] {
+            let norm = ((100.0f64 / 400.0) + 0.5).clamp(0.0, 1.0);
+            arena.push_staged_param_point(pid, 16, norm);
+        }
+        assert_eq!(arena.staged_param_point_count, 1);
+        assert_eq!(arena.staged_param_points[0].0, 1003);
+        assert_eq!(arena.staged_param_points[0].1, 16);
+        assert!((arena.staged_param_points[0].2 - 0.75).abs() < 1e-12);
     }
 }

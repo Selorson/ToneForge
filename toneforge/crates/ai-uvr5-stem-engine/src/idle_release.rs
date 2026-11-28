@@ -26,10 +26,10 @@ static ACTIVE_BORROWS: AtomicUsize = AtomicUsize::new(0);
 static WATCHER: OnceLock<()> = OnceLock::new();
 static SLOTS: Mutex<Vec<&'static dyn Release>> = Mutex::new(Vec::new());
 
-struct ActiveBorrowGuard;
+pub(crate) struct ActiveBorrowGuard;
 
 impl ActiveBorrowGuard {
-    fn enter() -> Self {
+    pub(crate) fn enter() -> Self {
         ACTIVE_BORROWS.fetch_add(1, Ordering::AcqRel);
         touch();
         Self
@@ -56,15 +56,22 @@ pub fn touch() {
             if ACTIVE_BORROWS.load(Ordering::Acquire) > 0 {
                 continue;
             }
-            let mut last = LAST_USED.lock().unwrap_or_else(|e| e.into_inner());
+            let snapshot = *LAST_USED.lock().unwrap_or_else(|e| e.into_inner());
             if ACTIVE_BORROWS.load(Ordering::Acquire) == 0
-                && should_release(*last, Instant::now(), IDLE_RELEASE)
+                && should_release(snapshot, Instant::now(), IDLE_RELEASE)
                 && release_all()
             {
-                *last = None;
+                clear_last_used_if_unchanged_in(&LAST_USED, snapshot);
             }
         });
     });
+}
+
+fn clear_last_used_if_unchanged_in(target: &Mutex<Option<Instant>>, snapshot: Option<Instant>) {
+    let mut last = target.lock().unwrap_or_else(|e| e.into_inner());
+    if *last == snapshot {
+        *last = None;
+    }
 }
 
 fn should_release(last: Option<Instant>, now: Instant, idle: Duration) -> bool {
@@ -220,5 +227,35 @@ mod tests {
         SLOT.with(|| Some(1), |_| ());
         let _busy = SLOT.state.lock().unwrap();
         assert!(!SLOT.release());
+    }
+
+    #[test]
+    fn active_borrow_guard_tracks_and_clears_snapshot_only_if_unchanged() {
+        {
+            let _guard = ActiveBorrowGuard::enter();
+            assert!(
+                ACTIVE_BORROWS.load(Ordering::Acquire) >= 1,
+                "ActiveBorrowGuard must keep ACTIVE_BORROWS >= 1 while held"
+            );
+        }
+
+        let local_last: Mutex<Option<Instant>> = Mutex::new(None);
+        let t1 = Instant::now();
+        let t2 = t1 + Duration::from_secs(1);
+        *local_last.lock().unwrap() = Some(t1);
+        // Simulate a newer touch updating LAST_USED to t2 while release_all() runs
+        *local_last.lock().unwrap() = Some(t2);
+        clear_last_used_if_unchanged_in(&local_last, Some(t1));
+        assert_eq!(
+            *local_last.lock().unwrap(),
+            Some(t2),
+            "newer touch timestamp must not be overwritten"
+        );
+        clear_last_used_if_unchanged_in(&local_last, Some(t2));
+        assert_eq!(
+            *local_last.lock().unwrap(),
+            None,
+            "matching snapshot must be cleared to None"
+        );
     }
 }

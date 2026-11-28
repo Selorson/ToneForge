@@ -565,6 +565,7 @@ impl RealTimeBsrnnStemNode {
                 let mut idle_spins = 0u32;
                 let mut idle_since: Option<std::time::Instant> = None;
                 let mut idle_sleep_us = WORKER_POLL_SLEEP_US;
+                let mut last_load_attempt: Option<std::time::Instant> = None;
                 while !stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     let target_epoch = epoch_clone.load(std::sync::atomic::Ordering::Acquire);
                     if target_epoch != local_epoch {
@@ -588,7 +589,11 @@ impl RealTimeBsrnnStemNode {
                         if in_hop.epoch != local_epoch {
                             continue;
                         }
-                        if onnx_sep.is_none() {
+                        if onnx_sep.is_none()
+                            && last_load_attempt
+                                .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(3))
+                        {
+                            last_load_attempt = Some(std::time::Instant::now());
                             if let Ok(mut sep) =
                                 crate::bsrnn_onnx_gpu::OzoneBsrnnOnnxSeparator::from_model_path(
                                     &model_path,
@@ -596,6 +601,7 @@ impl RealTimeBsrnnStemNode {
                             {
                                 sep.reset();
                                 onnx_sep = Some(sep);
+                                last_load_attempt = None;
                             }
                         }
                         if let Some(sep) = onnx_sep.as_mut()

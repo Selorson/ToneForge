@@ -1184,7 +1184,7 @@ pub fn run_global_gpu_stem_ensemble(
         crate::idle_release::register(&EnsembleRelease);
         Mutex::new(None)
     });
-    crate::idle_release::touch();
+    let _borrow = crate::idle_release::ActiveBorrowGuard::enter();
     let mut guard = mutex
         .lock()
         .map_err(|_| "Global GpuStemEnsembleEngine mutex poisoned".to_string())?;
@@ -1196,7 +1196,6 @@ pub fn run_global_gpu_stem_ensemble(
             Err(onnx_err) => {
                 drop(guard);
                 let fallback = run_npz_gru_ensemble_fallback(mix_frames, sample_rate_hz, cfg);
-                crate::idle_release::touch();
                 return fallback.ok_or(onnx_err);
             }
         }
@@ -1206,7 +1205,6 @@ pub fn run_global_gpu_stem_ensemble(
         .expect("GpuStemEnsembleEngine initialized")
         .separate_ensemble(mix_frames, sample_rate_hz, cfg);
     drop(guard);
-    crate::idle_release::touch();
     match out {
         Ok(ok) => Ok(ok),
         Err(onnx_err) => {

@@ -776,6 +776,7 @@ impl RealtimeDelimitOnnxWorker {
                 let mut out_chunk = [0.0f32; 512];
                 let mut idle_spins = 0u32;
                 let mut idle_since: Option<std::time::Instant> = None;
+                let mut last_load_attempt: Option<std::time::Instant> = None;
 
                 while !stop_clone.load(Ordering::Acquire) {
                     let target_epoch = epoch_clone.load(Ordering::Acquire);
@@ -793,11 +794,16 @@ impl RealtimeDelimitOnnxWorker {
                         idle_spins = 0;
                         idle_since = None;
                         if processor.is_none()
+                            && last_load_attempt
+                                .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(3))
                             && let Some(ref p) = model_path
-                            && let Ok(mut loaded) = OzoneDelimitOnnxProcessor::from_model_path(p)
                         {
-                            loaded.reset();
-                            processor = Some(loaded);
+                            last_load_attempt = Some(std::time::Instant::now());
+                            if let Ok(mut loaded) = OzoneDelimitOnnxProcessor::from_model_path(p) {
+                                loaded.reset();
+                                processor = Some(loaded);
+                                last_load_attempt = None;
+                            }
                         }
                         let mut popped = 0usize;
                         while popped < avail {

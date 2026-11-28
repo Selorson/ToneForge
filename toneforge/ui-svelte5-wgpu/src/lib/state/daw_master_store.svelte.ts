@@ -5,6 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { RealtimeSpeakerEngine, type AudioSourceMode } from '../audio/realtime_speaker_engine';
+import { hydrateExternalEntry as hydrateExternalPluginEntry } from './external_plugin_hydrate';
 
 export const VISUAL_TELEMETRY_FRAME_BYTES = 131_072; // 128 KB (0x20000)
 export const MAX_MIXER_TRACKS = 502; // 0=Master, 1..=500=Inserts, 501=Preview
@@ -372,20 +373,28 @@ export class DawTelemetryView {
     )
   );
 
-  patcherNodes = $state<PatcherNodeVisual[]>([
-    { nodeIndex: 0, label: 'Host Audio Input', pluginKind: 'HostIn', latencySamples: 0, layer: 0, xPx: 48, yPx: 140, cpuPct: 0.1, enabled: true },
-    { nodeIndex: 1, label: 'Pro-Q 4 Linear Phase', pluginKind: 'ProQ4', latencySamples: 4096, layer: 1, xPx: 260, yPx: 72, cpuPct: 1.8, enabled: true },
-    { nodeIndex: 2, label: 'Soothe3 Resonance', pluginKind: 'Soothe3', latencySamples: 2304, layer: 1, xPx: 260, yPx: 210, cpuPct: 3.2, enabled: true },
-    { nodeIndex: 3, label: 'APDC Delay Compensator (+1024 smp)', pluginKind: 'FixedLatency', latencySamples: 1024, layer: 2, xPx: 500, yPx: 72, cpuPct: 0.1, enabled: true },
-    { nodeIndex: 4, label: 'Ozone 12 Master Bus', pluginKind: 'Ozone12', latencySamples: 5760, layer: 3, xPx: 726, yPx: 140, cpuPct: 4.1, enabled: true },
-  ]);
-  patcherEdges = $state<PatcherEdgeVisual[]>([
-    { fromNode: 0, toNode: 1, gain: 1.0 },
-    { fromNode: 0, toNode: 2, gain: 1.0 },
-    { fromNode: 1, toNode: 3, gain: 1.0 },
-    { fromNode: 3, toNode: 4, gain: 0.707 },
-    { fromNode: 2, toNode: 4, gain: 0.707 },
-  ]);
+  private createDefaultPatcherNodes(): PatcherNodeVisual[] {
+    return [
+      { nodeIndex: 0, label: 'Host Audio Input', pluginKind: 'HostIn', latencySamples: 0, layer: 0, xPx: 48, yPx: 140, cpuPct: 0.1, enabled: true },
+      { nodeIndex: 1, label: 'Pro-Q 4 Linear Phase', pluginKind: 'ProQ4', latencySamples: 4096, layer: 1, xPx: 260, yPx: 72, cpuPct: 1.8, enabled: true },
+      { nodeIndex: 2, label: 'Soothe3 Resonance', pluginKind: 'Soothe3', latencySamples: 2304, layer: 1, xPx: 260, yPx: 210, cpuPct: 3.2, enabled: true },
+      { nodeIndex: 3, label: 'APDC Delay Compensator (+1024 smp)', pluginKind: 'FixedLatency', latencySamples: 1024, layer: 2, xPx: 500, yPx: 72, cpuPct: 0.1, enabled: true },
+      { nodeIndex: 4, label: 'Ozone 12 Master Bus', pluginKind: 'Ozone12', latencySamples: 5760, layer: 3, xPx: 726, yPx: 140, cpuPct: 4.1, enabled: true },
+    ];
+  }
+
+  private createDefaultPatcherEdges(): PatcherEdgeVisual[] {
+    return [
+      { fromNode: 0, toNode: 1, gain: 1.0 },
+      { fromNode: 0, toNode: 2, gain: 1.0 },
+      { fromNode: 1, toNode: 3, gain: 1.0 },
+      { fromNode: 3, toNode: 4, gain: 0.707 },
+      { fromNode: 2, toNode: 4, gain: 0.707 },
+    ];
+  }
+
+  patcherNodes = $state<PatcherNodeVisual[]>(this.createDefaultPatcherNodes());
+  patcherEdges = $state<PatcherEdgeVisual[]>(this.createDefaultPatcherEdges());
   selectedPatcherNodeIndex = $state(1);
   selectedPatcherEdgeIndex = $state(0);
 
@@ -3964,32 +3973,50 @@ export class DawTelemetryView {
     }
 
     // 6. Interactive Patcher Canvas
-    if (Array.isArray(ps.patcher_canvases) && ps.patcher_canvases.length > 0) {
-      const cv = ps.patcher_canvases[0];
-      if (Array.isArray(cv?.nodes)) {
-        this.patcherNodes = cv.nodes.map((n: any, idx: number) => ({
-          nodeIndex: Number(n.node_index ?? idx),
-          label: String(n.label ?? `Node ${idx}`),
-          pluginKind: String(n.plugin_kind ?? 'FixedLatency'),
-          latencySamples: Number(n.latency_samples ?? 0),
-          layer: idx,
-          xPx: Number(n.x_px ?? 60 + idx * 160),
-          yPx: Number(n.y_px ?? 120),
-          cpuPct: 0.1,
-          enabled: n.enabled !== false,
-        }));
-      }
-      if (Array.isArray(cv?.edges)) {
-        this.patcherEdges = cv.edges.map((e: any) => ({
-          fromNode: Number(e.from_node ?? 0),
-          toNode: Number(e.to_node ?? 0),
-          gain: Number(e.gain ?? 1.0),
-        }));
+    if (Array.isArray(ps.patcher_canvases)) {
+      if (ps.patcher_canvases.length > 0) {
+        const cv = ps.patcher_canvases[0];
+        if (Array.isArray(cv?.nodes)) {
+          this.patcherNodes = cv.nodes.map((n: any, idx: number) => ({
+            nodeIndex: Number(n.node_index ?? idx),
+            label: String(n.label ?? `Node ${idx}`),
+            pluginKind: String(n.plugin_kind ?? 'FixedLatency'),
+            latencySamples: Number(n.latency_samples ?? 0),
+            layer: idx,
+            xPx: Number(n.x_px ?? 60 + idx * 160),
+            yPx: Number(n.y_px ?? 120),
+            cpuPct: 0.1,
+            enabled: n.enabled !== false,
+          }));
+        }
+        if (Array.isArray(cv?.edges)) {
+          this.patcherEdges = cv.edges.map((e: any) => ({
+            fromNode: Number(e.from_node ?? 0),
+            toNode: Number(e.to_node ?? 0),
+            gain: Number(e.gain ?? 1.0),
+          }));
+        }
+      } else {
+        this.patcherNodes = this.createDefaultPatcherNodes();
+        this.patcherEdges = this.createDefaultPatcherEdges();
+        this.selectedPatcherNodeIndex = 1;
+        this.selectedPatcherEdgeIndex = 0;
       }
     }
 
     // 7. Hosted External VST3 / CLAP Plugins (Slots + Channel Instruments)
     if (Array.isArray(ps.mixer_tracks)) {
+      const livePlugins = this.loadedExternalPlugins;
+      const hydrateExternalEntry = (
+        trackIdx: number,
+        slotIdx: number,
+        isClap: boolean,
+        isInstrument: boolean,
+        cfg: any,
+        defaultName: string
+      ): LoadedExternalPluginUi =>
+        hydrateExternalPluginEntry(livePlugins, trackIdx, slotIdx, isClap, isInstrument, cfg, defaultName);
+
       const extLoaded: LoadedExternalPluginUi[] = [];
       for (const trk of ps.mixer_tracks) {
         const tIdx = Number(trk.index ?? 0);
@@ -4000,27 +4027,9 @@ export class DawTelemetryView {
           inst.config
         ) {
           const isClap = inst.plugin_type === 'ExternalClap';
-          extLoaded.push({
-            trackIdx: tIdx,
-            slotIdx: 0xfe,
-            isClap,
-            isInstrument: true,
-            name: String(inst.config.plugin_name ?? 'External Instrument'),
-            vendor: isClap ? 'CLAP 1.2' : 'Steinberg VST3',
-            pluginId: String(inst.config.plugin_id ?? ''),
-            binaryPath: String(inst.config.binary_path ?? ''),
-            latencySamples: 0,
-            guiOpen: false,
-            parameters: Array.isArray(inst.config.param_overrides)
-              ? inst.config.param_overrides.map((pair: any) => ({
-                  id: Number(pair?.[0] ?? 0),
-                  name: `Param #${Number(pair?.[0] ?? 0)}`,
-                  default_normalized: Number(pair?.[1] ?? 0.5),
-                  current_normalized: Number(pair?.[1] ?? 0.5),
-                  automatable: true,
-                }))
-              : [],
-          });
+          extLoaded.push(
+            hydrateExternalEntry(tIdx, 0xfe, isClap, true, inst.config, 'External Instrument')
+          );
         }
         if (Array.isArray(trk.slots)) {
           trk.slots.forEach((sl: any, sIdx: number) => {
@@ -4031,27 +4040,16 @@ export class DawTelemetryView {
               p.config
             ) {
               const isClap = p.plugin_type === 'ExternalClap';
-              extLoaded.push({
-                trackIdx: tIdx,
-                slotIdx: Number(sl.slot_index ?? sIdx),
-                isClap,
-                isInstrument: false,
-                name: String(p.config.plugin_name ?? 'External FX'),
-                vendor: isClap ? 'CLAP 1.2' : 'Steinberg VST3',
-                pluginId: String(p.config.plugin_id ?? ''),
-                binaryPath: String(p.config.binary_path ?? ''),
-                latencySamples: 0,
-                guiOpen: false,
-                parameters: Array.isArray(p.config.param_overrides)
-                  ? p.config.param_overrides.map((pair: any) => ({
-                      id: Number(pair?.[0] ?? 0),
-                      name: `Param #${Number(pair?.[0] ?? 0)}`,
-                      default_normalized: Number(pair?.[1] ?? 0.5),
-                      current_normalized: Number(pair?.[1] ?? 0.5),
-                      automatable: true,
-                    }))
-                  : [],
-              });
+              extLoaded.push(
+                hydrateExternalEntry(
+                  tIdx,
+                  Number(sl.slot_index ?? sIdx),
+                  isClap,
+                  false,
+                  p.config,
+                  'External FX'
+                )
+              );
             }
           });
         }

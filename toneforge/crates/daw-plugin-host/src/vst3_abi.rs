@@ -12,8 +12,11 @@ pub type TUID = [u8; 16];
 pub type TBool = u8;
 pub type ParamID = u32;
 pub type ParamValue = f64;
+pub type CtrlNumber = i16;
 pub type MediaType = i32;
 pub type BusDirection = i32;
+
+pub const K_PITCH_BEND: CtrlNumber = 129;
 
 pub const K_RESULT_OK: tresult = 0;
 pub const K_RESULT_FALSE: tresult = 1;
@@ -85,6 +88,9 @@ pub const IID_IPLUG_FRAME: TUID = vst3_com_uid(0x367F_AF28, 0xC5C1_4D93, 0xA437_
 /// `Steinberg::IPlugViewContentScaleSupport` (`65ED9690-8AC4-4525-8AAD-EF7A72EA703F`).
 pub const IID_IPLUG_VIEW_CONTENT_SCALE_SUPPORT: TUID =
     vst3_com_uid(0x65ED_9690, 0x8AC4_4525, 0x8AAD_EF7A, 0x72EA_703F);
+/// `Steinberg::Vst::IMidiMapping` (`DF0FF9F7-49B7-4669-B63A-B7327ADBF5E5`).
+pub const IID_IMIDI_MAPPING: TUID =
+    vst3_com_uid(0xDF0F_F9F7, 0x49B7_4669, 0xB63A_B732, 0x7ADB_F5E5);
 
 #[repr(C)]
 pub struct IPlugViewContentScaleSupportVtbl {
@@ -321,6 +327,18 @@ pub struct IEditControllerVtbl {
         unsafe extern "system" fn(this: *mut c_void, handler: *mut c_void) -> tresult,
     pub createView:
         unsafe extern "system" fn(this: *mut c_void, name: *const c_char) -> *mut c_void,
+}
+
+#[repr(C)]
+pub struct IMidiMappingVtbl {
+    pub base: FUnknownVtbl,
+    pub getMidiControllerAssignment: unsafe extern "system" fn(
+        this: *mut c_void,
+        busIndex: i32,
+        channel: i16,
+        midiControllerNumber: CtrlNumber,
+        id: *mut ParamID,
+    ) -> tresult,
 }
 
 #[repr(C)]
@@ -568,5 +586,12 @@ mod abi_layout_tests {
         assert!((note_on.velocity - 0.875).abs() < 1e-6);
         assert_eq!(note_on.length, 480);
         assert_eq!(note_on.noteId, 42);
+    }
+
+    #[test]
+    fn test_imidimapping_vtbl_layout_is_funknown_plus_one_slot() {
+        let ptr = size_of::<usize>();
+        assert_eq!(offset_of!(IMidiMappingVtbl, getMidiControllerAssignment), 3 * ptr);
+        assert_eq!(size_of::<IMidiMappingVtbl>(), 4 * ptr);
     }
 }
