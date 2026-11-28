@@ -1,4 +1,4 @@
-## ToneForge Studio v0.1.4 — Quản lý Gói cài đặt bổ sung (Add-on Packs) & Bộ cài siêu nhẹ
+## ToneForge Studio v0.1.5 — Quản lý Gói cài đặt bổ sung (Add-on Packs) & Bộ cài siêu nhẹ
 
 ### Tính năng mới & Tối ưu đóng gói
 - **Mục `ⓘ Giới thiệu & Cập nhật` tích hợp Quản lý Gói bổ sung:** Tự động dò cấu hình phần cứng khi mở và gợi ý đúng tổ hợp gói cần tải cho từng dòng máy:

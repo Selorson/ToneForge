@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-uvr5-stem-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "daw-core-graph",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "akunarch-audio-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "daw-core-graph",
  "dsp-ozone12-mastering",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "daw-core-graph"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "crossbeam-deque",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "daw-plugin-host"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "daw-core-graph",
  "parking_lot",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "daw-tauri-host"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ai-uvr5-stem-engine",
  "bytemuck",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "dsp-ozone12-mastering"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "daw-core-graph",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "dsp-pitch-time"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "daw-core-graph",
  "num-complex",
@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "dsp-proq4-eq"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "daw-core-graph",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "dsp-soothe3-spectral"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "daw-core-graph",
@@ -1203,7 +1203,7 @@ checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
 name = "extract-cleanroom-assets"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "dsp-ozone12-mastering",
  "hex",
@@ -4597,7 +4597,7 @@ dependencies = [
 
 [[package]]
 name = "test-vst3-clap-plugin"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -4823,7 +4823,7 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "toneforge-studio"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ai-uvr5-stem-engine",
  "daw-core-graph",

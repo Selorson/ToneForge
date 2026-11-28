@@ -53,7 +53,7 @@
     onPacksChanged?: () => void;
   } = $props();
 
-  let version = $state('0.1.4');
+  let version = $state('0.1.5');
   let checking = $state(false);
   let downloading = $state(false);
   let hasUpdate = $state(false);
@@ -333,12 +333,13 @@
       <div class="upd-title">
         <strong>ToneForge Studio</strong>
         <span class="upd-badge">v{version}</span>
+        <span class="author-pill">Tác giả: Hoanganh Pham</span>
         {#if overview}
           <span class="tier-pill">{overview.activeBadge}</span>
         {/if}
       </div>
       <p class="upd-desc">
-        Trạm làm nhạc, Thu âm, Chỉnh phô giọng (NewTone), Pro-Q 4, Soothe3, Ozone 12 &amp; Tách nhạc AI UVR5 120 FPS WebGPU.
+        Trạm làm nhạc, Thu âm, Chỉnh phô giọng (NewTone), Pro-Q 4, Soothe3, Ozone 12 &amp; Tách nhạc AI UVR5 120 FPS WebGPU · Phát triển bởi <strong>Hoanganh Pham</strong>.
         Bộ cài gốc được tối giản dung lượng — các nhân tăng tốc AI và mô hình lớn được tách thành gói phụ tải theo nhu cầu máy.
       </p>
 
@@ -634,6 +635,15 @@
     border: 1px solid rgba(118, 210, 219, 0.4);
     color: #76d2db;
     background: rgba(118, 210, 219, 0.1);
+  }
+  .author-pill {
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(251, 191, 36, 0.42);
+    color: #fde68a;
+    background: rgba(251, 191, 36, 0.1);
   }
   .hw-detect-bar {
     margin-top: 10px;
