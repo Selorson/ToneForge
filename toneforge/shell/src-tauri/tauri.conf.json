@@ -63,7 +63,8 @@
       "../../assets/uvr5/models/MDX_Net_Models/model_data": "assets/uvr5/models/MDX_Net_Models/model_data",
       "../../assets/uvr5/models/Demucs_Models/model_data": "assets/uvr5/models/Demucs_Models/model_data",
       "../../assets/uvr5/models/VR_Models/model_data": "assets/uvr5/models/VR_Models/model_data",
-      "../../assets/cleanroom_asset_manifest.json": "assets/cleanroom_asset_manifest.json"
+      "../../assets/cleanroom_asset_manifest.json": "assets/cleanroom_asset_manifest.json",
+      "../../huong-dan-toneforge.html": "huong-dan-toneforge.html"
     },
     "windows": {
       "webviewInstallMode": {

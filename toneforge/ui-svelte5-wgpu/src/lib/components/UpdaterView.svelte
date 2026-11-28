@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Update } from '@tauri-apps/plugin-updater';
   import { onMount } from 'svelte';
+  import Guide from './Guide.svelte';
 
   interface AddonPackInfo {
     id: string;
@@ -324,6 +325,8 @@
 </script>
 
 <section class="upd-panel">
+  <Guide id="update" />
+
   <!-- 1. GIỚI THIỆU (ABOUT) & TRẠNG THÁI PHẦN CỨNG -->
   <div class="upd-card upd-header">
     <div class="about-main">

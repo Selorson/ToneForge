@@ -45,7 +45,7 @@ export const GUIDES: Record<string, Guide> = {
       'Cuối cùng: bấm "✨ AI Master Assistant (Auto-Match)" ở khung "Ozone 12 Console" để AI tự đo phổ bài nhạc và cân chỉnh âm lượng chuẩn quốc tế, rồi bấm "📁 Chọn thư mục" + "Export Studio WAV & Analyze LUFS/dBTP" ở cuối trang để lấy file .wav hoàn chỉnh.',
     ],
     gotcha:
-      'Không cần chỉnh tay hàng chục thanh trượt cùng lúc! Người mới chỉ cần chọn đúng "Factory Preset" (cấu hình mẫu của hãng) ở mỗi khung là âm thanh đã đạt 90% chất lượng phòng thu chuyên nghiệp.',
+      'Không cần chỉnh tay hàng chục thanh trượt cùng lúc! Người mới chỉ cần chọn đúng "Factory Preset" ở mỗi khung là âm thanh đã đạt chuẩn phòng thu. Lần đầu cài trên máy mới, mở tab "ⓘ Giới thiệu & Cập nhật" để tải gói AI phù hợp (Máy thường: Gói 1 DirectML + Gói 3 UVR5; Máy có NVIDIA: Gói 2 CUDA 12 + Gói 3 UVR5).',
     next: {
       tab: 'handbook',
       label: 'Chưa từng dùng FL Studio? Mở 📖 Cẩm nang hướng dẫn từ A-Z',
@@ -179,7 +179,7 @@ export const GUIDES: Record<string, Guide> = {
       'Giữ tích chọn "Auto-Bounce 4 Stems onto Mixer Insert Tracks 1..4" rồi bấm nút "Run Ensemble & Bounce to Mixer 1..4" — GPU sẽ tách nhanh và nạp thẳng 4 nhánh vào Kênh 1..4.',
     ],
     gotcha:
-      'Nếu thấy tiếng nhạc cụ vẫn còn vương nhẹ bóng giọng hát (hoặc ngược lại), hãy bật cả hai ô "MDX23C 2-Pass Phase-Inverted Bias Denoising" và "Phase-Inverted Residual Subtraction" để AI khử nhiễu pha lần 2 sạch bóng.',
+      'Lần đầu dùng tách nhạc AI trên máy mới cài, hãy vào tab "ⓘ Giới thiệu & Cập nhật" tải Gói 3 (Mô hình UVR5) kèm Gói 1 (cho máy thường không có NVIDIA) hoặc Gói 2 (cho máy có NVIDIA). Nếu thấy nhạc cụ còn vương nhẹ bóng giọng hát, hãy bật cả hai ô khử nhiễu pha 2-Pass.',
     next: {
       tab: 'mixer',
       label: 'Đã tách 4 nhánh vào Kênh 1..4 → Sang 502-Track Mixer để chỉnh từng nhánh',
@@ -253,6 +253,28 @@ export const GUIDES: Record<string, Guide> = {
     handbookAnchor: {
       sectionId: 'khu-plugins',
       label: 'Giải thích trình chủ VST3 / CLAP & cơ chế cách ly chống sập',
+    },
+  },
+
+  update: {
+    title: 'Giới thiệu, Tự động cập nhật & Quản lý Gói tải thêm (Máy thường & Máy NVIDIA)',
+    what:
+      'Giữ bộ cài gốc ToneForge siêu nhẹ nhưng vẫn mở rộng đầy đủ sức mạnh AI theo đúng cấu hình máy: tự nhận diện Máy thường (Intel / AMD / CPU) hay Máy có Card rời NVIDIA để gợi ý gói cài phù hợp, đồng thời kiểm tra cập nhật phiên bản mới tự động.',
+    steps: [
+      'Xem dòng "Phát hiện cấu hình" ở khung trên cùng và khung hướng dẫn có gắn nhãn xanh "Phù hợp với máy này".',
+      'Nếu dùng Máy thường / Laptop không có NVIDIA: bấm "⬇ Tải & Cài đặt" ở Gói 1 (Nhân AI DirectML ~17 MB) và Gói 3 (Mô hình Tách nhạc UVR5 ~128 MB) — bỏ qua Gói 2 NVIDIA.',
+      'Nếu dùng Máy có Card rời NVIDIA (GTX / RTX): bấm "⬇ Tải & Cài đặt" ở Gói 2 (Nhân NVIDIA CUDA 12 ~1.1 GB) và Gói 3 (Mô hình Tách nhạc UVR5 ~128 MB). Tải thêm Gói 4 nếu dùng AI Master Assistant của Ozone 12.',
+      'Khi muốn kiểm tra bản nâng cấp phần mềm mới: bấm "↻ Kiểm tra phiên bản mới" ở khung dưới cùng — các gói AI đã tải nằm riêng nên không bao giờ bị mất khi cập nhật.',
+    ],
+    gotcha:
+      'Máy thường không có card NVIDIA KHÔNG cần tải Gói 2 (~1.1 GB) cho tốn ổ cứng — chỉ cần Gói 1 DirectML (~17 MB) là đã chạy tốt toàn bộ mô hình AI trên Windows 10/11!',
+    next: {
+      tab: 'uvr5',
+      label: 'Cài gói AI xong → Sang UVR5 Stem Studio tách thử bài hát đầu tiên',
+    },
+    handbookAnchor: {
+      sectionId: 'khu-update',
+      label: 'Xem bảng giải thích chi tiết từng gói bổ sung trong Cẩm nang',
     },
   },
 };

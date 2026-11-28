@@ -244,6 +244,7 @@
     <a href="#khu-vocal">9. Vocal Pitch (Pitcher RT &amp; NewTone)</a>
     <a href="#khu-plugins">10. VST3 / CLAP Host (Plugin rời)</a>
     <a href="#khu-du-an">11. Dự án, Thu âm &amp; Mixer (Lưu/Mở, M/S/Pan)</a>
+    <a href="#khu-update">12. Giới thiệu, Cập nhật &amp; Gói tải thêm</a>
     <div class="grp">Thực hành &amp; Cứu hộ</div>
     <a href="#phan-d">D · 4 Kịch bản cầm tay chỉ việc (1-2-3 là xong)</a>
     <a href="#phan-e">E · Sự cố &amp; Câu hỏi thường gặp</a>
@@ -495,6 +496,21 @@
           </tbody>
         </table>
       </section>
+
+      <section class="page" id="khu-update" data-filter>
+        <h3><span class="num">12</span> ⓘ Giới thiệu, Cập nhật &amp; Gói cài đặt bổ sung (Máy thường DirectML &amp; Máy NVIDIA CUDA 12)</h3>
+        <p class="purpose">Giữ bộ cài gốc <code>setup.exe</code> siêu nhẹ (cài xong dùng ngay toàn bộ DAW, Thu âm, Preset mẫu), tự động nhận diện máy thường hay máy có card NVIDIA để hướng dẫn tải đúng gói AI mở rộng và cập nhật phiên bản mới an toàn.</p>
+        <table class="items">
+          <thead><tr><th>#</th><th>Nhãn / Nút trên màn hình</th><th>Là gì · Bấm/Kéo thì sao</th><th>Giá trị bình thường</th><th>Khi nào phải lo</th><th>Lùi lại được không</th></tr></thead>
+          <tbody>
+            <tr data-filter><td class="c-n"><span class="n">1</span></td><td class="c-label"><b>Gói 1 · Nhân AI Máy thường (DirectML DX12 &amp; CPU AVX2)</b><br/><span class="ty">gói tải thêm · <code>~17 MB</code></span></td><td>Nhân chạy AI cho <b>máy thường / laptop không có card NVIDIA</b> (dùng card onboard Intel UHD / Iris Xe, AMD Radeon qua DirectX 12 hoặc CPU đa nhân). Bấm <code>⬇ Tải &amp; Cài đặt</code> để kích hoạt ngay.</td><td><code>✓ Đã cài đặt</code> trên máy không có NVIDIA.</td><td>Chưa cài thì tách nhạc chỉ dùng bộ lọc phổ dự phòng cơ bản.</td><td>Bấm <code>🗑 Gỡ gói</code> bất kỳ lúc nào.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">2</span></td><td class="c-label"><b>Gói 2 · Nhân Tăng tốc Card rời NVIDIA (CUDA 12 + cuDNN 9)</b><br/><span class="ty">gói tải thêm · <code>~1.1 GB</code></span></td><td>Mở khóa nhân Tensor Cores trên card rời <b>NVIDIA GTX / RTX</b>. <b>Máy thường không có NVIDIA KHÔNG cần tải gói này</b> (tiết kiệm <code>~2.5 GB</code> ổ cứng).</td><td>Chỉ cài trên máy có card NVIDIA.</td><td>Nếu cài sau khi đã bật DirectML, bấm <code>↻ Khởi động lại ngay</code> để chuyển sang CUDA 12.</td><td><code>✕ Hủy tải</code> hoặc <code>🗑 Gỡ gói</code>.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">3</span></td><td class="c-label"><b>Gói 3 · Mô hình AI Tách nhạc UVR5 (Kim_Vocal_2 &amp; Inst_HQ_3)</b><br/><span class="ty">gói tải thêm · <code>~128 MB</code></span></td><td>Tải 2 mô hình <code>.onnx</code> chuẩn phòng thu tách Giọng hát &amp; Nhạc nền Karaoke. Dùng chung cho cả Máy thường (kèm Gói 1) lẫn Máy NVIDIA (kèm Gói 2).</td><td><code>✓ Đã cài đặt</code> (đủ 2/2 mô hình xác thực SHA-256).</td><td>Mạng ngắt giữa chừng chỉ cần bấm tải lại.</td><td><code>🗑 Gỡ gói</code> để giải phóng ổ cứng.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">4</span></td><td class="c-label"><b>Gói 4 · Mô hình AI Mastering Ozone 12</b><br/><span class="ty">gói tải thêm · <code>~85 MB</code></span></td><td>Trọng số AI nhận diện thể loại nhạc (<code>Master Assistant</code>), cân chỉnh 4-stem trực tiếp (<code>BSRNN</code>) và khử méo đỉnh (<code>DeLimit</code>). Tùy chọn cho cả hai dòng máy.</td><td>Cài khi dùng AI Mastering tự động.</td><td>Chưa cài vẫn chỉnh tay đầy đủ EQ, Maximizer, Imager &amp; 82 Preset XML.</td><td><code>🗑 Gỡ gói</code> bất kỳ lúc nào.</td></tr>
+            <tr data-filter><td class="c-n"><span class="n">5</span></td><td class="c-label"><b>📂 Thư mục gói phụ · ↻ Kiểm tra phiên bản mới</b><br/><span class="ty">lưu trữ độc lập &amp; tự cập nhật</span></td><td>Gói tải thêm nằm riêng tại <code>%LOCALAPPDATA%\ToneForgeStudio\addons</code> nên không cần quyền Admin và không bị mất khi cập nhật ứng dụng qua nút <code>↻ Kiểm tra phiên bản mới</code>.</td><td>Giữ nguyên mọi gói AI và dự án <code>.tfproj</code> sau khi nâng cấp.</td><td>Dừng thu âm (<code>REC</code>) trước khi bấm cập nhật phiên bản mới.</td><td><span class="none">—</span></td></tr>
+          </tbody>
+        </table>
+      </section>
     </section>
 
     <section class="part" id="phan-d" data-filter>
@@ -563,8 +579,8 @@
         <p><b>Cách làm:</b> Bấm ngay nút <b>🖨️ In / Lưu PDF</b> ở đầu cột mục lục bên trái (hoặc mở file <code>huong-dan-toneforge.html</code> trong thư mục phần mềm bằng bất kỳ trình duyệt nào rồi nhấn <code>Ctrl + P</code>). Giao diện đã được thiết kế sẵn chế độ in chuyên dụng: tự động chuyển sang nền trắng chữ đen sắc nét, ẩn các nút điều khiển thừa và căn chỉnh bảng biểu không bị cắt đôi trang giấy.</p>
       </details>
       <details class="trouble" data-filter>
-        <summary>6. Làm sao biết phần mềm đã nhận diện và tận dụng Card đồ họa rời (như NVIDIA RTX 4080) của máy tôi chưa?</summary>
-        <p><b>Cách kiểm tra trong 1 giây:</b> Nhìn lên góc trên bên trái thanh điều khiển cạnh logo ToneForge (hoặc góc phải trên của mục <b>UVR5 Stem Studio</b>): nếu hiện huy hiệu màu xanh <b>⚡ CUDA 12 • RTX 4080 ...</b> (hoặc <b>DirectML</b>) nghĩa là toàn bộ các tác vụ AI tách lời bài hát và cân chỉnh giọng hát đang chạy thẳng trên nhân GPU tốc độ cao mà anh không cần tự cài thêm bộ công cụ lập trình nào cả.</p>
+        <summary>6. Làm sao biết phần mềm đã nhận diện Card đồ họa (NVIDIA CUDA 12 hoặc DirectML trên máy thường) chưa?</summary>
+        <p><b>Cách kiểm tra trong 1 giây:</b> Nhìn lên góc trên bên trái thanh điều khiển cạnh logo ToneForge (hoặc mở tab <b>ⓘ Giới thiệu &amp; Cập nhật</b>): nếu hiện huy hiệu <b>CUDA 12 • RTX ...</b> (máy NVIDIA) hoặc <b>DirectML DX12 • ...</b> (máy thường card onboard Intel / AMD) nghĩa là AI đã được tăng tốc phần cứng. Nếu đang hiện <b>CPU • Pure-Rust DSP</b> trên máy mới cài, hãy vào tab <b>ⓘ Giới thiệu &amp; Cập nhật</b> bấm tải Gói 1 (máy thường) hoặc Gói 2 (máy NVIDIA).</p>
       </details>
       <details class="trouble" data-filter>
         <summary>7. Vì sao bấm ⏹ / ⏸ thì tiếng tắt êm chứ không “bụp”, và khi dừng tôi vẫn nghe được Micro qua hiệu ứng?</summary>
@@ -573,6 +589,14 @@
       <details class="trouble" data-filter>
         <summary>8. Card âm thanh ASIO / WASAPI của tôi đang chạy 44.1 kHz hoặc 96 kHz, nhạc có bị nhanh/chậm hay lệch tông không?</summary>
         <p><b>Không.</b> Bộ xử lý của ToneForge luôn chạy ở 48 kHz và tự chuyển đổi tần số mẫu chất lượng phòng thu cho cả đường phát ra loa lẫn đường thu Micro. Bản thu được lưu kèm đúng tần số thật của card nên phát lại luôn đúng tông và đúng nhịp.</p>
+      </details>
+      <details class="trouble" data-filter>
+        <summary>9. Máy thường / Laptop văn phòng không có card rời NVIDIA có dùng được không? Cần tải thêm gói nào?</summary>
+        <p><b>Hoàn toàn dùng tốt!</b> Toàn bộ tính năng thu âm, cắt ghép, chỉnh phô giọng NewTone, VST3/CLAP, EQ Pro-Q 4, Soothe3 và Mastering chỉnh tay đều chạy mượt ngay sau khi cài. Khi cần tách nhạc AI trên máy không có NVIDIA, hãy mở tab <b>ⓘ Giới thiệu &amp; Cập nhật</b> → tải <b>Gói 1 (Nhân AI Máy thường — DirectML, ~17 MB)</b> + <b>Gói 3 (Mô hình Tách nhạc UVR5, ~128 MB)</b>, bỏ qua Gói 2 NVIDIA cho nhẹ máy.</p>
+      </details>
+      <details class="trouble" data-filter>
+        <summary>10. Các gói tải thêm lưu ở đâu và khi bấm Cập nhật ứng dụng có phải tải lại không?</summary>
+        <p><b>Không phải tải lại:</b> Gói phụ lưu riêng tại <code>%LOCALAPPDATA%\ToneForgeStudio\addons</code> (xem bằng nút <b>📂 Thư mục gói phụ</b> hoặc xóa bằng <b>🗑 Gỡ gói</b>). Khi nâng cấp phiên bản mới, toàn bộ gói AI đã tải được giữ nguyên 100%.</p>
       </details>
     </section>
   </main>
