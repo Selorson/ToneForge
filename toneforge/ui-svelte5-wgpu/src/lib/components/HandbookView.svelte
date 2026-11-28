@@ -496,21 +496,29 @@
             <tr data-filter>
               <td class="c-n"><span class="n">1</span></td>
               <td class="c-label"><b>▶ Play / ⏸ Pause</b><br /><span class="ty">nút bấm</span></td>
-              <td><b>Bấm ▶ Play:</b> Phát âm thanh thật ra Loa/Tai nghe máy tính và chạy đường sóng phổ nhấp nhô ở 120 FPS.<br /><b>Bấm ⏸ Pause:</b> Ngắt tiếng loa ngay lập tức, đồng hồ Sample/PPQ đứng yên, và <b>đường sóng nhấp nhô tắt hẳn — chỉ còn lại đường EQ màu vàng phẳng lặng</b> để anh dễ quan sát đường cắt tần số.</td>
+              <td><b>Lưu ý cho người mới mở app lần đầu:</b> Ứng dụng khởi động ở <b>Dự án trắng</b> (Playlist trống), nên trước khi bấm <code>▶ Play</code> hãy bấm <code>📂 Mở nhạc từ máy</code> hoặc bấm <code>+ Thêm Pattern Clip</code> trên Playlist để có nguồn nhạc.<br /><b>Bấm ▶ Play:</b> Phát âm thanh thật ra Loa/Tai nghe và chạy sóng phổ 120 FPS.<br /><b>Bấm ⏸ Pause:</b> Ngắt tiếng êm trong 6 ms (không kêu "bụp") và tắt sóng nhấp nhô để dễ nhìn đường EQ.</td>
               <td>Xanh lá (<code>⏸ Pause</code>) khi đang phát; Vàng (<code>▶ Play</code>) khi đã tạm dừng.</td>
-              <td><span class="none">—</span></td>
+              <td>Nếu bấm Play mà không có tiếng: kiểm tra đã mở file nhạc hoặc đã đặt Clip lên Playlist chưa, và nút Loa có đang bị tắt không.</td>
               <td>Bấm qua lại giữa Play và Pause bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">2</span></td>
-              <td class="c-label"><b>📂 Mở nhạc từ máy (.wav/.mp3/.flac) · ✕ Đóng file nhạc (Về Piano Roll / Playlist) · 🔊 Loa · ⏮ Reset</b><br /><span class="ty">chọn file, đóng file nhạc, âm lượng & tua đầu bài</span></td>
-              <td><b>📂 Mở nhạc từ máy:</b> Mở hộp thoại Windows chọn bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>, <code>.m4a</code>, <code>.aac</code>, <code>.aiff</code> — đọc trọn vẹn 100% độ dài bài nhạc) để nghe qua Loa & chỉnh trực tiếp bằng Pro-Q 4, Soothe3, Ozone 12. Khi muốn đóng bài hát đang nạp (vẫn giữ nguyên chuỗi FX Mixer) để quay về Piano Roll / Playlist, bấm <b>✕ Đóng file nhạc (Về Piano Roll / Playlist)</b>.<br /><b>🔊 Loa (0–100%):</b> Chỉnh âm lượng loa hoặc bấm để tắt tiếng (Mute).<br /><b>⏮ Reset:</b> Đưa kim phát nhạc về đầu bài (Sample 0, PPQ 0).</td>
-              <td>Loa mặc định <code>85%</code>.</td>
-              <td><span class="none">—</span></td>
-              <td>Đổi bài hát khác, bấm <code>✕ Đóng file nhạc (Về Piano Roll / Playlist)</code> hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td>
+              <td class="c-label"><b>📄 Dự án mới · 📂 Mở nhạc từ máy · ✕ Đóng file nhạc · 🔊 Loa · 🎧 Ngõ ra WASAPI</b><br /><span class="ty">nguồn nhạc & thiết bị phát</span></td>
+              <td><b>📄 Dự án mới (Ctrl+N):</b> Tạo phiên làm việc trắng mới.<br /><b>📂 Mở nhạc từ máy:</b> Nạp bài hát bất kỳ (<code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.ogg</code>, <code>.m4a</code>, <code>.aac</code>, <code>.aiff</code>) để nghe & chỉnh trực tiếp; bấm <b>✕ Đóng file nhạc</b> khi muốn quay về nghe riêng Piano Roll / Playlist.<br /><b>🎧 Mặc định Windows + nút ↻:</b> Chọn đúng Tai nghe / Loa / Soundcard muốn phát ra và chuyển nhanh giữa <code>🔊 WASAPI Shared</code> (dùng chung âm thanh máy tính) hoặc <code>⚡ WASAPI Exclusive</code> (độ trễ cực thấp).</td>
+              <td>Loa mặc định <code>85%</code>; chế độ <code>WASAPI Shared</code>.</td>
+              <td>Nếu vừa cắm thêm tai nghe USB/Bluetooth mà chưa thấy tên, bấm nút <code>↻</code> cạnh ô chọn loa để quét lại.</td>
+              <td>Đổi bài hát, đổi loa hoặc bấm <code>⏮ Reset</code> bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">3</span></td>
+              <td class="c-label"><b>🔊 WASAPI / 🎛️ Steinberg ASIO · 🎤 Mic In · 🎹 MIDI In</b><br /><span class="ty">hộp chọn thu âm & đàn MIDI</span></td>
+              <td>Chọn chế độ Driver thu/phát (<code>WASAPI Shared</code>, <code>WASAPI Exclusive</code> hoặc <code>Steinberg ASIO</code> chuyên nghiệp), chọn Micro thu âm ở ô <code>🎤 Mic In</code> và chọn bàn phím đàn rời ở ô <code>🎹 MIDI In</code> trước khi bấm nút đỏ <code>● REC</code>.</td>
+              <td><code>Mic In: Off</code> khi không thu âm (tránh hú loa).</td>
+              <td>Nếu thu âm bằng loa ngoài (không đeo tai nghe), coi chừng tiếng loa lọt ngược vào Mic gây hú (feedback).</td>
+              <td>Chuyển <code>🎤 Mic In: Off</code> ngay sau khi thu xong.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">4</span></td>
               <td class="c-label"><b>BPM</b><br /><span class="ty">ô nhập số (10–999)</span></td>
               <td><b>Đổi số thì:</b> Tăng hoặc giảm tốc độ chạy nhạc của toàn bộ bài hát ngay lập tức mà không làm méo giọng.</td>
               <td><code>120</code> – <code>140</code> BPM (mặc định <code>128</code>).</td>
@@ -518,7 +526,7 @@
               <td>Gõ lại số <code>128</code> hoặc số cũ bất kỳ lúc nào.</td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">4</span></td>
+              <td class="c-n"><span class="n">5</span></td>
               <td class="c-label"><b>Seq / Sample / PPQ</b><br /><span class="ty">đồng hồ số</span></td>
               <td>Cho biết thứ tự khung hình đồ họa 120Hz (<code>Seq</code>), vị trí mẫu âm thanh (<code>Sample</code>) và vị trí vạch nhịp hiện tại (<code>PPQ</code>).</td>
               <td>Tăng đều đặn khi đang bật Play.</td>
@@ -526,7 +534,7 @@
               <td>Bấm <code>⏮ Reset</code> để về 0.</td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-n"><span class="n">6</span></td>
               <td class="c-label"><b>CPU</b><br /><span class="ty">con số %</span></td>
               <td>Mức tải bộ vi xử lý âm thanh. Nhờ chạy bằng Rust + SIMD nên rất nhẹ.</td>
               <td><code>3.0%</code> – <code>25.0%</code>.</td>
@@ -534,7 +542,7 @@
               <td><span class="none">—</span></td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">6</span></td>
+              <td class="c-n"><span class="n">7</span></td>
               <td class="c-label"><b>LUFS-I & TP (dBTP)</b><br /><span class="ty">đồng hồ đo độ to</span></td>
               <td>Hiển thị trực tiếp độ to tích hợp (<code>LUFS-I</code>) và đỉnh âm lượng thực tế (<code>TP dBTP</code>) của bài nhạc đang phát.</td>
               <td>LUFS-I khoảng <code>-14.0</code> đến <code>-9.0</code>; TP từ <code>-1.00 dBTP</code> trở xuống.</td>
@@ -542,12 +550,12 @@
               <td><span class="none">—</span></td>
             </tr>
             <tr data-filter>
-              <td class="c-n"><span class="n">7</span></td>
-              <td class="c-label"><b>⚡ CUDA 12 • RTX 4080 (Huy hiệu GPU)</b><br /><span class="ty">nhãn trạng thái AI phần cứng</span></td>
-              <td>Báo hiệu ToneForge đã tự động kích hoạt nhân Card đồ họa rời (ưu tiên <code>CUDA 12 + cuDNN 9</code>, dự phòng <code>DirectML</code>) để chạy các mô hình AI của <b>Ozone 12</b> và <b>UVR5</b>. Di chuột vào huy hiệu để xem chi tiết cấu hình card.</td>
-              <td>Hiện <code>⚡ CUDA 12</code> (trên card NVIDIA) hoặc <code>DirectML</code>.</td>
+              <td class="c-n"><span class="n">8</span></td>
+              <td class="c-label"><b>Huy hiệu Tăng tốc AI (CUDA 12 / DirectML / CPU)</b><br /><span class="ty">nhãn trạng thái AI phần cứng</span></td>
+              <td>Báo hiệu chế độ phần cứng đang chạy AI cho <b>Ozone 12</b> và <b>UVR5</b>: <code>CUDA 12</code> (card rời NVIDIA), <code>DirectML DX12</code> (máy thường card onboard Intel / AMD) hoặc <code>CPU</code>. Rê chuột vào để xem chi tiết.</td>
+              <td>Hiện <code>CUDA 12</code>, <code>DirectML DX12</code> hoặc <code>CPU</code>.</td>
               <td><span class="none">—</span></td>
-              <td>Hoàn toàn tự động nhận diện khi mở ứng dụng.</td>
+              <td>Tự động nâng cấp ngay khi tải gói bổ sung ở mục <code>ⓘ Giới thiệu & Cập nhật</code>.</td>
             </tr>
           </tbody>
         </table>
@@ -624,11 +632,25 @@
               <td>Nếu kéo <code>Fine Pitch</code> lệch quá xa (ví dụ +150 ct) tiếng đàn sẽ nghe bị phô/lạc tông so với bài.</td>
               <td>Kéo <code>Fine Pitch</code> về <code>0 ct</code> hoặc chọn lại <code>FL26 Piano Roll Score (.fsc)</code> để khôi phục.</td>
             </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">7</span></td>
+              <td class="c-label"><b>Công cụ Playlist (✏ Draw · ✂ Razor Slice · ↔ Slip Trim · ⧉ Duplicate · + Thêm Pattern Clip)</b><br /><span class="ty">thanh công cụ cắt ghép Clip</span></td>
+              <td><b>+ Thêm Pattern Clip / + Đặt Pattern lên Playlist:</b> Đặt mẫu giai điệu đang soạn lên dòng thời gian để phát ra tiếng.<br /><b>✂ Razor Slice (hoặc ✂ Split ½):</b> Bấm vào vị trí bất kỳ trên Clip để cắt đôi mượt mà (tự vuốt 2 ms chống nổ tiếng).<br /><b>↔ Slip Trim & ⧉ Duplicate:</b> Trượt nội dung bên trong Clip hoặc nhân bản nhanh đoạn nhạc lặp lại.</td>
+              <td>Mặc định để công cụ <code>✏ Draw</code>.</td>
+              <td>Nếu đang chọn <code>✂ Razor Slice</code> mà bấm nhầm vào Clip thì Clip sẽ bị cắt đôi tại điểm bấm.</td>
+              <td>Nhấn <code>Ctrl+Z</code> để nối liền lại ngay và chuyển về <code>✏ Draw</code>.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">8</span></td>
+              <td class="c-label"><b>Công cụ Piano Roll (⬚ Lasso · 👻 Ghost · 🧲 Quantize · 🎸 Strum · 🎹 Arp · + Pattern mới)</b><br /><span class="ty">hỗ trợ sáng tác tự động</span></td>
+              <td><b>⬚ Lasso:</b> Kéo chuột khoanh vùng chọn nhiều nốt cùng lúc.<br /><b>👻 Ghost:</b> Hiện bóng mờ nốt của các Pattern khác để viết bè không bị lệch tông.<br /><b>🧲 Quantize:</b> Tự căn thẳng các nốt bị lệch nhịp vào đúng ô 1/16.<br /><b>🎸 Strum & 🎹 Arp:</b> Biến hợp âm tĩnh thành tiếng rải đàn Guitar tự nhiên hoặc chuỗi nốt chạy Arpeggio sôi động chỉ bằng 1 cú bấm!</td>
+              <td>Dùng khi muốn làm giàu giai điệu mà không cần giỏi đánh đàn.</td>
+              <td><span class="none">—</span></td>
+              <td><code>Ctrl+Z</code> hoàn tác ngay lập tức nếu muốn thử kiểu rải nốt khác.</td>
+            </tr>
           </tbody>
         </table>
       </section>
-
-      <!-- 3. FABFILTER PRO-Q 4 -->
       <section class="page" id="khu-proq4" data-filter>
         <div class="section-head-row">
           <h3><span class="num">3</span> FabFilter Pro-Q 4 (Bộ lọc điêu khắc âm sắc 24 dải tần & 171 Preset .ffp)</h3>
@@ -691,6 +713,14 @@
               <td><span class="none">—</span></td>
               <td>Bỏ tích <code>Spectral Dynamics</code> để quay về EQ thông thường.</td>
             </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">6</span></td>
+              <td class="c-label"><b>✏️ EQ Sketch (ON/OFF) · Collision Ref · 🎹 Note Snap (C1–C8)</b><br /><span class="ty">3 trợ lý EQ cho người mới</span></td>
+              <td><b>✏️ EQ Sketch:</b> Bật <code>ON</code> rồi kéo chuột vẽ một nét liền tay theo ý muốn — máy tự động sinh ra các điểm EQ bám sát nét vẽ của anh!<br /><b>Collision Ref:</b> Chọn một kênh đối chiếu (ví dụ đang chỉnh Bass mà chọn <code>Track 2 Drums</code>) — vùng tần số hai kênh đánh nhau sẽ sáng <b>màu đỏ</b> để anh biết chỗ cần cắt bớt.<br /><b>🎹 Note Snap:</b> Bấm vào phím đàn <code>C1..C8</code> dưới đáy để đặt điểm EQ trúng phóc tần số nốt nhạc đó.</td>
+              <td><code>EQ Sketch: OFF</code> sau khi vẽ xong; <code>Collision Ref: Off</code> khi không so sánh.</td>
+              <td>Nếu đang để <code>EQ Sketch: ON</code> thì kéo chuột trên màn hình sẽ vẽ đường mới thay vì kéo từng nút tròn.</td>
+              <td>Bấm tắt <code>✏️ EQ Sketch (OFF)</code> để quay về kéo từng nút tròn bình thường, hoặc <code>Ctrl+Z</code>.</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -749,6 +779,14 @@
               <td>Depth <code>2.5 – 5.5</code>; Detail <code>4.0 – 6.5</code>; Mix <code>100%</code>.</td>
               <td>Kéo <code>Depth</code> lên kịch <code>10.0</code> sẽ cắt quá sâu làm âm thanh mất sức sống.</td>
               <td>Kéo <code>Depth</code> về quanh <code>3.5</code> hoặc kéo <code>Mix</code> về <code>0%</code> để bỏ qua hiệu ứng.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">5</span></td>
+              <td class="c-label"><b>🔗 Ext Sidechain (ON/OFF) & SC Source</b><br /><span class="ty">tự dìm tần số nhạc nền nhường giọng hát</span></td>
+              <td>Khi đặt Soothe3 trên kênh Nhạc nền rồi bật <code>🔗 Ext Sidechain (ON)</code> và chọn <code>SC Source: Track 1 (Vocals)</code>, mỗi khi ca sĩ cất giọng ở tần số nào thì Soothe3 <b>chỉ dìm nhẹ đúng tần số đó trên nhạc nền</b> — giúp giọng hát luôn nổi rõ mà tiếng trống/bass của beat vẫn giữ nguyên uy lực!</td>
+              <td><code>OFF</code> khi khử chói thông thường; <code>ON</code> khi muốn trộn giọng hát vào beat dày.</td>
+              <td>Nhớ chọn đúng kênh đang chứa giọng hát ở ô <code>SC Source</code>.</td>
+              <td>Bấm lại nút <code>🔗 Ext Sidechain</code> về <code>OFF</code> bất kỳ lúc nào.</td>
             </tr>
           </tbody>
         </table>
@@ -825,6 +863,22 @@
               <td>Nếu đang bật sáng nút <code>S</code> hoặc <code>M</code> mà quên tắt thì bài nhạc sẽ bị khuyết mất lời hát hoặc nhạc cụ!</td>
               <td>Bấm lại nút <code>S</code> / <code>M</code> cho hết sáng và kéo thanh trượt về <code>0.0 dB</code>.</td>
             </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">7</span></td>
+              <td class="c-label"><b>Low End Focus (20–300 Hz: 🥁 Punchy / 🌊 Smooth / Solo Low)</b><br /><span class="ty">khung số 5 (làm gọn dải trầm)</span></td>
+              <td>Làm rõ nét tiếng trống Kick và tiếng Bass mà không làm ù loa: chọn <code>🥁 Punchy</code> nếu muốn tiếng trống nảy dứt khoát, hoặc <code>🌊 Smooth</code> nếu muốn tiếng trầm ấm dày liền mạch; bấm <code>Solo Low</code> để nghe kiểm tra riêng phần âm trầm.</td>
+              <td>Cutoff <code>100–160 Hz</code>; Contrast <code>+15% đến +40%</code>.</td>
+              <td>Kiểm tra bằng <code>Solo Low</code> xong nhớ bấm tắt sáng đi để nghe lại đầy đủ cả bài!</td>
+              <td>Bỏ tích ô <code>Active</code> ở góc khung để tắt nhanh.</td>
+            </tr>
+            <tr data-filter>
+              <td class="c-n"><span class="n">8</span></td>
+              <td class="c-label"><b>Psychoacoustic Codec Preview (MP3 / AAC YouTube / Opus Spotify & Artifact Solo)</b><br /><span class="ty">khung số 6 (nghe thử nén mạng)</span></td>
+              <td>Cho phép nghe trước bài nhạc của anh sẽ kêu thế nào sau khi bị YouTube (<code>AAC 128</code>), Apple Music (<code>AAC 256</code>), Spotify (<code>Opus 128</code>) hoặc <code>MP3</code> nén dung lượng! Bấm <code>Artifact Solo</code> để nghe riêng phần tiếng xước/méo do nén mạng gây ra.</td>
+              <td>Để <code>PCM Lossless Bypass</code> (hoặc tắt <code>Audition</code>) khi làm nhạc bình thường.</td>
+              <td>Nếu ô <code>Post-Codec 4× TP</code> báo đỏ (&gt; -0.1 dBTP), hãy hạ nhẹ <code>Ceiling</code> ở khung Maximizer xuống <code>-1.2 dBTP</code> để khi đăng lên mạng không bị vỡ đỉnh!</td>
+              <td>Chọn lại <code>PCM Lossless Bypass</code> và tắt <code>Artifact Solo</code> sau khi nghe thử xong.</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -862,11 +916,11 @@
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">2</span></td>
-              <td class="c-label"><b>Ô kênh (Strip #0..#501) & Thanh trượt Gain</b><br /><span class="ty">ô chọn & thanh trượt</span></td>
-              <td><b>Bấm vào ô:</b> Chọn kênh đó để xem chi tiết 10 khay hiệu ứng bên dưới. <b>Kéo thanh trượt:</b> Tăng/giảm âm lượng của kênh đó (từ <code>0.0</code> tắt tiếng đến <code>1.5</code> tăng gấp rưỡi).</td>
-              <td>Gain quanh mức <code>0.80 – 1.00</code>; chỉ số Peak màu xanh lá dưới <code>0.0 dB</code>.</td>
-              <td>Nếu kéo thanh trượt về <code>0.0</code> trên kênh <code>#0 Master</code> thì toàn bộ phần mềm sẽ tắt tiếng!</td>
-              <td>Kéo thanh trượt của kênh đó về lại mức <code>1.0</code>.</td>
+              <td class="c-label"><b>Ô kênh (Strip #0..#501) · Fader (dB) · Pan · M / S · Chèn Slot trống</b><br /><span class="ty">dải kênh & 10 khay hiệu ứng</span></td>
+              <td><b>Bấm vào ô kênh:</b> Chọn kênh để chỉnh 10 khay hiệu ứng (<code>Slot 1..10</code>) bên dưới — ở các khay <code>— Trống —</code> có thể mở danh sách thả xuống để chèn trực tiếp plugin nội bộ (Pro-Q 4, Soothe3, LuxeVerb, Maximus...).<br /><b>Kéo Fader (-∞ đến +6 dB):</b> Chỉnh độ to của kênh (nhấp đúp về <code>0 dB</code>), kéo <code>Pan</code> sang trái/phải, bấm <code>M</code> tắt tiếng hoặc <code>S</code> nghe riêng kênh đó.</td>
+              <td>Fader quanh <code>0.0 dB</code>; chỉ số Peak màu xanh lá dưới <code>0.0 dB</code>.</td>
+              <td>Nếu kéo Fader về <code>-∞</code> (hoặc bấm <code>M</code>) trên kênh <code>#0 Master</code> thì toàn bộ phần mềm sẽ tắt tiếng!</td>
+              <td>Nhấp đúp vào Fader để về <code>0 dB</code> hoặc bấm <code>Ctrl+Z</code>.</td>
             </tr>
             <tr data-filter>
               <td class="c-n"><span class="n">3</span></td>

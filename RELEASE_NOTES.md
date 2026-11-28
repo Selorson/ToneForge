@@ -1,4 +1,4 @@
-## ToneForge Studio v0.1.3 — Quản lý Gói cài đặt bổ sung (Add-on Packs) & Bộ cài siêu nhẹ
+## ToneForge Studio v0.1.4 — Quản lý Gói cài đặt bổ sung (Add-on Packs) & Bộ cài siêu nhẹ
 
 ### Tính năng mới & Tối ưu đóng gói
 - **Mục `ⓘ Giới thiệu & Cập nhật` tích hợp Quản lý Gói bổ sung:** Tự động dò cấu hình phần cứng khi mở và gợi ý đúng tổ hợp gói cần tải cho từng dòng máy:
@@ -6,7 +6,7 @@
   - **Máy có Card rời NVIDIA (GTX / RTX):** Tải **Gói 2 (`Nhân Tăng tốc NVIDIA CUDA 12 + cuDNN 9`)** + **Gói 3 (`Mô hình Tách nhạc UVR5`)** để chạy tối đa tốc độ Tensor Cores.
   - **Gói 4 (`Mô hình AI Mastering Ozone 12`):** Tải tùy chọn khi cần dùng trợ lý tự động nhận diện thể loại Master Assistant & cân chỉnh 4-stem trực tiếp.
 - **Tải, xác thực toàn vẹn SHA-256 & nạp nóng (Hot-Reload):** Hiển thị thanh tiến trình trực tiếp, hỗ trợ hủy tải an toàn, gỡ gói giải phóng ổ cứng và lưu độc lập tại thư mục người dùng (không cần quyền Admin, không bị xóa khi nâng cấp phiên bản mới).
-- **Bộ cài gốc siêu nhẹ kèm sẵn kho Preset mẫu:** Đóng gói sẵn kho Preset Pro-Q 4, Soothe3, Ozone 12 và bộ mẫu FL26 để dùng ngay sau khi cài đặt; ẩn toàn bộ thông tin kho mã nội bộ trên giao diện.
+- **Bộ cài gốc siêu nhẹ kèm sẵn kho Preset mẫu & Cẩm nang đồng bộ 100%:** Đóng gói sẵn kho Preset Pro-Q 4, Soothe3, Ozone 12, bộ mẫu FL26 và cập nhật toàn bộ Cẩm nang cho người mới (Dự án trắng khi khởi động, Driver WASAPI/ASIO/Mic/MIDI, công cụ cắt ghép Playlist/Strum/Arp, EQ Sketch/Collision Ref, Soothe3 Ext Sidechain, Ozone 12 Low End Focus/Codec Preview & Fader dB Mixer); ẩn toàn bộ thông tin kho mã nội bộ trên giao diện.
 
 ---
 

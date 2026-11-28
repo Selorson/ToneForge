@@ -1,6 +1,6 @@
 [package]
 name = "toneforge-studio"
-version = "0.1.3"
+version = "0.1.4"
 description = "ToneForge Studio — 120 FPS WebGPU Mastering & Stem Workstation (Tauri v2 Desktop Shell)"
 edition = "2024"
 

@@ -53,7 +53,7 @@
     onPacksChanged?: () => void;
   } = $props();
 
-  let version = $state('0.1.3');
+  let version = $state('0.1.4');
   let checking = $state(false);
   let downloading = $state(false);
   let hasUpdate = $state(false);
